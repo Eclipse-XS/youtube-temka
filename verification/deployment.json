@@ -1,0 +1,14 @@
+{
+  "authenticated_settings": 200,
+  "anonymous_jobs": 401,
+  "workers": 1,
+  "drive_configured": false,
+  "ollama_model": "qwen2.5:3b",
+  "model_setup": {
+    "model": "qwen2.5:3b",
+    "state": "READY",
+    "status": "success",
+    "current": null,
+    "total": null
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "f4a1add8e0ee4d2b819420086ec9e253",
+  "state": "FAILED",
+  "worker": "worker-a",
+  "result": {
+    "source": {
+      "title": "b8a041e85df94c7190325bf67bec5f29",
+      "platform": "local",
+      "duration": 23.144989,
+      "resolutions": [
+        720
+      ],
+      "size": 21803986
+    },
+    "actual_resolution": 720,
+    "source_start": 0.0,
+    "processing_end": 23.144989,
+    "ingest_strategy": "audio-first bounded chunks",
+    "candidates": [],
+    "analysis": "ollama",
+    "model": "qwen2.5:3b",
+    "language": "en"
+  },
+  "error": "No suitable highlight found within the duration bounds. Inspect the transcript or select another interval.",
+  "storage_after": {
+    "scratch_bytes": 21814341,
+    "free_bytes": 154674982912,
+    "budget_bytes": 8589934592,
+    "reserve_bytes": 4294967296
+  },
+  "observed_seconds": 48.36
+}

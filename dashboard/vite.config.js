@@ -21,6 +21,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
+        factory: 'factory.html',
         main: 'index.html',
         'tool-transcript': 'tools/transcript.js',
         'tool-metadata': 'tools/metadata.js',

@@ -1,0 +1,155 @@
+ Image youtube-temka-controller Building 
+ Image youtube-temka-web Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 991B 0.0s done
+#1 DONE 0.0s
+
+#2 [web internal] load build definition from factory-web.Dockerfile
+#2 transferring dockerfile: 532B 0.0s done
+#2 DONE 0.0s
+
+#3 [controller internal] load build definition from factory.Dockerfile
+#3 transferring dockerfile: 1.40kB 0.0s done
+#3 DONE 0.0s
+
+#4 [web internal] load metadata for docker.io/library/node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+#4 DONE 0.1s
+
+#5 [controller internal] load metadata for docker.io/library/python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+#5 ...
+
+#6 [web internal] load metadata for docker.io/library/nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+#6 DONE 0.1s
+
+#7 [web internal] load .dockerignore
+#7 transferring context: 962B 0.0s done
+#7 DONE 0.0s
+
+#8 [web stage-1 1/3] FROM docker.io/library/nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+#8 resolve docker.io/library/nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236 0.1s done
+#8 DONE 0.1s
+
+#9 [web build 1/6] FROM docker.io/library/node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+#9 resolve docker.io/library/node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 0.1s done
+#9 DONE 0.1s
+
+#10 [web internal] load build context
+#10 ...
+
+#5 [controller internal] load metadata for docker.io/library/python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+#5 DONE 1.3s
+
+#10 [web internal] load build context
+#10 ...
+
+#7 [controller internal] load .dockerignore
+#7 transferring context: 962B 0.0s done
+#7 DONE 0.0s
+
+#11 [controller internal] load build context
+#11 DONE 0.0s
+
+#10 [web internal] load build context
+#10 ...
+
+#12 [controller 1/9] FROM docker.io/library/python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+#12 resolve docker.io/library/python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df 0.1s done
+#12 DONE 0.1s
+
+#10 [web internal] load build context
+#10 ...
+
+#11 [controller internal] load build context
+#11 transferring context: 367.28kB 0.3s done
+#11 DONE 0.3s
+
+#13 [controller 4/9] COPY requirements-factory.lock ./
+#13 CACHED
+
+#14 [controller 5/9] RUN pip install --no-cache-dir -r requirements-factory.lock
+#14 CACHED
+
+#15 [controller 2/9] WORKDIR /app
+#15 CACHED
+
+#16 [controller 3/9] RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core ca-certificates && rm -rf /var/lib/apt/lists/*
+#16 CACHED
+
+#17 [controller 6/9] RUN if [ "0" = "1" ]; then pip install --no-cache-dir nvidia-cublas-cu12==12.9.3.13 nvidia-cudnn-cu12==9.28.0.42; fi
+#17 CACHED
+
+#10 [web internal] load build context
+#10 ...
+
+#18 [controller 7/9] COPY factory ./factory
+#18 DONE 0.2s
+
+#10 [web internal] load build context
+#10 transferring context: 14.57MB 1.9s done
+#10 DONE 1.9s
+
+#19 [web build 2/6] WORKDIR /app
+#19 CACHED
+
+#20 [web build 3/6] COPY dashboard/package.json dashboard/package-lock.json ./
+#20 CACHED
+
+#21 [web build 4/6] RUN npm ci --no-audit --no-fund
+#21 CACHED
+
+#22 [web build 5/6] COPY dashboard ./
+#22 CACHED
+
+#23 [web stage-1 2/3] COPY --from=build /app/dist /usr/share/nginx/html
+#23 CACHED
+
+#24 [web build 6/6] RUN npx vite build --config vite.factory.config.js
+#24 CACHED
+
+#25 [web stage-1 3/3] COPY deploy/factory-nginx.conf /etc/nginx/conf.d/default.conf
+#25 CACHED
+
+#26 [web] exporting to image
+#26 exporting layers 0.0s done
+#26 exporting manifest sha256:346a90b0a9079a45cf2f12b7078913ad1d6a33e11dd2d0a3fb811543c8925743 done
+#26 exporting config sha256:9ede3a4eb8c73fc15ad06cf8779bec60ffae9a2957fa4e98d0b722314d2259eb done
+#26 exporting attestation manifest sha256:4db423859c8572298ef2c9588878efab15101b542d93ae115342e9c6efac1554 0.0s done
+#26 exporting manifest list sha256:637189d543dd2d6a7936abc7301f0159d732c51d835c5cfeea126dcad4a5a993 0.0s done
+#26 naming to docker.io/library/youtube-temka-web:latest done
+#26 unpacking to docker.io/library/youtube-temka-web:latest 0.0s done
+#26 DONE 0.2s
+
+#27 [controller 8/9] COPY subtitles.py transcribe_backends.py ffmpeg_utils.py gpu_decode.py jsonfile.py security_utils.py ssrf_guard.py LICENSE NOTICE ./
+#27 DONE 0.2s
+
+#28 [controller 9/9] RUN useradd --uid 10001 --create-home factory && mkdir -p /data /scratch /home/factory/.cache && chown factory /data /scratch /home/factory/.cache
+#28 ...
+
+#29 [web] resolving provenance for metadata file
+#29 DONE 0.0s
+
+#28 [controller 9/9] RUN useradd --uid 10001 --create-home factory && mkdir -p /data /scratch /home/factory/.cache && chown factory /data /scratch /home/factory/.cache
+#28 DONE 0.9s
+
+#30 [controller] exporting to image
+#30 exporting layers 0.2s done
+#30 exporting manifest sha256:86d7e819dc2ab6cf507dce98dc8623bd063e48eac3be9f1991579309a74e0977 0.0s done
+#30 exporting config sha256:a2755b56cf019a87fd195fc3ad0b1c42389f2b8ea929614277101144c19b9a60 0.0s done
+#30 exporting attestation manifest sha256:988f071e3c9634363be0986b6f301a0cbe430cec63cbb17bf146eab723c75e45 0.0s done
+#30 exporting manifest list sha256:f59098168b4e2372d3e9f3dd5a969e9e3dea846b148cc38d254ec17f40a43016 0.0s done
+#30 naming to docker.io/library/youtube-temka-controller:latest done
+#30 unpacking to docker.io/library/youtube-temka-controller:latest 0.1s done
+#30 DONE 0.4s
+
+#31 [controller] resolving provenance for metadata file
+#31 DONE 0.0s
+ Image youtube-temka-controller Built 
+ Image youtube-temka-web Built 
+ Container youtube-temka-web-1 Running 
+ Container youtube-temka-ollama-1 Running 
+ Container youtube-temka-controller-1 Recreate 
+ Container youtube-temka-controller-1 Recreated 
+ Container youtube-temka-controller-1 Starting 
+ Container youtube-temka-controller-1 Started 
+ Container youtube-temka-controller-1 Waiting 
+ Container youtube-temka-controller-1 Healthy 

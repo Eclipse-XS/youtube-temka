@@ -1,42 +1,97 @@
+x-worker-environment: &worker-environment
+  FACTORY_DATA: /data
+  FACTORY_SCRATCH: /scratch
+  FACTORY_TOKEN: ${FACTORY_TOKEN:-}
+  SCRATCH_GB: ${SCRATCH_GB:-8}
+  FREE_RESERVE_GB: ${FREE_RESERVE_GB:-4}
+  WHISPER_MODEL: ${WHISPER_MODEL:-small}
+  WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+  WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
+  ASR_HOST_SLOTS: '1'
+  OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+  DRIVE_TOKEN_FILE: ${DRIVE_TOKEN_FILE:-/run/secrets/drive-token.json}
+  DRIVE_OAUTH_CLIENT_FILE: ${DRIVE_OAUTH_CLIENT_FILE:-}
+  DRIVE_OAUTH_TOKEN_FILE: ${DRIVE_OAUTH_TOKEN_FILE:-}
+  DRIVE_PARENT_ID: ${DRIVE_PARENT_ID:-}
+  YOUTUBE_TOKEN_DIR: /run/secrets/youtube
+  FFMPEG_ENCODER: ${FFMPEG_ENCODER:-x264}
 services:
-  backend:
-    build: .
-    container_name: openshorts-backend
-    ports:
-      - "8000:8000"
+  ollama:
+    profiles: [controller, worker]
+    image: ollama/ollama@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    environment:
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_KEEP_ALIVE: '0'
     volumes:
-      - .:/app
-      - /app/__pycache__
-      - ./output:/app/output
+      - ollama_models:/root/.ollama
     restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./dashboard
-      target: dev
-    container_name: openshorts-frontend
-    ports:
-      - "5175:5173"
-    volumes:
-      - ./dashboard:/app
-      - /app/node_modules
-    restart: unless-stopped
-    depends_on:
-      - backend
-
-  renderer:
+    mem_limit: 4g
+    cpus: 4
+    healthcheck:
+      test: [CMD, ollama, list]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  controller:
+    profiles: [controller]
     build:
       context: .
-      dockerfile: render-service/Dockerfile
-    container_name: openshorts-renderer
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./output:/output
+      dockerfile: deploy/factory.Dockerfile
     environment:
-      - REMOTION_BUNDLE_PATH=/app/remotion
-      - OUTPUT_DIR=/output
-      - PORT=3100
+      <<: *worker-environment
+      WORKER_ID: ${CONTROLLER_WORKER_ID:-worker-a}
+    ports: ['${API_BIND:-127.0.0.1}:8000:8000']
+    volumes:
+      - controller_data:/data
+      - ${CONTROLLER_SCRATCH_DIR:-./scratch/controller}:/scratch
+      - ${SECRETS_DIR:-./secrets}:/run/secrets:ro
+      - ${LEGACY_DRIVE_SECRETS_DIR:-./secrets/legacy-drive}:/run/legacy-drive:ro
+      - controller_models:/home/factory/.cache
     restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 6g
+    cpus: 4
+  web:
+    profiles: [controller]
+    build:
+      context: .
+      dockerfile: deploy/factory-web.Dockerfile
+    ports: ['127.0.0.1:5175:80']
     depends_on:
-      - backend
+      controller:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/factory.html]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+  worker:
+    profiles: [worker]
+    build:
+      context: .
+      dockerfile: deploy/factory.Dockerfile
+    environment:
+      <<: *worker-environment
+      CONTROLLER_URL: ${CONTROLLER_URL:-}
+      WORKER_ID: ${WORKER_ID:-worker-b}
+    command: [python, -m, factory.worker]
+    volumes:
+      - worker_data:/data
+      - ${WORKER_SCRATCH_DIR:-./scratch/worker}:/scratch
+      - worker_models:/home/factory/.cache
+      - ${SECRETS_DIR:-./secrets}:/run/secrets:ro
+      - ${LEGACY_DRIVE_SECRETS_DIR:-./secrets/legacy-drive}:/run/legacy-drive:ro
+    restart: unless-stopped
+    mem_limit: 6g
+    cpus: 4
+    healthcheck:
+      disable: true
+volumes:
+  controller_data:
+  controller_models:
+  worker_data:
+  worker_models:
+  ollama_models:

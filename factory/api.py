@@ -1,0 +1,403 @@
+import asyncio
+from contextlib import asynccontextmanager
+import hmac
+import json
+import os
+from pathlib import Path
+import threading
+import time
+import uuid
+import re
+import mimetypes
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
+from . import config, store, media
+from .models import JobRequest
+from .resources import preflight, usage
+
+
+@asynccontextmanager
+async def lifespan(app):
+    config.initialize()
+    from .worker import local_loop
+    stop=threading.Event()
+    if os.environ.get('FACTORY_LOCAL_WORKER','1')=='1':
+        thread=threading.Thread(target=local_loop,args=(stop,),daemon=True)
+        thread.start()
+    if os.environ.get('FACTORY_PUBLISHER','1')=='1':
+        from .publisher import loop
+        threading.Thread(target=loop,args=(stop,),daemon=True).start()
+    yield
+    stop.set()
+
+
+app=FastAPI(title='AI Content Factory',lifespan=lifespan)
+
+
+def drive_is_configured():
+    standard=os.environ.get('DRIVE_TOKEN_FILE','')
+    legacy=[os.environ.get('DRIVE_OAUTH_CLIENT_FILE',''),os.environ.get('DRIVE_OAUTH_TOKEN_FILE','')]
+    return bool((standard and Path(standard).is_file()) or all(p and Path(p).is_file() for p in legacy))
+
+
+@app.middleware('http')
+async def authenticate(request, call_next):
+    from fastapi.responses import JSONResponse
+    if request.url.path not in ('/health','/api/session'):
+        provided=request.headers.get('Authorization','').removeprefix('Bearer ') or request.cookies.get('factory_session','')
+        if len(config.TOKEN)<32:
+            return JSONResponse({'detail':'Set FACTORY_TOKEN to a random secret of at least 32 characters before using this controller'},status_code=503)
+        if not hmac.compare_digest(provided,config.TOKEN):
+            return JSONResponse({'detail':'Controller authentication required'},status_code=401)
+    return await call_next(request)
+
+
+@app.get('/health')
+def health():
+    return {'status':'ok','configured':len(config.TOKEN)>=32}
+
+
+class Login(BaseModel):
+    token: str = Field(max_length=256)
+
+
+@app.post('/api/session')
+def login(body:Login):
+    from fastapi.responses import JSONResponse
+    if len(config.TOKEN)<32 or not hmac.compare_digest(body.token,config.TOKEN):
+        raise HTTPException(401,'Invalid controller token or controller not configured')
+    response=JSONResponse({'authenticated':True})
+    response.set_cookie('factory_session',body.token,httponly=True,samesite='strict',secure=os.environ.get('FACTORY_HTTPS')=='1')
+    return response
+
+
+@app.delete('/api/session')
+def logout():
+    from fastapi.responses import JSONResponse
+    response=JSONResponse({'authenticated':False})
+    response.delete_cookie('factory_session')
+    return response
+
+
+@app.get('/api/settings')
+def settings():
+    from .model_setup import status
+    from .publisher import channels
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'reason':'Connect existing YouTube OAuth authorized-user JSON in YOUTUBE_TOKEN_DIR, discover channels, and approve a verified Drive output before queuing. No real YouTube upload has been verified in this environment.'},'limits':{'interval_minutes':60,'concurrent_jobs':1},'notes':['Center crop currently uses fixed center framing; face tracking is not enabled.','GPU model inference is sequential; Ollama uses CPU by default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+
+
+@app.post('/api/settings/check-ollama')
+def check_ollama():
+    import httpx
+    try:
+        response=httpx.get(config.OLLAMA+'/api/tags',timeout=5,trust_env=False)
+        response.raise_for_status()
+        found=config.MODEL in [m['name'] for m in response.json()['models']]
+        return {'available':found,'action':None if found else 'ollama pull '+config.MODEL}
+    except (httpx.HTTPError,KeyError,ValueError):
+        return {'available':False,'action':'Start Ollama, then run: ollama pull '+config.MODEL}
+
+
+@app.post('/api/settings/setup-model')
+def setup_model():
+    from .model_setup import start
+    return start()
+
+
+class Models(BaseModel):
+    ollama_model:str=Field(pattern=r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$')
+    whisper_model:str=Field(pattern=r'^(tiny|base|small|medium|large-v3|large-v3-turbo)$')
+
+
+@app.post('/api/settings/models')
+def configure_models(body:Models):
+    from .model_setup import _lock
+    from jsonfile import write_json_atomic
+    if _lock.locked():
+        raise HTTPException(409,'Wait for the active model setup to finish')
+    config.initialize()
+    write_json_atomic(config.DATA/'settings.json',body.model_dump())
+    config.MODEL=body.ollama_model
+    config.ASR_MODEL=body.whisper_model
+    return {'saved':True,'action':'Check availability or download the configured model. Existing jobs retain their model selection.'}
+
+
+@app.post('/api/settings/check-drive')
+def check_drive():
+    from .drive import Drive, BASE
+    try:
+        drive=Drive()
+        try:
+            drive.request('GET',BASE+'/about',params={'fields':'storageQuota'})
+        finally:
+            drive.close()
+        return {'authorized':True}
+    except (ValueError,KeyError,OSError):
+        raise HTTPException(409,'Drive authorization unavailable. Configure the existing authorized-user JSON with Drive scope; original credential files are not modified.') from None
+
+
+class Source(BaseModel):
+    source:str=Field(max_length=2048)
+
+
+@app.post('/api/probe')
+def probe(body:Source):
+    try:
+        return media.probe(body.source)
+    except Exception:
+        raise HTTPException(400,'Source cannot be probed. Use a completed public YouTube/Twitch VOD or a valid uploaded video; verify network access.') from None
+
+
+@app.post('/api/uploads')
+async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False)):
+    if not rights_confirmed:
+        raise HTTPException(422,'Source/background rights confirmation is required')
+    suffix=Path(file.filename or '').suffix.lower()
+    if suffix not in ('.mp4','.mkv','.mov') or (background and suffix!='.mp4'):
+        raise HTTPException(422,'Upload MP4/MKV/MOV; backgrounds must be MP4')
+    folder=(config.DATA/'backgrounds') if background else config.SCRATCH/'uploads'
+    folder.mkdir(parents=True,exist_ok=True)
+    name=uuid.uuid4().hex+suffix
+    target=folder/name
+    try:
+        with target.open('xb') as output:
+            while chunk:=await file.read(1024*1024):
+                preflight(len(chunk))
+                if target.stat().st_size+len(chunk)>2*1024**3:
+                    raise ValueError('Upload exceeds 2 GB; use a bounded source URL or a smaller file')
+                output.write(chunk)
+        if not background:
+            metadata=media.probe('upload:'+name)
+        else:
+            metadata=None
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise HTTPException(400,'Upload failed validation or exceeded available storage') from None
+    finally:
+        await file.close()
+    return {'source':'upload:'+name,'name':name,'metadata':metadata}
+
+
+@app.get('/api/backgrounds')
+def backgrounds():
+    return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4')]
+
+
+@app.post('/api/jobs',status_code=201)
+def create(body:JobRequest):
+    body.asr_model=body.asr_model or config.ASR_MODEL
+    body.llm_model=body.llm_model or config.MODEL
+    if body.publish_automatic:
+        from .publisher import channels
+        policy=next((c for c in channels() if c['id']==body.publish_channel),None)
+        if not policy or not policy['public_allowed'] or not policy['automatic']:
+            raise HTTPException(409,'Explicitly enable automatic public publishing for this authenticated channel first')
+    try:
+        if not media.local_source(body.source):
+            media.validate_url(body.source)
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
+    try:
+        preflight()
+    except RuntimeError as error:
+        raise HTTPException(409,str(error)) from None
+    return store.create(body.model_dump())
+
+
+@app.get('/api/jobs')
+def jobs():
+    return store.list_jobs()
+
+
+@app.get('/api/jobs/{jid}')
+def get_job(jid:str):
+    value=store.get(jid)
+    if not value:
+        raise HTTPException(404,'Job not found')
+    return value
+
+
+@app.get('/api/jobs/{jid}/events')
+def events(jid:str):
+    get_job(jid)
+    return store.events(jid)
+
+
+@app.post('/api/jobs/{jid}/cancel')
+def cancel(jid:str):
+    store.cancel(jid)
+    return get_job(jid)
+
+
+@app.post('/api/jobs/{jid}/retry')
+def retry(jid:str):
+    if not store.retry(jid):
+        raise HTTPException(409,'Only failed, blocked or cancelled jobs can be retried')
+    return get_job(jid)
+
+
+class Approval(BaseModel):
+    approved:bool
+
+
+@app.post('/api/jobs/{jid}/outputs/{index}/approve')
+def approve(jid:str,index:int,body:Approval):
+    try:
+        if index<0:
+            raise ValueError('Invalid output')
+        store.approve(jid,index,body.approved)
+    except (ValueError,IndexError):
+        raise HTTPException(409,'Output unavailable or not complete') from None
+    return get_job(jid)
+
+
+@app.get('/api/jobs/{jid}/files/{name}')
+def output(jid:str,name:str,request:Request):
+    job=get_job(jid)
+    manifests={o['name']:o.get('drive') for o in job['result'].get('outputs',[])}
+    for item in job['result'].get('outputs',[]):
+        if item.get('thumbnail'):
+            manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
+    manifests.update(job['result'].get('artifacts',{}))
+    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt'}
+    if name not in allowed:
+        raise HTTPException(404,'Artifact not found')
+    root=config.SCRATCH/jid
+    path=root/name
+    if path.is_file():
+        return FileResponse(path)
+    remote=manifests.get(name)
+    if not remote:
+        raise HTTPException(410,'Local artifact expired or is not available; inspect the job and Drive link')
+    from .drive import Drive,BASE,CHUNK
+    size=int(remote['size'])
+    first,last=0,size-1
+    ranged=request.headers.get('Range')
+    if ranged:
+        match=re.fullmatch(r'bytes=(\d+)-(\d*)',ranged)
+        if not match:
+            raise HTTPException(416,'Use a single forward byte range')
+        first=int(match.group(1))
+        last=min(int(match.group(2)) if match.group(2) else size-1,first+CHUNK-1,size-1)
+        if first>last:
+            raise HTTPException(416,'Range outside artifact')
+    drive=Drive()
+    context=drive.client.stream('GET',BASE+'/files/'+remote['id'],params={'alt':'media','supportsAllDrives':'true'},headers={'Range':f'bytes={first}-{last}'})
+    response=context.__enter__()
+    if response.status_code!=206 or response.headers.get('Content-Range')!=f'bytes {first}-{last}/{size}':
+        context.__exit__(None,None,None)
+        drive.close()
+        raise HTTPException(502,'Drive did not honor the requested artifact range')
+    def chunks():
+        try:
+            remaining=last-first+1
+            for chunk in response.iter_bytes(256*1024):
+                if len(chunk)>remaining:
+                    raise ValueError('Drive artifact exceeded verified size')
+                remaining-=len(chunk)
+                yield chunk
+        finally:
+            context.__exit__(None,None,None)
+            drive.close()
+    headers={'Accept-Ranges':'bytes','Content-Length':str(last-first+1)}
+    if ranged:
+        headers['Content-Range']=f'bytes {first}-{last}/{size}'
+    return StreamingResponse(chunks(),status_code=206 if ranged else 200,headers=headers,media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream')
+
+
+class Worker(BaseModel):
+    worker:str=Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    resources:dict=Field(default_factory=dict)
+
+
+@app.post('/api/workers/heartbeat')
+def heartbeat(body:Worker):
+    store.heartbeat(body.worker,body.resources)
+    return {'ok':True}
+
+
+@app.post('/api/workers/claim')
+def claim(body:Worker):
+    store.heartbeat(body.worker,body.resources)
+    return store.claim(body.worker,remote=True)
+
+
+class Checkpoint(BaseModel):
+    lease:str=Field(max_length=64)
+    state:str|None=None
+    result:dict|None=None
+    error:str|None=Field(default=None,max_length=500)
+    current:float|None=None
+    total:float|None=None
+
+
+@app.post('/api/workers/jobs/{jid}')
+def checkpoint(jid:str,body:Checkpoint):
+    states={'PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED'}
+    if body.state and body.state not in states:
+        raise HTTPException(422,'Invalid worker state')
+    try:
+        store.update(jid,**body.model_dump())
+    except InterruptedError:
+        raise HTTPException(409,'Worker lease lost or job cancelled') from None
+    return {'ok':True}
+
+
+@app.get('/api/publisher')
+def publisher():
+    from .publisher import channels, history
+    return {'channels':channels(),'publications':history()}
+
+
+@app.post('/api/publisher/discover')
+def discover_channels():
+    from .publisher import discover_channels
+    return discover_channels()
+
+
+class Policy(BaseModel):
+    daily_limit:int=Field(default=3,ge=1,le=20)
+    public_allowed:bool=False
+    automatic:bool=False
+    interval_minutes:int=Field(default=120,ge=30,le=1440)
+
+
+@app.post('/api/publisher/channels/{channel}/policy')
+def policy(channel:str,body:Policy):
+    from .publisher import set_policy
+    try:
+        set_policy(channel,**body.model_dump())
+        return {'ok':True}
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+
+
+class Publication(BaseModel):
+    job:str=Field(pattern=r'^[a-f0-9]{32}$')
+    output:int=Field(ge=0)
+    channel:str=Field(pattern=r'^[A-Za-z0-9_-]{1,100}$')
+    title:str=Field(min_length=1,max_length=100)
+    description:str=Field(default='',max_length=5000)
+    privacy:str='private'
+    publish_at:str|None=None
+
+
+@app.post('/api/publisher/queue')
+def queue_publication(body:Publication):
+    from .publisher import enqueue
+    values=body.model_dump()
+    values['jid']=values.pop('job')
+    values['index']=values.pop('output')
+    try:
+        return {'id':enqueue(**values)}
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+
+
+@app.post('/api/publisher/{pid}/retry')
+def retry_publication(pid:str):
+    from .publisher import retry
+    if not retry(pid):
+        raise HTTPException(409,'Only failed uploads can resume. An UNCERTAIN outcome requires YouTube Studio reconciliation.')
+    return {'ok':True}

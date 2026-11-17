@@ -9,6 +9,11 @@ __pycache__
 *.so
 .Python
 .venv
+.reference/
+factory-data/
+scratch/
+verification/
+secrets/
 venv/
 ENV/
 .eggs/

@@ -1,0 +1,19 @@
+# Optional NVIDIA acceleration. Default deployment remains CPU compatible.
+# docker compose -f docker-compose.yml -f compose.gpu.yml --profile controller up -d --build
+services:
+  controller:
+    gpus: all
+    build:
+      args:
+        GPU: '1'
+    environment:
+      WHISPER_DEVICE: auto
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+  worker:
+    gpus: all
+    build:
+      args:
+        GPU: '1'
+    environment:
+      WHISPER_DEVICE: auto
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility

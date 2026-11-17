@@ -1,0 +1,108 @@
+{
+  "id": "f4a1add8e0ee4d2b819420086ec9e253",
+  "state": "READY",
+  "worker": "worker-a",
+  "result": {
+    "source": {
+      "title": "b8a041e85df94c7190325bf67bec5f29",
+      "platform": "local",
+      "duration": 23.144989,
+      "resolutions": [
+        720
+      ],
+      "size": 21803986
+    },
+    "actual_resolution": 720,
+    "source_start": 0.0,
+    "processing_end": 23.144989,
+    "ingest_strategy": "audio-first bounded chunks",
+    "candidates": [
+      {
+        "start_seconds": 0.0,
+        "end_seconds": 22.2,
+        "score": 100.0,
+        "title": "Clear Opening and Natural Ending",
+        "language": "en",
+        "reason": "The candidate interval starts with a clear introduction to the video editing test and emphasizes the importance of clear speech and accurate timing for good subtitles. It also highlights the need for a strong opening and natural ending for short clips, which aligns with the goal of helping editors review their videos before publishing. The candidate interval also mentions that all audio is generated locally for this authorized test, which supports the context of the video editing test. This interval covers all the key points mentioned in the instructions and the transcript, making it the most suitable for ranking as the top candidate interval for this video editing test scenario. The interval's content is coherent and relevant to the video editing process, providing a strong opening and a natural ending to the video, which is crucial for the video editing test's success. The interval's content is also aligned with the goal of the video editing test, which is to help editors review and,",
+        "confidence": 1.0
+      }
+    ],
+    "analysis": "ollama",
+    "model": "qwen2.5:3b",
+    "language": "en",
+    "analysis_diagnostics": {
+      "requests": 1,
+      "rejected_intervals": 0,
+      "windows": 1
+    },
+    "outputs": [
+      {
+        "name": "clip-1.mp4",
+        "title": "Clear Opening and Natural Ending",
+        "approved": false,
+        "thumbnail": {
+          "name": "clip-1.jpg",
+          "drive": {
+            "id": "1cy_EKdGz9VfmG1wAOqiALP8kKX2-MYZS",
+            "webViewLink": "https://drive.google.com/file/d/1cy_EKdGz9VfmG1wAOqiALP8kKX2-MYZS/view?usp=drivesdk",
+            "md5Checksum": "ba70605307417d289aae8d4557696b44",
+            "size": "19161"
+          }
+        },
+        "drive": {
+          "id": "1zAoTRJughnK-KB8Cxakz2jVlZcc6rZ3y",
+          "webViewLink": "https://drive.google.com/file/d/1zAoTRJughnK-KB8Cxakz2jVlZcc6rZ3y/view?usp=drivesdk",
+          "md5Checksum": "2184afa72fd4b5199b4f498e6becc9c7",
+          "size": "23171606"
+        }
+      }
+    ],
+    "artifacts": {
+      "transcript.json": {
+        "id": "1DeRrUWLRFpnWX8fRf-XqCOgxpFnVrpEK",
+        "webViewLink": "https://drive.google.com/file/d/1DeRrUWLRFpnWX8fRf-XqCOgxpFnVrpEK/view?usp=drivesdk",
+        "md5Checksum": "a30f8ae2213abf4ed2b9ce8c11935c81",
+        "size": "4116"
+      },
+      "metadata.json": {
+        "id": "1OO-fh5_o89zJnGA6EACCMJAYa91hfQ3q",
+        "webViewLink": "https://drive.google.com/file/d/1OO-fh5_o89zJnGA6EACCMJAYa91hfQ3q/view?usp=drivesdk",
+        "md5Checksum": "68b7dbc8797c3c16743188d2b00584e1",
+        "size": "2547"
+      },
+      "clip-1.srt": {
+        "id": "1U40vduHnFT9Xa6XVwjeDySy-Ylg5naxb",
+        "webViewLink": "https://drive.google.com/file/d/1U40vduHnFT9Xa6XVwjeDySy-Ylg5naxb/view?usp=drivesdk",
+        "md5Checksum": "bcad3bafde66fea8baf97fefe269acc9",
+        "size": "1059"
+      },
+      "transcript.srt": {
+        "id": "1s7xQvH1SOdBBzTpx7Mk4GWqLhJ5_-JbP",
+        "webViewLink": "https://drive.google.com/file/d/1s7xQvH1SOdBBzTpx7Mk4GWqLhJ5_-JbP/view?usp=drivesdk",
+        "md5Checksum": "bcad3bafde66fea8baf97fefe269acc9",
+        "size": "1059"
+      },
+      "transcript.vtt": {
+        "id": "1fZ4s8fiAod0-KOhaoYd-cLJ_oV205KUg",
+        "webViewLink": "https://drive.google.com/file/d/1fZ4s8fiAod0-KOhaoYd-cLJ_oV205KUg/view?usp=drivesdk",
+        "md5Checksum": "f3fd5c7ebad966ce628834bf473f28c1",
+        "size": "1064"
+      },
+      "clip-1.ass": {
+        "id": "1QX4iZ0daWxLneual3GZVxt5XOwsjKYYS",
+        "webViewLink": "https://drive.google.com/file/d/1QX4iZ0daWxLneual3GZVxt5XOwsjKYYS/view?usp=drivesdk",
+        "md5Checksum": "2f45bcbf102adde79825484dfae26fc2",
+        "size": "8224"
+      }
+    },
+    "cloud_verified": true
+  },
+  "error": null,
+  "storage_after": {
+    "scratch_bytes": 21803986,
+    "free_bytes": 154696777728,
+    "budget_bytes": 8589934592,
+    "reserve_bytes": 4294967296
+  },
+  "observed_seconds": 117.64
+}

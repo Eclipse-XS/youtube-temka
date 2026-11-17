@@ -9,6 +9,15 @@
 
 # Python virtual environment
 .venv/
+.reference/
+factory-data/
+scratch/
+secrets/
+*.upload-session
+verification/*.wav
+verification/*token*
+verification/runtime/
+verification/test-output/
 __pycache__/
 *.pyc
 
