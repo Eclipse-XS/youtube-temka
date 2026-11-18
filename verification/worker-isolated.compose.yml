@@ -1,0 +1,8 @@
+services:
+  worker:
+    environment:
+      CONTROLLER_URL: http://controller:8000
+      WORKER_ID: isolated-worker-b
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE: int8
+      OLLAMA_GPU_LAYERS: '0'

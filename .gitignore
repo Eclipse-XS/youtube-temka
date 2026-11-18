@@ -64,3 +64,12 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# Generated narration intermediates and interrupted test log
+verification/narrated-kokoro.*
+verification/linux-tests-final.log
+
+# Keep raw job metadata and screenshots private; publish aggregate results only
+verification/*.json
+!verification/RESULTS_PUBLIC.json
+verification/*.png

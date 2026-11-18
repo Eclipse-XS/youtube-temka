@@ -1,8 +1,8 @@
 {
   "authenticated_settings": 200,
   "anonymous_jobs": 401,
-  "workers": 1,
-  "drive_configured": false,
+  "workers": 2,
+  "drive_configured": true,
   "ollama_model": "qwen2.5:3b",
   "model_setup": {
     "model": "qwen2.5:3b",

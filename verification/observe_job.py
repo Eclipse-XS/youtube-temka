@@ -22,9 +22,9 @@ with httpx.Client(base_url='http://127.0.0.1:5175',headers={'Authorization':'Bea
             last=marker
         if job['state'] in ('READY','FAILED','BLOCKED','CANCELLED'):
             state=client.get('/api/settings').json()
-            evidence={k:job[k] for k in ('id','state','worker','result','error')}
+            evidence={k:job[k] for k in ('id','state','worker','result','error','stages')}
             evidence['storage_after']=state['storage']
             evidence['observed_seconds']=round(time.monotonic()-started,2)
-            (root/'verification'/'browser-job.json').write_text(json.dumps(evidence,indent=2,ensure_ascii=False),encoding='utf-8')
+            (root/'verification'/(sys.argv[2] if len(sys.argv)>2 else 'browser-job.json')).write_text(json.dumps(evidence,indent=2,ensure_ascii=False),encoding='utf-8')
             break
         time.sleep(3)

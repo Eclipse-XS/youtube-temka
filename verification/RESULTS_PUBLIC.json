@@ -1,0 +1,171 @@
+{
+  "privacy": "Only aggregate technical results; no Drive links, file IDs, source upload IDs, job IDs, transcripts or credentials. Raw evidence remains local and ignored by Git.",
+  "implementation_commit": "36d0509db5218b415ad512092801e94d3c8a9a7d",
+  "recovery_fix_commit": "568b4a3413b58de0d937c52c0dc42e52bff7ffa7",
+  "tests": {
+    "windows_completed_before_final_case": 51,
+    "linux_completed_before_final_case": 210,
+    "linux_later_repeat": "INTERRUPTED_BY_USER",
+    "final_focused_passed": 8,
+    "frontend_build": "PASS"
+  },
+  "drive_authorization": {
+    "legacy_files_present": true,
+    "authorized": true,
+    "files_unchanged": true
+  },
+  "spoken_short": {
+    "state": "READY",
+    "cloud_verified": true,
+    "outputs": [
+      {
+        "duration": 22.2,
+        "approved": false,
+        "validation": {
+          "duration": 22.2,
+          "width": 1080,
+          "height": 1920,
+          "frames_decoded": 666,
+          "audio": true,
+          "validated": true,
+          "framing": {
+            "strategy": "auto"
+          }
+        },
+        "drive_integrity_verified": true,
+        "editable_source_verified": true
+      }
+    ]
+  },
+  "longs": {
+    "state": "READY",
+    "cloud_verified": true,
+    "outputs": [
+      {
+        "duration": 10.010667,
+        "approved": false,
+        "validation": {
+          "duration": 10.010667,
+          "width": 1280,
+          "height": 720,
+          "frames_decoded": 300,
+          "audio": true,
+          "validated": true
+        },
+        "drive_integrity_verified": true,
+        "editable_source_verified": true
+      }
+    ]
+  },
+  "edit_after_cleanup": {
+    "state": "READY",
+    "cloud_verified": true,
+    "outputs": [
+      {
+        "duration": 6.0,
+        "approved": false,
+        "validation": {
+          "duration": 6.0,
+          "width": 1080,
+          "height": 1920,
+          "frames_decoded": 180,
+          "audio": true,
+          "validated": true,
+          "framing": {
+            "strategy": "crop"
+          }
+        },
+        "drive_integrity_verified": true,
+        "editable_source_verified": true
+      }
+    ]
+  },
+  "silent_after_restart": {
+    "state": "READY",
+    "cloud_verified": true,
+    "outputs": [
+      {
+        "duration": 10.0,
+        "approved": false,
+        "validation": {
+          "duration": 10.0,
+          "width": 1080,
+          "height": 1920,
+          "frames_decoded": 300,
+          "audio": false,
+          "validated": true,
+          "framing": {
+            "strategy": "blur"
+          }
+        },
+        "drive_integrity_verified": true,
+        "editable_source_verified": true
+      }
+    ]
+  },
+  "restart_to_blocked_seconds": 131.16,
+  "bounded_licensed_url": {
+    "status": "PASS",
+    "selected_seconds": 10,
+    "bytes": 1423820,
+    "validation": {
+      "duration": 10.0,
+      "width": 854,
+      "height": 480,
+      "frames_decoded": 240,
+      "audio": true,
+      "validated": true
+    }
+  },
+  "optional_tts": [
+    {
+      "language": "en",
+      "voice": "af_heart",
+      "seconds": 15.78,
+      "audio_duration": 7.030667,
+      "bytes": 337516,
+      "non_silent": true
+    },
+    {
+      "language": "es",
+      "voice": "ef_dora",
+      "seconds": 12.25,
+      "audio_duration": 7.420667,
+      "bytes": 356236,
+      "non_silent": true
+    }
+  ],
+  "narrated_video": {
+    "duration": 10.0,
+    "width": 1080,
+    "height": 1920,
+    "frames_decoded": 300,
+    "audio": true,
+    "validated": true,
+    "framing": {
+      "strategy": "blur"
+    },
+    "elapsed_seconds": 29.3,
+    "word_aligned_captions": true
+  },
+  "gpu_asr": {
+    "inference": {
+      "device": "cuda",
+      "compute_type": "int8_float16",
+      "model": "small"
+    },
+    "language": "en",
+    "segments": 6
+  },
+  "long_vod": {
+    "source_seconds": 7280.0,
+    "chunks_completed": 9,
+    "global_transcript_last_end": 7272.18,
+    "rendered_outputs": 1,
+    "final_upload_cleanup": "INTERRUPTED_BY_USER",
+    "whole_job_cloud_verified": false
+  },
+  "youtube": "UNVERIFIED_USER_CHOSE_NO_TEST",
+  "physical_second_pc": "UNVERIFIED",
+  "physical_4gb_gpu": "UNVERIFIED"
+}
