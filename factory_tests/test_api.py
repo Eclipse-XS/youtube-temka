@@ -94,3 +94,19 @@ def test_publication_edit_requires_auth_and_reports_unavailable_item(client):
     assert client.patch('/api/publisher/absent',json={'title':'Changed'}).status_code==401
     client.headers['Authorization']='Bearer '+'a'*40
     assert client.patch('/api/publisher/absent',json={'title':'Changed'}).status_code==409
+
+
+def test_retry_keeps_original_asset_version_and_automatic_choice(client):
+    from factory import store
+    folder=config.DATA/'backgrounds';folder.mkdir()
+    (folder/'original.mp4').write_bytes(b'approved-original-version')
+    client.headers['Authorization']='Bearer '+'a'*40
+    job=store.create({'source':'https://www.youtube.com/watch?v=fixture','save_drive':True,'preset':'auto'})
+    first=client.post('/api/workers/claim',json={'worker':'remote'}).json()
+    store.cancel(job['id']);assert store.retry(job['id'])
+    (folder/'original.mp4').write_bytes(b'changed-version')
+    (folder/'another.mp4').write_bytes(b'another-automatic-choice')
+    second=client.post('/api/workers/claim',json={'worker':'remote'}).json()
+    assert second['assets']==first['assets']
+    assert second['assets'][0]['name']=='original.mp4'
+    assert store.get(job['id'])['result']['asset_manifest']==first['assets']

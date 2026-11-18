@@ -172,8 +172,8 @@
     "base_commit": "c2ef4ce1104ea1ec58a28fe2be64c001c31d1fbd",
     "implementation_commit": "50f061f5a2fd204db4fc9e13a2042b8bbd951830",
     "tests": {
-      "windows_factory_passed": 80,
-      "linux_factory_and_retained_passed": 237,
+      "windows_factory_passed": 81,
+      "linux_factory_and_retained_passed": 238,
       "frontend_build": "PASS",
       "compose_cpu_gpu": "PASS"
     },

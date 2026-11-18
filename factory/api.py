@@ -369,7 +369,12 @@ def claim(body:Worker):
     claimed=store.claim(body.worker,remote=True)
     if claimed:
         from .assets import manifest
-        try:claimed['assets']=manifest(claimed['job']['request'])
+        try:
+            result=claimed['job']['result']
+            if 'asset_manifest' not in result:
+                result['asset_manifest']=manifest(claimed['job']['request'])
+                store.update(claimed['job']['id'],claimed['lease'],result={'asset_manifest':result['asset_manifest']})
+            claimed['assets']=result['asset_manifest']
         except ValueError as error:
             store.update(claimed['job']['id'],claimed['lease'],state='BLOCKED',error=str(error))
             return None
