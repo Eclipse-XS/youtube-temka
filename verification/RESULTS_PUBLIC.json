@@ -170,12 +170,16 @@
   "physical_4gb_gpu": "UNVERIFIED",
   "current_release": {
     "base_commit": "c2ef4ce1104ea1ec58a28fe2be64c001c31d1fbd",
-    "implementation_commit": "50f061f5a2fd204db4fc9e13a2042b8bbd951830",
+    "implementation_commit": "4b951131bb2c959b50cb825b843d37b2b6231bdf",
     "tests": {
-      "windows_factory_passed": 95,
-      "linux_factory_and_retained_passed": 252,
+      "windows_passed": 100,
+      "windows_seconds": 152.57,
+      "linux_passed": 257,
+      "linux_seconds": 185.35,
       "frontend_build": "PASS",
-      "compose_cpu_gpu": "PASS"
+      "compose_gpu_cpu_configs": "PASS",
+      "compileall": "PASS",
+      "tracked_credential_pattern_scan": "PASS_NOT_SECURITY_AUDIT"
     },
     "physical_gpu": {
       "total_mib": 4096,
@@ -273,9 +277,131 @@
     },
     "youtube": "BLOCKED_NO_AUTHORIZED_CHANNEL_TOKEN",
     "physical_second_pc": "UNVERIFIED",
-    "real_multi_hour_vod": "UNVERIFIED",
-    "real_50_minute_vod": "IN_PROGRESS_NOT_A_PASS",
-    "multi_source_editorial_benchmark": "UNVERIFIED",
+    "real_multi_hour_vod": {
+      "state": "READY",
+      "error": null,
+      "source_url": "https://www.youtube.com/watch?v=7nT7JGZMbtM",
+      "source_seconds": 8250,
+      "chunks_completed": 10,
+      "chunks_total": 10,
+      "analysis": "ollama",
+      "analysis_diagnostics": {
+        "requests": 29,
+        "rejected_intervals": 0,
+        "windows": 31,
+        "decisions": []
+      },
+      "cloud_verified": true,
+      "cleanup": true,
+      "seconds": 5413.56,
+      "sampled_gpu_peak_mib": 2057,
+      "sampled_scratch_peak_bytes": 26576670,
+      "sampled_ram_peak_bytes": 1349959680,
+      "controller_network_rx_bytes": 252536601,
+      "controller_network_tx_bytes": 219125767,
+      "audio_payload_bytes_observed": 92922638,
+      "outputs": [
+        {
+          "validation": {
+            "duration": 28.1,
+            "width": 1080,
+            "height": 1920,
+            "frames_decoded": 843,
+            "audio": true,
+            "validated": true,
+            "framing": {
+              "strategy": "face_tracking",
+              "samples": 57,
+              "detections": 33
+            }
+          },
+          "drive_verified": true,
+          "editable_source_verified": true
+        }
+      ],
+      "transcript_segments": 1564,
+      "last_global_end": 8141.72
+    },
+    "real_50_minute_vod": {
+      "initial_attempt": "FAILED_RANGED_MP4_PATH_AFTER_FULL_ASR",
+      "recovery": {
+        "state": "READY",
+        "error": null,
+        "worker": "worker-a",
+        "source_seconds": 3025,
+        "asr": "reused actual completed full-source checkpoint",
+        "analysis": "ollama",
+        "analysis_outcome": "selected",
+        "diagnostics": {
+          "requests": 16,
+          "rejected_intervals": 2,
+          "windows": 14,
+          "decisions": []
+        },
+        "cloud_verified": true,
+        "cleanup": true,
+        "seconds": 711.09,
+        "gpu_sampled_peak_mib": 2122,
+        "scratch_sampled_peak_bytes": 67012423,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 29.933333,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 898,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "face_tracking",
+                "samples": 60,
+                "detections": 59
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          },
+          {
+            "validation": {
+              "duration": 21.466667,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 644,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "face_tracking",
+                "samples": 43,
+                "detections": 21
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          },
+          {
+            "validation": {
+              "duration": 40.566667,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 1217,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "face_tracking",
+                "samples": 82,
+                "detections": 82
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "downloaded_preview_bytes": 13961534
+      },
+      "editorial_acceptance": "NOT_PASSED_RAW_TITLE_ERROR_AND_UNCALIBRATED_SCORES",
+      "new_guard_real_probe": "PASS_UNSUPPORTED_TITLE_REPLACED_REVIEW_REQUIRED"
+    },
+    "multi_source_editorial_benchmark": "PARTIAL_REAL_RU_UK_LIMITED_SPEECH_TECHNICAL_PASS_CONTROLLED_GAMING_REACTION_NOT_REAL_WORLD_EDITORIAL_ACCEPTANCE",
     "delivery_pr": "https://github.com/denusbtw/youtube-temka/pull/1",
     "ollama_cuda12_probe": [
       {
@@ -300,6 +426,664 @@
         "sampled_peak_gpu_mib": 2047,
         "samples": 20
       }
-    ]
-  }
+    ],
+    "two_isolated_docker_workers": {
+      "distinct_workers": true,
+      "observed_concurrent_leases": true,
+      "jobs": [
+        {
+          "state": "READY",
+          "error": null,
+          "worker": "isolated-a",
+          "cloud_verified": true,
+          "validation": [
+            {
+              "duration": 5.0,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 150,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "gameplay"
+              }
+            }
+          ]
+        },
+        {
+          "state": "READY",
+          "error": null,
+          "worker": "isolated-b",
+          "cloud_verified": true,
+          "validation": [
+            {
+              "duration": 5.0,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 150,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "gameplay"
+              }
+            }
+          ]
+        }
+      ],
+      "handoff": {
+        "state": "READY",
+        "error": null,
+        "old_worker": "isolated-a",
+        "new_worker": "isolated-b",
+        "different_worker": true,
+        "selection_preserved": true,
+        "cloud_verified": true
+      },
+      "resources": [
+        {
+          "id": "isolated-a",
+          "os": "Linux",
+          "gpu": null,
+          "heavy_task_limit": 1
+        },
+        {
+          "id": "isolated-b",
+          "os": "Linux",
+          "gpu": null,
+          "heavy_task_limit": 1
+        }
+      ],
+      "seconds": 144.92
+    },
+    "authorized_category_tests": [
+      {
+        "category": "ukrainian_real_url",
+        "state": "READY",
+        "error": null,
+        "language": "uk",
+        "analysis": "ollama",
+        "analysis_outcome": "selected",
+        "cloud_verified": true,
+        "cleanup": true,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 27.333333,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 820,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "face_tracking",
+                "samples": 55,
+                "detections": 55
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "transcript_characters": 1667,
+        "cyrillic_present": true,
+        "preview_status": 206
+      },
+      {
+        "category": "russian_real_video",
+        "state": "READY",
+        "error": null,
+        "language": "ru",
+        "analysis": "ollama",
+        "analysis_outcome": "selected",
+        "cloud_verified": true,
+        "cleanup": true,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 23.766667,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 713,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "face_tracking",
+                "samples": 48,
+                "detections": 48
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "transcript_characters": 1216,
+        "cyrillic_present": true,
+        "preview_status": 206
+      },
+      {
+        "category": "gaming_controlled_commentary",
+        "state": "READY",
+        "error": null,
+        "language": "en",
+        "analysis": "ollama",
+        "analysis_outcome": "selected",
+        "cloud_verified": true,
+        "cleanup": true,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 23.833333,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 715,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "gameplay"
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "transcript_characters": 585,
+        "cyrillic_present": false,
+        "preview_status": 206
+      },
+      {
+        "category": "reaction_controlled",
+        "state": "READY",
+        "error": null,
+        "language": "en",
+        "analysis": "ollama",
+        "analysis_outcome": "selected",
+        "cloud_verified": true,
+        "cleanup": true,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 24.433333,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 733,
+              "audio": true,
+              "validated": true,
+              "framing": {
+                "strategy": "blur"
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "transcript_characters": 486,
+        "cyrillic_present": false,
+        "preview_status": 206
+      },
+      {
+        "category": "limited_speech_real_silent",
+        "state": "READY",
+        "error": null,
+        "language": null,
+        "analysis": "whole short visual source; no AI claim",
+        "analysis_outcome": null,
+        "cloud_verified": true,
+        "cleanup": true,
+        "outputs": [
+          {
+            "validation": {
+              "duration": 30.033333,
+              "width": 1080,
+              "height": 1920,
+              "frames_decoded": 901,
+              "audio": false,
+              "validated": true,
+              "framing": {
+                "strategy": "crop"
+              }
+            },
+            "drive_verified": true,
+            "editable_source_verified": true
+          }
+        ],
+        "transcript_characters": 0,
+        "cyrillic_present": false,
+        "preview_status": 206
+      }
+    ],
+    "source_license_evidence": "verification/NASA_EDITORIAL_REVIEW.md",
+    "real_manual_longs": {
+      "scenario": "real_licensed_url_manual_longs_chronological",
+      "state": "READY",
+      "error": null,
+      "seconds": 76.27,
+      "cloud_verified": true,
+      "candidate_intervals": [
+        [
+          0.0,
+          5.0
+        ],
+        [
+          10.0,
+          15.0
+        ]
+      ],
+      "outputs": [
+        {
+          "validation": {
+            "duration": 10.010667,
+            "width": 1280,
+            "height": 720,
+            "frames_decoded": 300,
+            "audio": true,
+            "validated": true
+          },
+          "drive_verified": true,
+          "editable_source_verified": true
+        }
+      ]
+    },
+    "audio_measurements_before_fix": [
+      {
+        "category": "ukrainian_real_url",
+        "integrated_lufs": -16.1,
+        "true_peak_dbfs": -1.9,
+        "peak_dbfs": -1.864698,
+        "rms_dbfs": -19.234056,
+        "nan_samples": 0.0,
+        "infinite_samples": 0.0
+      },
+      {
+        "category": "russian_real_video",
+        "integrated_lufs": -13.9,
+        "true_peak_dbfs": -2.1,
+        "peak_dbfs": -2.088302,
+        "rms_dbfs": -16.506661,
+        "nan_samples": 0.0,
+        "infinite_samples": 0.0
+      },
+      {
+        "category": "gaming_controlled_commentary",
+        "integrated_lufs": -17.7,
+        "true_peak_dbfs": -0.8,
+        "peak_dbfs": -0.847,
+        "rms_dbfs": -18.071723,
+        "nan_samples": 0.0,
+        "infinite_samples": 0.0
+      },
+      {
+        "category": "reaction_controlled",
+        "integrated_lufs": -16.7,
+        "true_peak_dbfs": 0.3,
+        "peak_dbfs": 0.257637,
+        "rms_dbfs": -17.031469,
+        "nan_samples": 0.0,
+        "infinite_samples": 0.0
+      }
+    ],
+    "audio_headroom_corrected_rerender": {
+      "category": "reaction_controlled",
+      "integrated_lufs": -16.7,
+      "true_peak_dbfs": -4.7,
+      "sample_peak_dbfs": -4.687403,
+      "validation": {
+        "duration": 24.433333,
+        "width": 1080,
+        "height": 1920,
+        "frames_decoded": 733,
+        "audio": true,
+        "validated": true
+      }
+    },
+    "twitch": {
+      "probe": "PASS_COMPLETED_NASA_VOD",
+      "source_url": "https://www.twitch.tv/videos/2920156347",
+      "duration": 33105,
+      "end_to_end": "UNVERIFIED_AUTOMATIC_APPROVAL_REVIEW_REJECTED_TEST_COMMAND",
+      "review_reason": "blocked by policy; no more specific reason supplied"
+    },
+    "frontend_dependencies": {
+      "remotion": "4.0.545",
+      "zod": "4.6.7",
+      "mediabunny": "1.66.0",
+      "vite": "6.4.6",
+      "factory_build": "PASS",
+      "retained_build": "PASS",
+      "actual_dev_proxy": {
+        "html_status": 200,
+        "unauthorized_proxy_status": 401,
+        "authorized_proxy_status": 200,
+        "vite": "6.4.6"
+      },
+      "production_audit": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "all_dependencies_audit_raw": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 11,
+        "critical": 0,
+        "total": 11
+      },
+      "remaining_advisory": "GHSA-fc5q-39xc-vjpf; GitHub marks withdrawn 2026-11-18; npm still reports development transitive findings"
+    },
+    "real_multi_hour_asr": {
+      "chunks": 10,
+      "segments": 1564,
+      "last_global_end": 8141.72,
+      "all_chunks_cuda_small": true,
+      "out_of_source_bounds": 0,
+      "nonmonotonic_starts": 0
+    },
+    "real_multi_hour_asr_checkpoints": [
+      {
+        "offset_seconds": 0,
+        "segments": 150,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 900,
+        "segments": 238,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 1800,
+        "segments": 204,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 2700,
+        "segments": 192,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 3600,
+        "segments": 185,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 4500,
+        "segments": 146,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 5400,
+        "segments": 135,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 6300,
+        "segments": 121,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 7200,
+        "segments": 179,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      },
+      {
+        "offset_seconds": 8100,
+        "segments": 14,
+        "inference": {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      }
+    ],
+    "real_multi_hour_selection": {
+      "analysis": "ollama",
+      "outcome": "selected",
+      "diagnostics": {
+        "requests": 29,
+        "rejected_intervals": 0,
+        "windows": 31,
+        "decisions": []
+      },
+      "candidates": [
+        {
+          "start_seconds": 718.87,
+          "end_seconds": 746.94,
+          "score": 95.0,
+          "confidence": 0.9,
+          "selection_method": "ollama",
+          "title_method": "transcript_quote",
+          "editorial_review_required": true
+        }
+      ]
+    },
+    "real_multi_hour_post_cleanup_preview": {
+      "preview_status": 206,
+      "preview_bytes": 1024,
+      "downloaded_bytes": 16675657,
+      "frames": 843,
+      "audio": true,
+      "width": 1080,
+      "height": 1920
+    },
+    "deployed_code": {
+      "backend_modules_match_worktree": true,
+      "modules_checked": 7,
+      "frontend_new_bundle_served": true,
+      "http_status": 200,
+      "code_commit": "4b951131bb2c959b50cb825b843d37b2b6231bdf",
+      "frontend_assets_match_verified_build": true,
+      "frontend_assets_verified": 2
+    },
+    "readiness": {
+      "score": 73,
+      "maximum": 100,
+      "method": "Evidence-weighted engineering judgment; not a measured probability or requirement completion percentage",
+      "unattended_public_publication": "NOT_ACCEPTED_NO_CHANNEL_TOKEN",
+      "physical_two_pc": "UNVERIFIED"
+    },
+    "final_production_sequence": {
+      "seconds": 798.42,
+      "sequential_same_worker": true,
+      "sampled_gpu_peak_mib": 2055,
+      "jobs": [
+        {
+          "category": "ukrainian_final",
+          "state": "READY",
+          "error": null,
+          "worker": "worker-a",
+          "cloud_verified": true,
+          "cleanup": true,
+          "inference": {
+            "device": "cuda",
+            "compute_type": "int8_float16",
+            "model": "small"
+          },
+          "outputs": [
+            {
+              "validation": {
+                "duration": 27.333333,
+                "width": 1080,
+                "height": 1920,
+                "frames_decoded": 820,
+                "audio": true,
+                "validated": true,
+                "framing": {
+                  "strategy": "face_tracking",
+                  "samples": 55,
+                  "detections": 55
+                }
+              },
+              "independent_decode": {
+                "duration": 27.333333,
+                "width": 1080,
+                "height": 1920,
+                "frames": 820,
+                "audio_sample_rate": 48000,
+                "audio_channels": 2
+              },
+              "drive_verified": true,
+              "editable_source_verified": true,
+              "preview_status": 206,
+              "preview_bytes": 1024,
+              "downloaded_bytes": 16311418,
+              "integrated_lufs": -16.2,
+              "true_peak_dbfs": -2.9
+            }
+          ]
+        },
+        {
+          "category": "reaction_final",
+          "state": "READY",
+          "error": null,
+          "worker": "worker-a",
+          "cloud_verified": true,
+          "cleanup": true,
+          "inference": {
+            "device": "cuda",
+            "compute_type": "int8_float16",
+            "model": "small"
+          },
+          "outputs": [
+            {
+              "validation": {
+                "duration": 24.433333,
+                "width": 1080,
+                "height": 1920,
+                "frames_decoded": 733,
+                "audio": true,
+                "validated": true,
+                "framing": {
+                  "strategy": "blur"
+                }
+              },
+              "independent_decode": {
+                "duration": 24.433333,
+                "width": 1080,
+                "height": 1920,
+                "frames": 733,
+                "audio_sample_rate": 48000,
+                "audio_channels": 2
+              },
+              "drive_verified": true,
+              "editable_source_verified": true,
+              "preview_status": 206,
+              "preview_bytes": 1024,
+              "downloaded_bytes": 10580211,
+              "integrated_lufs": -16.7,
+              "true_peak_dbfs": -4.5
+            }
+          ],
+          "uploaded_source_removed": true
+        },
+        {
+          "category": "russian_final",
+          "state": "READY",
+          "error": null,
+          "worker": "worker-a",
+          "cloud_verified": true,
+          "cleanup": true,
+          "inference": {
+            "device": "cuda",
+            "compute_type": "int8_float16",
+            "model": "small"
+          },
+          "outputs": [
+            {
+              "validation": {
+                "duration": 25.833333,
+                "width": 1080,
+                "height": 1920,
+                "frames_decoded": 775,
+                "audio": true,
+                "validated": true,
+                "framing": {
+                  "strategy": "face_tracking",
+                  "samples": 52,
+                  "detections": 51
+                }
+              },
+              "independent_decode": {
+                "duration": 25.833333,
+                "width": 1080,
+                "height": 1920,
+                "frames": 775,
+                "audio_sample_rate": 48000,
+                "audio_channels": 2
+              },
+              "drive_verified": true,
+              "editable_source_verified": true,
+              "preview_status": 206,
+              "preview_bytes": 1024,
+              "downloaded_bytes": 16622501,
+              "integrated_lufs": -14.2,
+              "true_peak_dbfs": -2.9
+            }
+          ],
+          "uploaded_source_removed": true
+        }
+      ],
+      "no_controller_restart_between_jobs": true,
+      "frontend_redeployed_during_scenario": true
+    },
+    "browser_generation_and_playback": {
+      "source": "licensed Ukrainian URL",
+      "submission": "ACTUAL_GENERATE_BUTTON",
+      "ready_state": 4,
+      "width": 1080,
+      "height": 1920,
+      "duration": 27.333333,
+      "full_playback_observed": true,
+      "review_warning_visible": true
+    },
+    "responsive_layout": {
+      "before_panel_client_width": 568,
+      "before_scroll_width": 858,
+      "after_panel_client_width": 568,
+      "after_scroll_width": 568,
+      "desktop_client_width": 1265,
+      "desktop_scroll_width": 1265,
+      "temporary_viewport_restored": true
+    },
+    "post_acceptance_gpu_mib": 0,
+    "delivery_route": "Authorized fork/PR; upstream permissions push=false verified"
+  },
+  "historical_notice": "Top-level results preceding current_release are retained historical evidence, not the current acceptance matrix."
 }
