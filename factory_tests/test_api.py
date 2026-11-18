@@ -28,6 +28,16 @@ def test_control_endpoints_require_auth(client):
     assert client.get('/api/jobs').status_code==401
 
 
+def test_readiness_json_is_compatible_with_case_insensitive_clients(client,monkeypatch):
+    from factory import deployment
+    monkeypatch.setattr(deployment,'readiness',lambda:{'Analytics':'AUTHORIZATION_REQUIRED','SQLite':'READY'})
+    assert client.get('/api/readiness').status_code==401
+    client.headers['Authorization']='Bearer '+'a'*40
+    result=client.get('/api/readiness').json()
+    assert len({key.casefold() for key in result})==len(result)
+    assert set(result['services'])=={'local_worker','publisher','analytics'}
+
+
 def test_invalid_sources_and_rights(client):
     client.headers['Authorization']='Bearer '+'a'*40
     for url in ['http://127.0.0.1','https://youtube.com.attacker.invalid/x','file:///etc/passwd','https://twitch.tv@127.0.0.1/x']:

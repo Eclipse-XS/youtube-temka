@@ -126,6 +126,7 @@ function JobEvents({ job }) {
 }
 
 function App() {
+  const [readiness, setReadiness] = useState(null);
   const [page, setPage] = useState("Dashboard"),
     [jobs, setJobs] = useState([]),
     [settings, setSettings] = useState(null),
@@ -662,6 +663,16 @@ function App() {
         )}
         {page === "Settings" && (
           <>
+            <section>
+              <h2>Стан інтеграцій</h2>
+              <button disabled={busy} onClick={() => act(async () => setReadiness(await api('/readiness')))}>
+                Перевірити підключення
+              </button>
+              {['Google Drive', 'YouTube', 'Analytics'].map(name => (
+                <p key={name}>{name}: {readiness?.[name] || 'NOT_CHECKED'}</p>
+              ))}
+              <p>Drive: підключіть наявний OAuth у розділі Google Drive нижче. YouTube: окремий Desktop OAuth у Publisher. Analytics: окремий read-only OAuth у Analytics. Помилки авторизації цих сервісів не блокують локальний рендер.</p>
+            </section>
             <section>
               <h2>Google Drive</h2>
               <p>

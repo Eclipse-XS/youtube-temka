@@ -209,3 +209,51 @@ npm run build -- --config vite.factory.config.js
 Retained upstream POSIX tests run on Linux in CI. The actual production UI is
 `factory.html`, built through `vite.factory.config.js`. Deployed images use an
 explicit MIT-core allowlist and exclude upstream `cloud/` code.
+
+## One-command launcher (Windows)
+
+`./scripts/start-factory.ps1` resolves the checkout independently of the current
+working directory. Docker Desktop must already be installed with WSL2; the script
+can start Desktop and waits for the Linux engine with a bounded timeout. It never
+installs drivers, changes system settings, removes volumes, or replaces `.env`.
+An existing invalid token is an explicit configuration error.
+
+Default GPU selection requires a successful `nvidia-smi` inside the pinned Ollama
+container. The GPU image uses Python 3.12, pinned CTranslate2/Faster-Whisper and
+CUDA 12/cuDNN 9 wheels in `requirements-factory-gpu.lock`. SHA256 and sizes are
+recorded from authentic PyPI distribution metadata in `deploy/gpu-wheels.json`.
+No upstream/cloud lockfile is repurposed. Downloads retry five times, delete
+corrupted partials, validate integrity, and install offline with `--require-hashes`.
+BuildKit retains the verified wheel cache independently of application layers.
+Optional offline prefill: `python deploy/download-wheels.py deploy/wheels` on a
+Python 3.12 host; wheels stay ignored by Git. No model is baked into the image.
+
+The launcher initializes Ollama only when the configured model is absent and
+performs a synthetic-audio Whisper inference in a separate process. This verifies
+model loading and kernels, not speech accuracy. Model and database volumes retain
+their existing Compose names. `-CpuOnly` explicitly overrides GPU environment
+preferences. CUDA verification failure is reported before recreating CPU services;
+GPU download/build failure remains a deployment failure with its original logs.
+
+`-Status` checks live services without initialization/building. `-TestInference`
+adds actual Ollama generation. `-WithTTS` is optional and does not fabricate voice
+assets or consent. Unchanged source fingerprints reuse images without building;
+changed inputs reuse BuildKit layers. `-Rebuild` also refreshes base images.
+
+`/api/readiness` is authenticated and checks SQLite integrity, storage writes/free
+reserve, live lifecycle threads and read-only credential/API probes. Missing
+optional authorizations produce DEGRADED. READY means service readiness; end-to-end
+video, real speech, restart recovery and physical PC B are separate acceptance.
+Settings retains existing integration setup controls. Authentication secrets are
+read from `.env` for browser login and are never printed by the launcher.
+
+Maintenance commands preserve volumes. The update command refuses dirty or diverged
+worktrees and backs up SQLite using SQLite's online backup API before changing code.
+Backups reside in `/data/backups`; copy these through Docker for offline recovery.
+Never open the live Linux database for concurrent Windows writes. Deployment logs
+can contain private job metadata; do not publish raw logs without review.
+
+The launcher performs model initialization before starting a stopped controller's
+queue consumer. It refuses deployment changes while the reachable controller has
+active jobs; `-Status` remains available. Persistent writable data/scratch/model
+mounts and the read-only OAuth mount are inspected on the actual container.
