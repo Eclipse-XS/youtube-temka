@@ -1085,5 +1085,176 @@
     "post_acceptance_gpu_mib": 0,
     "delivery_route": "Authorized fork/PR; upstream permissions push=false verified"
   },
-  "historical_notice": "Top-level results preceding current_release are retained historical evidence, not the current acceptance matrix."
+  "historical_notice": "Previous top-level and current_release results are historical. The newest acceptance is automation_release_2026_11_18. Only aggregate technical evidence is included.",
+  "automation_release_2026_11_18": {
+    "baseline_commit": "4b169dabd7426673ff60e148c0e290288f4680ed",
+    "implementation_commit": "8f54d07f556c371a530f77e9940c646ca99beb7e",
+    "readiness_score": 85,
+    "second_physical_pc": "EXCLUDED_BY_OWNER",
+    "windows_factory_passed": 128,
+    "latest_publisher_focused_passed": 30,
+    "linux_regressions_passed": 286,
+    "implementation_ci": {
+      "state": "PASS",
+      "url": "https://github.com/denusbtw/youtube-temka/actions/runs/44398229829"
+    },
+    "private_youtube_test": {
+      "state": "PUBLISHED",
+      "count": 1,
+      "duration_seconds": 10,
+      "privacy": "private",
+      "all_requested_snippet_fields_verified": true,
+      "delayed_tags_reconciled_without_new_insert": true,
+      "public_or_scheduled_test": "NOT_AUTHORIZED",
+      "custom_thumbnail": "ASSET_ONLY_API_REJECTED"
+    },
+    "analytics": {
+      "state": "READY",
+      "videos": 1,
+      "daily_rows": 30,
+      "recommendations": "INSUFFICIENT_DATA",
+      "null_metrics_preserved": true,
+      "diagnostics": []
+    },
+    "three_sequential_jobs": [
+      {
+        "sequence": 1,
+        "state": "READY",
+        "error": null,
+        "seconds": 105.8,
+        "cloud_verified": true,
+        "local_cleaned": true,
+        "formats": [
+          {
+            "width": 1080,
+            "height": 1920,
+            "audio": true,
+            "metadata_method": "ollama",
+            "metadata_persisted": true,
+            "editorial": "NEEDS_REVIEW",
+            "drive_verified": true
+          }
+        ]
+      },
+      {
+        "sequence": 2,
+        "state": "READY",
+        "error": null,
+        "seconds": 100.39,
+        "cloud_verified": true,
+        "local_cleaned": true,
+        "formats": [
+          {
+            "width": 1080,
+            "height": 1920,
+            "audio": false,
+            "metadata_method": "ollama",
+            "metadata_persisted": true,
+            "editorial": "NEEDS_REVIEW",
+            "drive_verified": true
+          }
+        ]
+      },
+      {
+        "sequence": 3,
+        "state": "READY",
+        "error": null,
+        "seconds": 121.47,
+        "cloud_verified": true,
+        "local_cleaned": true,
+        "formats": [
+          {
+            "width": 1280,
+            "height": 720,
+            "audio": true,
+            "metadata_method": "ollama",
+            "metadata_persisted": true,
+            "editorial": "NEEDS_REVIEW",
+            "drive_verified": true
+          }
+        ]
+      }
+    ],
+    "twitch_bounded_seconds": 60,
+    "twitch_full_pipeline": {
+      "state": "READY",
+      "error": null,
+      "seconds": 113.72,
+      "cloud_verified": true,
+      "outputs": [
+        {
+          "duration": 11.6,
+          "metadata_method": "ollama",
+          "validation": {
+            "duration": 11.6,
+            "width": 1080,
+            "height": 1920,
+            "frames_decoded": 348,
+            "audio": true,
+            "validated": true,
+            "black_frame_fraction": 0.0,
+            "black_frames_sampled": 12,
+            "audio_peak": 0.7245751619338989,
+            "audio_clipped_fraction": 0.0,
+            "audio_silence_fraction": 0.009208103130755065,
+            "audio_samples_decoded": 1112064,
+            "audio_silence_threshold_db": -60,
+            "framing": {
+              "strategy": "face_tracking",
+              "samples": 24,
+              "detections": 15
+            }
+          },
+          "editorial": "NEEDS_REVIEW"
+        }
+      ]
+    },
+    "browser": {
+      "Dashboard": true,
+      "Create": true,
+      "Jobs": true,
+      "Editor": true,
+      "Library": true,
+      "Publisher": true,
+      "Analytics": true,
+      "Settings": true,
+      "metadata_revision_resets_approval": true,
+      "metadata_history": true,
+      "javascript_errors": [],
+      "headless_system_chrome": true
+    },
+    "gpu": {
+      "name": "NVIDIA RTX 3050 Laptop",
+      "actual_memory_mib": 6144,
+      "historical_4gb_results_preserved": true,
+      "heavy_tasks_per_host": 1,
+      "ollama_layers_offloaded": 36,
+      "ollama_total_layers": 37,
+      "active_local_workers": 1,
+      "new_cuda_asr_image_verified": false
+    },
+    "docker": {
+      "cpu_build": "PASS",
+      "web_build": "PASS",
+      "gpu_build": "BLOCKED_DEPENDENCY_DOWNLOAD",
+      "gpu_build_first_attempt": "SHA256_MISMATCH_REJECTED",
+      "gpu_build_second_attempt": "BOUNDED_TRANSFER_TIMEOUT",
+      "controller": "HEALTHY_CPU_COMPATIBLE",
+      "web": "HEALTHY",
+      "ollama": "HEALTHY",
+      "code_hashes_match": true
+    },
+    "deployed_browser": {
+      "Publisher": {
+        "horizontal_overflow": false
+      },
+      "Analytics": {
+        "horizontal_overflow": false
+      },
+      "Settings": {
+        "horizontal_overflow": false
+      },
+      "javascript_errors": []
+    }
+  }
 }

@@ -3,9 +3,11 @@
 See `verification/REPORT.md` for actual acceptance evidence and remaining blockers.
 Existing Drive OAuth was found in the earlier Factory worktree and reused through
 `factory/legacy_drive_oauth.py`. Original client/token files remain unchanged.
-Current release checks are in `verification/RELEASE_2026-11-18.md`. No authorized
-YouTube channel token is available in this workspace or the inspected legacy
-connection ledger; live publication remains blocked.
+Current acceptance is in `verification/REPORT.md`; the earlier 4 GB baseline
+remains in `verification/RELEASE_2026-11-18.md`. A private YouTube upload and
+separate read-only Analytics consent have now been verified. A second physical
+PC is optional and explicitly excluded from current acceptance.
+See [publishing and Analytics](PUBLISHING_ANALYTICS.md) for setup and limits.
 
 ## PC A
 
@@ -171,11 +173,14 @@ worker. Authenticated stage history and transition events survive restarts.
 
 Publisher reads Drive in 8 MiB ranges directly into YouTube resumable uploads.
 It stores sessions, reconciles final acknowledgments, enforces daily limits and
-unique job/output/channel identity. UNCERTAIN requires YouTube Studio reconciliation;
-it never blindly inserts a duplicate. YouTube scheduling uses timezone-aware UTC.
+unique job/output/channel identity. UNCERTAIN never inserts a duplicate. If a
+video ID exists, Publisher can recheck that exact video with GET-only API calls;
+otherwise inspect YouTube Studio. Scheduling stores UTC and applies daily quotas
+in the configured IANA timezone, with minimum spacing across DST transitions.
 No real YouTube acceptance is claimed from fixture tests.
 Before an upload session exists, Publisher lets the operator edit queued/failed
-titles, descriptions, visibility and future schedules, then requeue. Session or
+visibility and future schedules, then requeue. For versioned drafts, title and
+description edits go through Editor and require fresh approval. Session or
 video identity prevents editing and duplicate reinsertion. Quota/permission
 failures have bounded, sanitized diagnostics. Remote verification checks channel,
 privacy, successful upload status and the exact native schedule.

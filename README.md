@@ -5,9 +5,10 @@ YouTube/Twitch VOD, choose Shorts or Longs and a style, then Generate. The app
 probes the source, analyzes speech in bounded chunks, ranks highlights, renders,
 previews and stores verified outputs on Drive. Original audio is the default.
 
-This release is undergoing acceptance; see [actual verification](verification/REPORT.md).
-YouTube uploads require an authorized channel and remain unverified in this environment.
-Latest improvements and fresh test evidence: [current release checks](verification/RELEASE_2026-11-18.md).
+Acceptance results and remaining limits: [actual verification](verification/REPORT.md).
+One owner-authorized private YouTube upload and separate read-only Analytics
+access have been verified. Public release and live scheduling were not authorized.
+Current evidence and limitations: [verification report](verification/REPORT.md).
 
 ## Start
 
@@ -15,7 +16,7 @@ Latest improvements and fresh test evidence: [current release checks](verificati
 powershell -ExecutionPolicy Bypass -File scripts/setup-factory.ps1
 # PC A
 docker compose --profile controller up -d --build
-# PC B, after its private controller URL/token and Drive mount are configured
+# Optional PC B, after its private controller URL/token and Drive mount are configured
 docker compose --profile worker up -d --build
 ```
 
@@ -42,10 +43,20 @@ A working legacy split Drive client/token integration has been reused and verifi
 - Direct bounded Drive-to-YouTube resumable publishing, native schedules, channel
   limits, durable sessions and uncertain-outcome protection. Private/review default.
 - One-time independent YouTube consent and editable queue metadata before upload.
+- Automatic grounded publishing drafts from local Qwen: three title choices,
+  description, tags/hashtags, category, audio/metadata languages and source credit.
+  Versions, transcript evidence and manual revisions survive local cleanup.
+- Separate technical/editorial checks, review-first approval, bounded waveform
+  and frame QA, duplicate checks and explicit channel auto-approval safeguards.
+- Channel-local calendar quotas and UTC spacing, existing-video reconciliation,
+  representative real-frame thumbnails and visible API/Studio fallback status.
+- Separate read-only Analytics, measured sync progress, real period/lifetime
+  metrics and conservative observations when sample sizes support them.
 
 ## Guides and development
 
 - [Deployment: PC A / PC B, GPU, OAuth, recovery](docs/FACTORY_DEPLOYMENT.md)
+- [Metadata, YouTube and Analytics setup](docs/PUBLISHING_ANALYTICS.md)
 - [Exact Windows PC B setup and physical acceptance limits](docs/PC_B_WINDOWS.md)
 - [Verification and remaining blockers](verification/REPORT.md)
 - [Integration provenance](THIRD_PARTY_FACTORY.md)
@@ -53,8 +64,9 @@ A working legacy split Drive client/token integration has been reused and verifi
 - [Upstream README](docs/UPSTREAM_README.md)
 
 Default Docker processing uses CPU/int8. The optional GPU overlay checks available
-VRAM and unloads sequential model stages; current physical 4 GB smoke results
-and remaining sustained-load limitations are recorded in the release checks.
+VRAM and unloads sequential model stages. This release uses a physical RTX 3050
+6 GB; the prior developer's 4 GB evidence remains historical. A second physical
+PC is optional and excluded from this release's acceptance at the owner's request.
 Narration is optional (`WITH_TTS=1`), requires a separate model download and adds
 GPL phonemizer/eSpeak dependencies; the normal clipping image excludes them.
 
