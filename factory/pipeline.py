@@ -102,7 +102,10 @@ def process(claim):
         srt=(root/'transcript.srt').read_text(encoding='utf-8')
         (root/'transcript.vtt').write_text('WEBVTT\n\n'+re.sub(r'(\d\d:\d\d:\d\d),(\d{3})',r'\1.\2',srt.lstrip('\ufeff')),encoding='utf-8')
         progress.begin('highlights','ANALYZING')
-        if request.intervals:
+        analysis_checkpoint=root/'analysis.json'
+        if analysis_checkpoint.is_file():
+            result=json.loads(analysis_checkpoint.read_text(encoding='utf-8'));candidates=result['candidates']
+        elif request.intervals:
             if any(b>end for a,b in request.intervals):raise ValueError('Manual interval extends beyond the actual source duration')
             candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in sorted(request.intervals)]
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
@@ -112,6 +115,7 @@ def process(claim):
         else:
             result=analyze(transcript,request,end-request.start,progress.tick);candidates=result['candidates']
             if request.mode=='longs':candidates.sort(key=lambda c:c['start_seconds'])
+        if candidates:write_json_atomic(analysis_checkpoint,result,ensure_ascii=True)
         update(result=result);progress.done()
         if not candidates:raise NeedsReview('No suitable spoken highlight. '+('Visual/no-speech source: choose Silent Video with a short selected interval or set manual intervals.' if not transcript['segments'] else 'Inspect the suitability explanation or select a manual interval in Editor.'))
         outputs=[];raw_sources={}
@@ -119,6 +123,9 @@ def process(claim):
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'
             progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}')
+            if clip.is_file():
+                try:media.validate_output(clip,duration)
+                except Exception:clip.unlink()
             if not clip.is_file():media.download(source,clip,request.start+candidate['start_seconds'],request.start+candidate['end_seconds'],resolution,False,progress.tick)
             raw_sources[output.name]=clip;progress.done()
             def render_stage(key):

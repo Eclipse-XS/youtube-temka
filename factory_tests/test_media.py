@@ -132,3 +132,17 @@ def test_smart_camera_path_is_accepted_by_real_ffmpeg(fixture,monkeypatch):
 def test_corrupted_output_cannot_be_accepted(tmp_path):
     broken=tmp_path/'broken.mp4';broken.write_bytes(b'not an MP4 container')
     with pytest.raises(Exception):media.validate_output(broken,5)
+
+
+def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatch):
+    from factory import pipeline
+    _,transcript,_=fixture
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,minimum=5,maximum=6,end=6,preset='crop')
+    job=store.create(req.model_dump());root=config.SCRATCH/job['id'];root.mkdir()
+    (root/'transcript.json').write_text(json.dumps(transcript),encoding='utf-8')
+    (root/'analysis.json').write_text(json.dumps({'analysis':'ollama','candidates':[{'start_seconds':0,'end_seconds':5,'title':'Frozen selection'}]}),encoding='utf-8')
+    monkeypatch.setattr(pipeline,'analyze',lambda *_:(_ for _ in ()).throw(AssertionError('A retry must not rerank existing clip identities')))
+    pipeline.process(store.claim('resumed-worker'))
+    result=store.get(job['id'])
+    assert result['state']=='READY',result['error']
+    assert result['result']['outputs'][0]['title']=='Frozen selection'
