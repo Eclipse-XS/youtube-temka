@@ -1,0 +1,112 @@
+
+> openshorts-app@0.0.0 build
+> vite build
+
+vite v6.4.6 building for production...
+transforming...
+(!) %VITE_OPENPANEL_API_URL% is not defined in env variables found in /index.html. Is the variable mistyped?
+(!) %VITE_OPENPANEL_CLIENT_ID% is not defined in env variables found in /index.html. Is the variable mistyped?
+✓ 1631 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/sitemap.xml                                      12.56 kB │ gzip:   0.91 kB
+dist/llms.txt                                         19.76 kB │ gzip:   6.36 kB
+dist/404.html                                         36.63 kB │ gzip:   9.05 kB
+dist/legal-notice.html                                38.90 kB │ gzip:   9.87 kB
+dist/aviso-legal.html                                 39.25 kB │ gzip:  10.08 kB
+dist/refunds.html                                     39.80 kB │ gzip:  10.19 kB
+dist/reembolsos.html                                  40.15 kB │ gzip:  10.44 kB
+dist/report-content.html                              41.07 kB │ gzip:  10.71 kB
+dist/tools.html                                       41.48 kB │ gzip:  10.42 kB
+dist/reportar-contenido.html                          41.64 kB │ gzip:  11.02 kB
+dist/use-cases.html                                   41.97 kB │ gzip:  10.39 kB
+dist/how-to.html                                      43.17 kB │ gzip:  10.51 kB
+dist/youtube-to-shorts-converter.html                 43.50 kB │ gzip:  11.41 kB
+dist/platforms.html                                   43.87 kB │ gzip:  10.91 kB
+dist/open-source-ai-video-generator.html              44.10 kB │ gzip:  11.49 kB
+dist/open-source-video-clipper.html                   44.19 kB │ gzip:  11.75 kB
+dist/how-openshorts-works.html                        44.22 kB │ gzip:  11.55 kB
+dist/video-aspect-ratio-converter.html                44.54 kB │ gzip:  11.44 kB
+dist/vizard-ai-video-to-text.html                     45.00 kB │ gzip:  11.56 kB
+dist/automate-shorts-api.html                         45.56 kB │ gzip:  12.19 kB
+dist/youtube-tag-generator.html                       45.97 kB │ gzip:  11.87 kB
+dist/alternativas.html                                46.03 kB │ gzip:  11.85 kB
+dist/youtube-automation.html                          46.44 kB │ gzip:  12.27 kB
+dist/alternatives/arcads.html                         46.75 kB │ gzip:  11.56 kB
+dist/n8n-youtube-shorts-automation.html               46.83 kB │ gzip:  12.58 kB
+dist/factory.html                                     47.26 kB │ gzip:   9.83 kB
+dist/auto-clip.html                                   47.49 kB │ gzip:  12.32 kB
+dist/submagic-reviews.html                            47.83 kB │ gzip:  12.29 kB
+dist/opus-ai.html                                     48.14 kB │ gzip:  12.47 kB
+dist/free-ai-clip-generator.html                      50.27 kB │ gzip:  13.31 kB
+dist/vizard-ai.html                                   50.33 kB │ gzip:  12.82 kB
+dist/mcp.html                                         50.41 kB │ gzip:  13.66 kB
+dist/free-ai-clipping-tools-compared.html             50.87 kB │ gzip:  12.46 kB
+dist/opusclip-vs-vizard.html                          52.02 kB │ gzip:  13.30 kB
+dist/alternatives/submagic.html                       52.17 kB │ gzip:  13.00 kB
+dist/alternatives/sendshort.html                      52.60 kB │ gzip:  13.10 kB
+dist/tools/tiktok-transcript-generator.html           52.63 kB │ gzip:  13.27 kB
+dist/alternatives/klap.html                           52.87 kB │ gzip:  13.23 kB
+dist/alternatives.html                                52.92 kB │ gzip:  13.40 kB
+dist/pricing.html                                     53.18 kB │ gzip:  12.23 kB
+dist/privacy.html                                     53.65 kB │ gzip:  15.67 kB
+dist/gta-5-clips.html                                 53.65 kB │ gzip:  14.85 kB
+dist/how-to/youtube-shorts-aspect-ratio.html          54.91 kB │ gzip:  14.12 kB
+dist/how-to/make-youtube-shorts.html                  55.09 kB │ gzip:  13.96 kB
+dist/terms.html                                       55.18 kB │ gzip:  16.21 kB
+dist/how-to/best-time-to-post-youtube-shorts.html     55.33 kB │ gzip:  14.09 kB
+dist/privacidad.html                                  55.58 kB │ gzip:  16.37 kB
+dist/platforms/kick.html                              55.68 kB │ gzip:  14.29 kB
+dist/how-to/make-a-reel-on-facebook.html              55.73 kB │ gzip:  14.34 kB
+dist/platforms/tiktok.html                            55.98 kB │ gzip:  14.41 kB
+dist/terminos.html                                    56.86 kB │ gzip:  16.73 kB
+dist/opus-clip-pricing.html                           57.07 kB │ gzip:  14.42 kB
+dist/platforms/instagram-reels.html                   57.35 kB │ gzip:  14.62 kB
+dist/alternatives/vizard.html                         57.75 kB │ gzip:  14.56 kB
+dist/alternatives/2short.html                         58.43 kB │ gzip:  14.74 kB
+dist/how-to/instagram-reel-dimensions.html            58.59 kB │ gzip:  15.53 kB
+dist/how-to/clip-a-youtube-video.html                 58.73 kB │ gzip:  15.21 kB
+dist/alternatives/vidyo-ai.html                       58.89 kB │ gzip:  14.90 kB
+dist/alternatives/getmunch.html                       59.03 kB │ gzip:  14.71 kB
+dist/podcast-to-shorts.html                           59.79 kB │ gzip:  15.94 kB
+dist/use-cases/sermons.html                           60.29 kB │ gzip:  15.70 kB
+dist/auto-reframe.html                                60.77 kB │ gzip:  15.55 kB
+dist/platforms/youtube-shorts.html                    60.80 kB │ gzip:  15.66 kB
+dist/youtube-transcript-generator.html                61.13 kB │ gzip:  15.42 kB
+dist/alternatives/opus-clip.html                      61.86 kB │ gzip:  15.73 kB
+dist/platforms/youtube.html                           63.01 kB │ gzip:  16.37 kB
+dist/platforms/twitch.html                            63.24 kB │ gzip:  16.34 kB
+dist/alternatives/choppity.html                       63.40 kB │ gzip:  16.00 kB
+dist/self-hosted-ai-clip-maker.html                   63.67 kB │ gzip:  17.00 kB
+dist/ai-ugc-video-generator.html                      65.11 kB │ gzip:  16.60 kB
+dist/wow-forever-clips.html                           66.08 kB │ gzip:  17.31 kB
+dist/tools/ai-thumbnail-maker.html                    66.75 kB │ gzip:  17.36 kB
+dist/index.html                                       69.87 kB │ gzip:  15.80 kB
+dist/gta-6-clips.html                                 70.14 kB │ gzip:  18.14 kB
+dist/llms-full.txt                                   141.73 kB │ gzip:  37.85 kB
+dist/assets/factory-uLYvHx02.css                       4.99 kB │ gzip:   1.72 kB
+dist/assets/main-CqfDJweN.css                         59.79 kB │ gzip:  11.87 kB
+dist/assets/__vite-browser-external-BIHI7g3E.js        0.03 kB │ gzip:   0.05 kB
+dist/assets/rotate-ccw-DSyQjoXd.js                     0.65 kB │ gzip:   0.34 kB
+dist/assets/common-DVi_w4Cs.js                         1.65 kB │ gzip:   0.88 kB
+dist/assets/settings-DJduJe5v.js                       2.09 kB │ gzip:   0.72 kB
+dist/assets/tool-metadata-BfyqX83-.js                  3.26 kB │ gzip:   1.49 kB
+dist/assets/tool-paste-link-DOs7htW9.js                3.83 kB │ gzip:   1.72 kB
+dist/assets/tool-transcript-D1vnWMXE.js                4.25 kB │ gzip:   2.08 kB
+dist/assets/OAuthConsent-B5z0xCvM.js                   4.52 kB │ gzip:   2.00 kB
+dist/assets/Legal-j1INmrad.js                          4.95 kB │ gzip:   2.11 kB
+dist/assets/factory-CbzhzgcN.js                       42.16 kB │ gzip:  12.67 kB
+dist/assets/tool-vertical-IW9ObPnI.js                 42.87 kB │ gzip:  11.94 kB
+dist/assets/upload-C7cbvXdA.js                       145.79 kB │ gzip:  46.93 kB
+dist/assets/main-Dv6aXoR6.js                         173.58 kB │ gzip:  48.63 kB
+dist/assets/mediabunny-flac-encoder-Xo0HVo6V.js      323.01 kB │ gzip:  83.16 kB
+dist/assets/mediabunny-mp3-encoder-DZ87neyx.js       474.26 kB │ gzip: 119.48 kB
+dist/assets/index-C4qQTtqd.js                        694.39 kB │ gzip: 177.67 kB
+dist/assets/App-BavZApsL.js                        1,008.29 kB │ gzip: 296.55 kB
+dist/assets/mediabunny-aac-encoder-DoBYhOkZ.js     1,132.54 kB │ gzip: 288.43 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 15.87s
