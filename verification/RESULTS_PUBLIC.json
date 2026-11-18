@@ -167,5 +167,115 @@
   },
   "youtube": "UNVERIFIED_USER_CHOSE_NO_TEST",
   "physical_second_pc": "UNVERIFIED",
-  "physical_4gb_gpu": "UNVERIFIED"
+  "physical_4gb_gpu": "UNVERIFIED",
+  "current_release": {
+    "base_commit": "c2ef4ce1104ea1ec58a28fe2be64c001c31d1fbd",
+    "implementation_commit": "50f061f5a2fd204db4fc9e13a2042b8bbd951830",
+    "tests": {
+      "windows_factory_passed": 80,
+      "linux_factory_and_retained_passed": 237,
+      "frontend_build": "PASS",
+      "compose_cpu_gpu": "PASS"
+    },
+    "physical_gpu": {
+      "total_mib": 4096,
+      "sampled_peak_mib": 1481,
+      "asr_device": "cuda",
+      "asr_compute": "int8_float16",
+      "asr_model": "small",
+      "sample_counts": [
+        143,
+        74
+      ],
+      "uninterrupted_multi_job_soak": "UNVERIFIED"
+    },
+    "drive_spoken_short": {
+      "scenario": "spoken_short_drive",
+      "state": "READY",
+      "error": null,
+      "seconds": 138.08,
+      "cloud_verified": true,
+      "cleanup": true,
+      "analysis": "ollama",
+      "outputs": [
+        {
+          "validation": {
+            "duration": 20.4,
+            "width": 1080,
+            "height": 1920,
+            "frames_decoded": 612,
+            "audio": true,
+            "validated": true,
+            "framing": {
+              "strategy": "crop"
+            }
+          },
+          "drive_verified": true,
+          "editable_source_verified": true
+        }
+      ]
+    },
+    "gpu_repeat_local_export": {
+      "scenario": "repeated_spoken_short",
+      "state": "READY",
+      "error": null,
+      "seconds": 61.43,
+      "cloud_verified": false,
+      "cleanup": false,
+      "analysis": "ollama",
+      "outputs": [
+        {
+          "validation": {
+            "duration": 22.466667,
+            "width": 1080,
+            "height": 1920,
+            "frames_decoded": 674,
+            "audio": true,
+            "validated": true,
+            "framing": {
+              "strategy": "crop"
+            }
+          },
+          "drive_verified": false,
+          "editable_source_verified": false
+        }
+      ],
+      "inference": [
+        {
+          "device": "cuda",
+          "compute_type": "int8_float16",
+          "model": "small"
+        }
+      ]
+    },
+    "isolated_remote_reedit": {
+      "state": "READY",
+      "error": null,
+      "worker": "isolated-worker-check",
+      "seconds": 38.17,
+      "cloud_verified": true,
+      "parent_manifest": "imported from actual previously verified Drive job, not a new URL ingestion",
+      "validation": {
+        "duration": 5.0,
+        "width": 1080,
+        "height": 1920,
+        "frames_decoded": 150,
+        "audio": true,
+        "validated": true,
+        "framing": {
+          "strategy": "gameplay"
+        }
+      },
+      "editable_source_verified": true,
+      "drive_preview_status": 206,
+      "preview_bytes": 1024,
+      "approval": true
+    },
+    "youtube": "BLOCKED_NO_AUTHORIZED_CHANNEL_TOKEN",
+    "physical_second_pc": "UNVERIFIED",
+    "real_multi_hour_vod": "UNVERIFIED",
+    "real_50_minute_vod": "IN_PROGRESS_NOT_A_PASS",
+    "multi_source_editorial_benchmark": "UNVERIFIED",
+    "delivery_pr": "https://github.com/denusbtw/youtube-temka/pull/1"
+  }
 }
