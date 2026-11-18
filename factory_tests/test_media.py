@@ -168,3 +168,35 @@ def test_pipeline_renders_synchronized_background_and_music_without_local_librar
     assert complete['state']=='READY',complete['error']
     report=complete['result']['outputs'][0]['validation']
     assert report['audio'] and (report['width'],report['height'])==(1080,1920)
+
+
+def test_bounded_separate_webm_streams_produce_exact_mp4_destination(fixture,monkeypatch):
+    from contextlib import nullcontext
+    from functools import partial
+    from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler
+    import threading
+    import yt_dlp
+    import ssrf_guard
+    from factory import range_download
+    source,_,folder=fixture
+    video=folder/'video.webm';audio=folder/'audio.webm'
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-an','-c:v','libvpx-vp9','-deadline','realtime','-cpu-used','8',str(video)])
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-vn','-c:a','libopus',str(audio)])
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(folder)))
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    base=f'http://127.0.0.1:{server.server_port}'
+    metadata={'id':'fixture','title':'Authorized separate streams','duration':6,'formats':[
+        {'format_id':'v','url':base+'/video.webm','ext':'webm','vcodec':'vp9','acodec':'none','height':360},
+        {'format_id':'a','url':base+'/audio.webm','ext':'webm','vcodec':'none','acodec':'opus'}]}
+    monkeypatch.setattr(yt_dlp.YoutubeDL,'extract_info',lambda *a,**kw:metadata)
+    monkeypatch.setattr(range_download,'validate_url',lambda _:None)
+    monkeypatch.setattr(ssrf_guard,'guarded',nullcontext)
+    monkeypatch.setattr(ssrf_guard,'assert_public_urls',lambda _:None)
+    destination=folder/'bounded.mp4'
+    monkeypatch.setattr(range_download.sys,'argv',['range_download','https://www.youtube.com/watch?v=fixture',str(destination),'0','5','bv*+ba/b',media.ffmpeg()])
+    try:range_download.main()
+    finally:server.shutdown();server.server_close();thread.join(timeout=2)
+    assert destination.is_file() and not destination.with_suffix('.mp4.mkv').exists()
+    media.validate_output(destination,5)

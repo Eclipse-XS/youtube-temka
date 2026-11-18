@@ -104,6 +104,8 @@ def test_semantically_invalid_llm_intervals_retry_then_fall_back(monkeypatch):
     import httpx
     calls=[]
     def respond(*_,**__):
+        if 'prompt' not in __['json']:
+            return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'done':True})
         calls.append(1)
         invalid={'start_seconds':0,'end_seconds':5,'score':90,'title':'Invalid too-short interval','language':'en','reason':'fixture','confidence':.9}
         return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'response':json.dumps({'candidates':[invalid]})})

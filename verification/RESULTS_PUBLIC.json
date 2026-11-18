@@ -172,8 +172,8 @@
     "base_commit": "c2ef4ce1104ea1ec58a28fe2be64c001c31d1fbd",
     "implementation_commit": "50f061f5a2fd204db4fc9e13a2042b8bbd951830",
     "tests": {
-      "windows_factory_passed": 82,
-      "linux_factory_and_retained_passed": 239,
+      "windows_factory_passed": 95,
+      "linux_factory_and_retained_passed": 252,
       "frontend_build": "PASS",
       "compose_cpu_gpu": "PASS"
     },
@@ -276,6 +276,30 @@
     "real_multi_hour_vod": "UNVERIFIED",
     "real_50_minute_vod": "IN_PROGRESS_NOT_A_PASS",
     "multi_source_editorial_benchmark": "UNVERIFIED",
-    "delivery_pr": "https://github.com/denusbtw/youtube-temka/pull/1"
+    "delivery_pr": "https://github.com/denusbtw/youtube-temka/pull/1",
+    "ollama_cuda12_probe": [
+      {
+        "layers": 24,
+        "http_status": 200,
+        "nonempty_response": true,
+        "eval_count": 116,
+        "eval_duration_ns": 6849616000,
+        "total_duration_ns": 16858633154,
+        "tokens_per_second": 16.94,
+        "sampled_peak_gpu_mib": 1465,
+        "samples": 62
+      },
+      {
+        "layers": 36,
+        "http_status": 200,
+        "nonempty_response": true,
+        "eval_count": 106,
+        "eval_duration_ns": 1786675000,
+        "total_duration_ns": 6743585140,
+        "tokens_per_second": 59.33,
+        "sampled_peak_gpu_mib": 2047,
+        "samples": 20
+      }
+    ]
   }
 }

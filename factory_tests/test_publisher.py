@@ -242,3 +242,32 @@ def test_quota_diagnostic_is_actionable_and_never_exposes_raw_response():
     error=publisher.upload_error(response,'YouTube upload')
     assert 'quota is exhausted' in str(error) and 'HTTP 403' in str(error)
     assert 'private session' not in str(error)
+
+
+def test_explicit_source_credit_survives_queue_creation_and_edits(ready):
+    jid,_,_=ready
+    credit='Credit: NASA. Informational software verification; no endorsement.'
+    with store.connect() as db:
+        request=json.loads(db.execute('SELECT request FROM jobs WHERE id=?',(jid,)).fetchone()['request'])
+        request['source_attribution']=credit
+        db.execute('UPDATE jobs SET request=? WHERE id=?',(json.dumps(request),jid))
+    with pytest.raises(ValueError,match='UTF-8 bytes'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','x'*4990)
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','Description about the source.')
+    description=publisher.history()[0]['metadata']['snippet']['description']
+    assert description.endswith(credit) and len(description)<=5000
+    publisher.edit(pid,'Edited','Changed description')
+    assert publisher.history()[0]['metadata']['snippet']['description'].endswith(credit)
+    publisher.edit(pid,'Edited',credit)
+    assert publisher.history()[0]['metadata']['snippet']['description']==credit
+
+
+def test_multilingual_metadata_enforces_youtube_byte_limit_before_upload(ready):
+    jid,_,_=ready
+    with pytest.raises(ValueError,match='UTF-8 bytes'):
+        publisher.enqueue(jid,0,'channel-fixture','Український заголовок','Ї'*3000)
+    with pytest.raises(ValueError,match='without'):
+        publisher.enqueue(jid,0,'channel-fixture','<Invalid title>','')
+    with pytest.raises(ValueError,match='HTML'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','<b>Invalid description</b>')
+    assert publisher.history()==[]

@@ -99,16 +99,23 @@ docker compose -f docker-compose.yml -f compose.gpu.yml --profile worker up -d -
 
 The overlay installs pinned CUDA libraries and makes the GPU available to
 Whisper and Ollama. ASR chooses CUDA only with at least 2500 MiB free, otherwise
-CPU/int8. Each chunk exits its subprocess before LLM analysis. Ollama offload is
-bounded to 24 layers using measured free memory with a 1000 MiB reserve, context
-4096, one parallel request, `keep_alive=0`; a GPU server error retries on CPU.
+CPU/int8. Each chunk exits its subprocess before LLM analysis. For the measured
+`qwen2.5:3b` model, Ollama uses 36 layers only with at least 3500 MiB free;
+unknown models retain the 24-layer cap and a 1000 MiB reserve. Context is 4096
+with one parallel request. Ranking reuses one model/GPU plan across its windows,
+then explicitly unloads it. A 60-second TTL also bounds retention after a crash.
+A GPU server error or timeout retries once on CPU; later windows retain CPU
+after that fallback. The GPU overlay selects the bundled `cuda_v12` backend;
+`OLLAMA_LLM_LIBRARY` can override it for separately tested hardware.
 This is a conservative policy, not a guarantee for every competing GPU workload.
 The current machine has RTX 3050 **4 GB**. Docker CUDA initialization, small ASR
 with `int8_float16`, sequential local Qwen inference and rendering have been
 exercised on it. See the release report for sampled peaks and the exact limits
 of this acceptance; a short smoke test does not establish sustained multi-hour
 reliability or compatibility with arbitrary competing GPU workloads.
-NVENC is optional through `FFMPEG_ENCODER=auto`; x264 is the default.
+NVENC is optional through `FFMPEG_ENCODER=auto`; x264 is the default. A real
+two-second H.264 NVENC encode passed on this card; sustained NVENC quality and
+performance are not inferred from that smoke test.
 
 ## Optional narration
 
@@ -172,6 +179,9 @@ titles, descriptions, visibility and future schedules, then requeue. Session or
 video identity prevents editing and duplicate reinsertion. Quota/permission
 failures have bounded, sanitized diagnostics. Remote verification checks channel,
 privacy, successful upload status and the exact native schedule.
+Explicit source credits survive queue creation/editing; descriptions are checked
+against YouTube's 5000-byte UTF-8 limit before upload. Invalid markup or oversized
+multilingual descriptions receive a preflight error rather than silent truncation.
 
 ## Development checks
 

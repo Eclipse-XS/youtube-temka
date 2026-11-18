@@ -191,6 +191,7 @@ function PublisherPanel({ outputs, settings, act }) {
                 (o) => o.job.id + ":" + o.index === e.target.value,
               );
               setTitle((o?.title || "").slice(0, 100));
+              setDescription(o?.job.request.source_attribution || "");
             }}
           >
             <option value="">Виберіть відео</option>
@@ -217,6 +218,7 @@ function PublisherPanel({ outputs, settings, act }) {
             onChange={(e) => setDescription(e.target.value)}
           />
         </label>
+        <p className="muted">Зазначене авторство джерела зберігається в описі автоматично.</p>
         <div className="grid">
           <label>
             Видимість
@@ -673,6 +675,7 @@ function App() {
                     ? "Heuristic fallback: локальний LLM недоступний або повернув некоректні дані. Потрібен редакторський перегляд."
                     : chosen.result.analysis}
                 </p>
+                {chosen.result.selection_summary && <p className="muted">{chosen.result.selection_summary}</p>}
                 {chosen.error && <p className="error">{chosen.error}</p>}
                 <div className="outputs">
                   {(chosen.result.outputs || []).map((o, i) => (

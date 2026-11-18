@@ -45,7 +45,7 @@ def heuristics(transcript, request):
 
 def analyze(transcript, request, duration, progress=lambda *_:None):
     import json
-    from .inference import generate
+    from .inference import generate,model_session
     model = request.llm_model or config.MODEL
     candidates = []
     llm_candidates=[]
@@ -64,7 +64,7 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
     if window:
         windows.append(window)
     try:
-        with httpx.Client(timeout=180, trust_env=False) as client:
+        with httpx.Client(timeout=180, trust_env=False) as client, model_session(client,config.OLLAMA+'/api/generate',model) as session:
             for i, window in enumerate(windows):
                 choices = [c for c in fallback if window[0]['start'] <= c.start_seconds < c.end_seconds <= window[-1]['end']]
                 if len(choices) > 12:
@@ -88,7 +88,7 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
                         'model':model,'prompt':json.dumps(prompt,ensure_ascii=False),'format':schema,
                         'stream':False,'keep_alive':0,
                         'options':{'num_ctx':4096,'temperature':0,'num_predict':800,'num_gpu':0,'num_thread':2,'num_batch':128},
-                    })
+                    },session=session)
                     response.raise_for_status()
                     try:
                         ranking = Ranking.model_validate_json(response.json()['response'])
@@ -110,7 +110,9 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
                         break
                     except (ValueError,KeyError):
                         if attempt == 1:
-                            raise
+                            failed=True
+                            fallback_reason=fallback_reason or 'invalid_llm_window'
+                            break
                         prompt['validation_feedback'] = 'Previous output was invalid. Use exactly one supplied start/end pair and the required JSON fields.'
                 progress(i+1,len(windows))
     except (httpx.HTTPError,ValueError,KeyError):

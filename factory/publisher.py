@@ -86,11 +86,28 @@ def publication_status(privacy,publish_at):
     return status
 
 
+def credited_description(description,attribution):
+    """Preserve the operator's explicit credit, including when metadata is edited."""
+    credit=(attribution or '').strip()
+    if credit and credit not in description:
+        description=(description.rstrip()+'\n\n' if description.strip() else '')+credit
+    if len(description.encode('utf-8'))>5000:
+        raise ValueError('YouTube descriptions, including source credit, are limited to 5000 UTF-8 bytes. Shorten the description.')
+    if '<' in description or '>' in description:
+        raise ValueError('YouTube descriptions cannot contain < or >. Remove HTML markup.')
+    return description
+
+
+def valid_title(title):
+    if not title.strip() or len(title)>100 or '<' in title or '>' in title:
+        raise ValueError('Provide a nonempty title up to 100 characters without < or >')
+    return title
+
+
 def edit(pid,title,description,privacy='private',publish_at=None):
     """Edit only before remote effects; an expired schedule can be corrected safely."""
     status=publication_status(privacy,publish_at)
-    if not title.strip() or len(title)>100 or len(description)>5000:
-        raise ValueError('Provide a title up to 100 characters and a description up to 5000')
+    valid_title(title)
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         row=db.execute('SELECT * FROM publications WHERE id=?',(pid,)).fetchone()
@@ -100,7 +117,9 @@ def edit(pid,title,description,privacy='private',publish_at=None):
         if not policy or ((privacy=='public' or publish_at) and not policy['public_allowed']):
             raise ValueError('Public publishing has not been explicitly enabled for this channel')
         metadata=json.loads(row['metadata'])
-        metadata['snippet'].update(title=title,description=description)
+        job=db.execute('SELECT request FROM jobs WHERE id=?',(row['job'],)).fetchone()
+        attribution=json.loads(job['request']).get('source_attribution','') if job else ''
+        metadata['snippet'].update(title=title,description=credited_description(description,attribution))
         metadata['status']=status
         metadata['automatic']=False
         db.execute("UPDATE publications SET metadata=?,state='QUEUED',error=NULL WHERE id=?",(json.dumps(metadata,ensure_ascii=False),pid))
@@ -119,7 +138,7 @@ def enqueue(jid,index,channel,title,description,privacy='private',publish_at=Non
     if not output.get('approved') and not automatic:
         raise ValueError('Approve the output in Editor before publication')
     status=publication_status(privacy,publish_at)
-    snippet={'title':title[:100],'description':description[:5000],'categoryId':'22'}
+    snippet={'title':valid_title(title[:100]),'description':credited_description(description,job['request'].get('source_attribution','')),'categoryId':'22'}
     language=job['result'].get('language')
     if language:
         snippet['defaultLanguage']=language
@@ -208,6 +227,7 @@ def upload_error(response,operation):
         'insufficientPermissions':'Reauthorize this channel with youtube.upload and youtube.readonly scopes',
         'forbidden':'The API project or channel does not permit this upload; check authorization',
         'invalidTitle':'Correct the title before retrying',
+        'invalidDescription':'Correct the description before retrying; maximum 5000 UTF-8 bytes and no HTML angle brackets',
         'invalidPublishAt':'Correct the future publication time before retrying',
     }
     try:reason=response.json()['error']['errors'][0]['reason']
