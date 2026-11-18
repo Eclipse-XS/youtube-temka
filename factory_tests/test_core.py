@@ -117,7 +117,7 @@ def test_semantically_invalid_llm_intervals_retry_then_fall_back(monkeypatch):
 
 
 def test_validation_rejects_unsafe_ranges_and_missing_rights():
-    for kw in ({'end':0},{'start':100,'end':50},{'end':7200},{'intervals':[(0,float('nan'))]}):
+    for kw in ({'end':0},{'start':100,'end':50},{'end':86401},{'intervals':[(0,float('nan'))]}):
         with pytest.raises(ValueError):
             request(**kw)
     with pytest.raises(ValueError):

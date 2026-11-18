@@ -1,7 +1,14 @@
 import os
+import sys
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+
+# OpenShorts prints Unicode encoder/ASR diagnostics; Windows consoles may default
+# to cp1251 even when all media/transcript files use UTF-8.
+if os.name=='nt':
+    for stream in (sys.stdout,sys.stderr):
+        if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8',errors='replace')
 
 load_dotenv()
 

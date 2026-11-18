@@ -6,11 +6,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY requirements-factory.lock ./
 RUN pip install --no-cache-dir -r requirements-factory.lock
+COPY requirements-tts.lock ./
+ARG WITH_TTS=0
+RUN if [ "$WITH_TTS" = "1" ]; then pip install --no-cache-dir -r requirements-tts.lock; fi
 ARG GPU=0
 RUN if [ "$GPU" = "1" ]; then pip install --no-cache-dir nvidia-cublas-cu12==12.9.3.13 nvidia-cudnn-cu12==9.28.0.42; fi
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
 # Explicit allowlist: commercial cloud/ and OAuth files never enter this image.
 COPY factory ./factory
+COPY docs/licenses ./docs/licenses
 COPY subtitles.py transcribe_backends.py ffmpeg_utils.py gpu_decode.py jsonfile.py security_utils.py ssrf_guard.py LICENSE NOTICE ./
 RUN useradd --uid 10001 --create-home factory && mkdir -p /data /scratch /home/factory/.cache && chown factory /data /scratch /home/factory/.cache
 USER factory

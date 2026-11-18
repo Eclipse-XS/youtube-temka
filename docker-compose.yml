@@ -10,6 +10,7 @@ x-worker-environment: &worker-environment
   ASR_HOST_SLOTS: '1'
   OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
   OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+  OLLAMA_GPU_LAYERS: ${OLLAMA_GPU_LAYERS:-0}
   DRIVE_TOKEN_FILE: ${DRIVE_TOKEN_FILE:-/run/secrets/drive-token.json}
   DRIVE_OAUTH_CLIENT_FILE: ${DRIVE_OAUTH_CLIENT_FILE:-}
   DRIVE_OAUTH_TOKEN_FILE: ${DRIVE_OAUTH_TOKEN_FILE:-}
@@ -39,6 +40,8 @@ services:
     build:
       context: .
       dockerfile: deploy/factory.Dockerfile
+      args:
+        WITH_TTS: ${WITH_TTS:-0}
     environment:
       <<: *worker-environment
       WORKER_ID: ${CONTROLLER_WORKER_ID:-worker-a}
@@ -73,6 +76,8 @@ services:
     build:
       context: .
       dockerfile: deploy/factory.Dockerfile
+      args:
+        WITH_TTS: ${WITH_TTS:-0}
     environment:
       <<: *worker-environment
       CONTROLLER_URL: ${CONTROLLER_URL:-}

@@ -11,6 +11,10 @@ import {
   Scissors,
 } from "lucide-react";
 import "./factory.css";
+import CreatePage from "./factory/CreatePage.jsx";
+import StageProgress from "./factory/StageProgress.jsx";
+import VoiceSettings from "./factory/VoiceSettings.jsx";
+import OutputEditor from "./factory/OutputEditor.jsx";
 
 async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
@@ -20,9 +24,14 @@ async function api(path, options = {}) {
         ? {}
         : { "Content-Type": "application/json" },
   });
-  const body = response.headers.get('content-type')?.includes('application/json')
+  const body = response.headers
+    .get("content-type")
+    ?.includes("application/json")
     ? await response.json()
-    : {detail:'Контролер тимчасово недоступний. Перевірте стан контейнерів і повторіть дію.'};
+    : {
+        detail:
+          "Контролер тимчасово недоступний. Перевірте стан контейнерів і повторіть дію.",
+      };
   if (!response.ok)
     throw new Error(
       typeof body.detail === "string"
@@ -42,24 +51,6 @@ const pages = [
   ["Publisher", Upload],
   ["Settings", Settings],
 ];
-const defaults = {
-  source: "",
-  rights_confirmed: false,
-  mode: "shorts",
-  resolution: 720,
-  start: 0,
-  end: 1800,
-  count: 5,
-  minimum: 20,
-  maximum: 60,
-  preset: "blur",
-  background: null,
-  language: null,
-  captions: true,
-  save_drive: true,
-  intervals: [],
-};
-
 function PublisherPanel({ outputs, settings, act }) {
   const [data, setData] = useState({ channels: [], publications: [] }),
     [channel, setChannel] = useState(""),
@@ -366,10 +357,28 @@ function ModelConfiguration({ settings, act }) {
   );
 }
 
-function JobEvents({job}){
-  const [open,setOpen]=useState(false),[events,setEvents]=useState([]);
-  useEffect(()=>{if(open)api('/jobs/'+job.id+'/events').then(setEvents).catch(()=>{})},[open,job.id,job.state]);
-  return <details onToggle={e=>setOpen(e.currentTarget.open)}><summary>Етапи та помилки</summary>{events.map((event,i)=><p key={i}><small>{new Date(event.at*1000).toLocaleString()} · {event.state}</small>{event.message}</p>)}</details>
+function JobEvents({ job }) {
+  const [open, setOpen] = useState(false),
+    [events, setEvents] = useState([]);
+  useEffect(() => {
+    if (open)
+      api("/jobs/" + job.id + "/events")
+        .then(setEvents)
+        .catch(() => {});
+  }, [open, job.id, job.state]);
+  return (
+    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>Етапи та помилки</summary>
+      {events.map((event, i) => (
+        <p key={i}>
+          <small>
+            {new Date(event.at * 1000).toLocaleString()} · {event.state}
+          </small>
+          {event.message}
+        </p>
+      ))}
+    </details>
+  );
 }
 
 function App() {
@@ -380,14 +389,11 @@ function App() {
   const [auth, setAuth] = useState(false),
     [token, setToken] = useState(""),
     [error, setError] = useState(""),
-    [connectionError,setConnectionError]=useState(''),
+    [connectionError, setConnectionError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
-  const [form, setForm] = useState(defaults),
-    [metadata, setMetadata] = useState(null),
-    [selected, setSelected] = useState(null),
+  const [selected, setSelected] = useState(null),
     [edits, setEdits] = useState({});
-  const [longIntervals, setLongIntervals] = useState("");
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryMode, setLibraryMode] = useState("all");
   const act = async (fn) => {
@@ -412,7 +418,7 @@ function App() {
     setSettings(s);
     setBackgrounds(b);
     setAuth(true);
-    setConnectionError('');
+    setConnectionError("");
   };
   useEffect(() => {
     refresh().catch(() => setAuth(false));
@@ -425,7 +431,6 @@ function App() {
     );
     return () => clearInterval(interval);
   }, [auth]);
-  const field = (name, value) => setForm((f) => ({ ...f, [name]: value }));
   const active = jobs.filter(
     (j) => !["READY", "FAILED", "BLOCKED", "CANCELLED"].includes(j.state),
   );
@@ -434,24 +439,6 @@ function App() {
   const outputs = jobs.flatMap((j) =>
     (j.result.outputs || []).map((o, i) => ({ ...o, job: j, index: i })),
   );
-  const upload = async (file, background = false) => {
-    if (!form.rights_confirmed)
-      throw new Error(
-        "Підтвердьте права на джерело та фон перед завантаженням.",
-      );
-    const body = new FormData();
-    body.append("file", file);
-    body.append("rights_confirmed", "true");
-    body.append("background", String(background));
-    const result = await api("/uploads", { method: "POST", body });
-    if (background) {
-      field("background", result.name);
-      await refresh();
-    } else {
-      field("source", result.source);
-      setMetadata(result.metadata);
-    }
-  };
   const jobRow = (j) => (
     <article className="job" key={j.id}>
       <div>
@@ -483,7 +470,7 @@ function App() {
         )}
       </div>
       <div className="actions">
-        <JobEvents job={j}/>
+        <JobEvents job={j} />
         <button
           onClick={() => {
             setSelected(j.id);
@@ -518,6 +505,7 @@ function App() {
           )
         )}
       </div>
+      <StageProgress job={j} />
     </article>
   );
   if (!auth)
@@ -591,9 +579,9 @@ function App() {
           </div>
           <span className="connection">Контролер підключений</span>
         </header>
-        {(error||connectionError) && (
+        {(error || connectionError) && (
           <div role="alert" className="banner error">
-            {error||connectionError}
+            {error || connectionError}
           </div>
         )}
         {notice && (
@@ -642,416 +630,18 @@ function App() {
           </>
         )}
         {page === "Create" && (
-          <form
-            className="create"
-            onSubmit={(e) => {
-              e.preventDefault();
-              act(async () => {
-                const intervals =
-                  longIntervals.trim() && form.mode === "longs"
-                    ? longIntervals
-                        .trim()
-                        .split("\n")
-                        .map((line) => {
-                          const parts = line.split(",").map(Number);
-                          if (
-                            parts.length !== 2 ||
-                            parts.some((n) => !Number.isFinite(n))
-                          )
-                            throw new Error(
-                              "Інтервали Longs: один рядок start,end у секундах.",
-                            );
-                          return parts;
-                        })
-                    : [];
-                const j = await post("/jobs", { ...form, intervals });
-                setSelected(j.id);
-                await refresh();
-                setPage("Jobs");
-              });
+          <CreatePage
+            api={api}
+            post={post}
+            act={act}
+            settings={settings}
+            backgrounds={backgrounds}
+            onCreated={async (j) => {
+              setSelected(j.id);
+              await refresh();
+              setPage("Jobs");
             }}
-          >
-            <section>
-              <h2>Джерело</h2>
-              <label>
-                Посилання YouTube / Twitch VOD
-                <input
-                  value={form.source}
-                  onChange={(e) => {
-                    field("source", e.target.value);
-                    setMetadata(null);
-                  }}
-                  required
-                  placeholder="https://www.youtube.com/watch?v=…"
-                />
-              </label>
-              <div className="actions">
-                <button
-                  type="button"
-                  disabled={busy || !form.source}
-                  onClick={() =>
-                    act(async () =>
-                      setMetadata(
-                        await post("/probe", { source: form.source }),
-                      ),
-                    )
-                  }
-                >
-                  Перевірити джерело
-                </button>
-                <label className="file">
-                  Завантажити файл
-                  <input
-                    type="file"
-                    accept=".mp4,.mkv,.mov"
-                    onChange={(e) =>
-                      e.target.files[0] && act(() => upload(e.target.files[0]))
-                    }
-                  />
-                </label>
-              </div>
-              {metadata && (
-                <div className="metadata">
-                  <b>{metadata.title}</b>
-                  <p>
-                    {metadata.platform} · {(metadata.duration / 60).toFixed(1)}{" "}
-                    хв · {metadata.resolutions.join(", ")}p
-                  </p>
-                  <p>
-                    Вибрано:{" "}
-                    {metadata.resolutions
-                      .filter(
-                        (r) =>
-                          form.resolution === "best" || r <= form.resolution,
-                      )
-                      .sort((a, b) => b - a)[0] || "недоступно"}
-                    p · інтервал {form.start}–
-                    {Math.min(form.end, metadata.duration)} сек
-                  </p>
-                </div>
-              )}
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={form.rights_confirmed}
-                  onChange={(e) => field("rights_confirmed", e.target.checked)}
-                />
-                Я маю права на джерело та вибраний фон
-              </label>
-            </section>
-            <section>
-              <h2>Монтаж</h2>
-              <label>
-                Швидкий вибір інтервалу
-                <select
-                  defaultValue="1800"
-                  onChange={(e) => {
-                    if (e.target.value === "custom") return;
-                    field("start", 0);
-                    field(
-                      "end",
-                      e.target.value === "entire"
-                        ? metadata?.duration || 1800
-                        : Number(e.target.value),
-                    );
-                  }}
-                >
-                  <option value="600">Перші 10 хвилин</option>
-                  <option value="1800">Перші 30 хвилин</option>
-                  <option value="3600">Перші 60 хвилин</option>
-                  <option
-                    value="entire"
-                    disabled={!metadata || metadata.duration > 3600}
-                  >
-                    Повністю · до 60 хвилин
-                  </option>
-                  <option value="custom">Власний інтервал нижче</option>
-                </select>
-              </label>
-              {form.mode === "longs" && (
-                <label>
-                  Інтервали для хронологічного з’єднання · source start,end у
-                  секундах
-                  <textarea
-                    value={longIntervals}
-                    onChange={(e) => setLongIntervals(e.target.value)}
-                    placeholder="0,45&#10;120,180"
-                  />
-                  <small>
-                    Залиште порожнім для всього вибраного інтервалу.
-                  </small>
-                </label>
-              )}
-              <div className="grid">
-                <label>
-                  Режим
-                  <select
-                    value={form.mode}
-                    onChange={(e) => field("mode", e.target.value)}
-                  >
-                    <option value="shorts">Shorts · 9:16</option>
-                    <option value="longs">Longs · 16:9</option>
-                  </select>
-                </label>
-                <label>
-                  Якість джерела
-                  <select
-                    value={form.resolution}
-                    onChange={(e) =>
-                      field(
-                        "resolution",
-                        e.target.value === "best" ? "best" : +e.target.value,
-                      )
-                    }
-                  >
-                    <option value="best">Best available</option>
-                    {[480, 720, 1080].map((r) => (
-                      <option key={r} value={r}>
-                        {r}p
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Початок, сек
-                  <input
-                    type="number"
-                    min="0"
-                    value={form.start}
-                    onChange={(e) => field("start", +e.target.value)}
-                  />
-                </label>
-                <label>
-                  Кінець, сек
-                  <input
-                    type="number"
-                    min="1"
-                    value={form.end}
-                    onChange={(e) => field("end", +e.target.value)}
-                  />
-                </label>
-                <label>
-                  Кількість кліпів
-                  <input
-                    type="number"
-                    min="1"
-                    max="20"
-                    value={form.count}
-                    disabled={form.mode === "longs"}
-                    onChange={(e) => field("count", +e.target.value)}
-                  />
-                </label>
-                <label>
-                  Мова
-                  <select
-                    value={form.language || ""}
-                    onChange={(e) => field("language", e.target.value || null)}
-                  >
-                    <option value="">Автоматично</option>
-                    {["en", "uk", "ru", "es", "de", "fr"].map((l) => (
-                      <option key={l}>{l}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Мінімум, сек
-                  <input
-                    type="number"
-                    min="5"
-                    value={form.minimum}
-                    disabled={form.mode === "longs"}
-                    onChange={(e) => field("minimum", +e.target.value)}
-                  />
-                </label>
-                <label>
-                  Максимум, сек
-                  <input
-                    type="number"
-                    min="5"
-                    value={form.maximum}
-                    disabled={form.mode === "longs"}
-                    onChange={(e) => field("maximum", +e.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="grid">
-                <label>
-                  Бітрейт MP4, Mbps
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={(form.bitrate || 8000000) / 1000000}
-                    onChange={(e) =>
-                      field("bitrate", +e.target.value * 1000000)
-                    }
-                  />
-                </label>
-                <label>
-                  Стиль субтитрів
-                  <select
-                    value={form.caption_style || "pop"}
-                    onChange={(e) => field("caption_style", e.target.value)}
-                  >
-                    <option value="pop">Pop</option>
-                    <option value="karaoke">Karaoke</option>
-                    <option value="clean">Clean</option>
-                  </select>
-                </label>
-                {form.mode === "longs" && (
-                  <label>
-                    Висота Longs
-                    <select
-                      value={form.output_height || 720}
-                      onChange={(e) => field("output_height", +e.target.value)}
-                    >
-                      <option value="720">720p</option>
-                      <option value="1080">1080p</option>
-                    </select>
-                  </label>
-                )}
-              </div>
-              <label>
-                Композиція
-                <select
-                  value={form.preset}
-                  disabled={form.mode === "longs"}
-                  onChange={(e) => field("preset", e.target.value)}
-                >
-                  <option value="blur">Blurred Background</option>
-                  <option value="crop">Center Crop · без трекінгу облич</option>
-                  <option value="gameplay">Gameplay Split · 50/50</option>
-                </select>
-              </label>
-              {form.preset === "gameplay" && (
-                <>
-                  <label>
-                    Авторизований фон
-                    <select
-                      value={form.background || ""}
-                      onChange={(e) =>
-                        field("background", e.target.value || null)
-                      }
-                    >
-                      <option value="">Виберіть MP4</option>
-                      {backgrounds.map((b) => (
-                        <option key={b}>{b}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="file">
-                    Додати MP4-фон
-                    <input
-                      type="file"
-                      accept=".mp4"
-                      onChange={(e) =>
-                        e.target.files[0] &&
-                        act(() => upload(e.target.files[0], true))
-                      }
-                    />
-                  </label>
-                </>
-              )}
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={form.captions}
-                  onChange={(e) => field("captions", e.target.checked)}
-                />
-                Синхронізовані karaoke-субтитри
-              </label>
-              <label>
-                Текст на початку відео · до 120 символів
-                <input
-                  maxLength="120"
-                  value={form.hook || ""}
-                  onChange={(e) => field("hook", e.target.value)}
-                />
-              </label>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={form.preserve_fps || false}
-                  onChange={(e) => field("preserve_fps", e.target.checked)}
-                />
-                Зберегти FPS джерела замість 30 FPS
-              </label>
-              {form.mode === "shorts" && form.preset === "gameplay" && (
-                <label>
-                  Частка головного відео:{" "}
-                  {Math.round((form.split_ratio || 0.5) * 100)}%
-                  <input
-                    type="range"
-                    min="0.2"
-                    max="0.8"
-                    step="0.05"
-                    value={form.split_ratio || 0.5}
-                    onChange={(e) => field("split_ratio", +e.target.value)}
-                  />
-                </label>
-              )}
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={form.save_drive}
-                  onChange={(e) => field("save_drive", e.target.checked)}
-                />
-                Зберегти й перевірити в Google Drive
-              </label>
-              <label>
-                Канал для автоматичної черги
-                <select
-                  value={form.publish_channel || ""}
-                  onChange={(e) => {
-                    field("publish_channel", e.target.value || null);
-                    field("publish_automatic", false);
-                  }}
-                >
-                  <option value="">
-                    Review only · без автоматичної публікації
-                  </option>
-                  {settings?.channels
-                    ?.filter((c) => c.automatic && c.public_allowed)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.title}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  disabled={!form.publish_channel || !form.save_drive}
-                  checked={form.publish_automatic || false}
-                  onChange={(e) => field("publish_automatic", e.target.checked)}
-                />
-                Автоматично поставити результати у дозволену чергу після
-                перевірки Drive
-              </label>
-              {!settings?.drive_configured && form.save_drive && (
-                <p className="warning">
-                  Drive не налаштовано. Результати залишаться локально в BLOCKED
-                  до підключення авторизації.
-                </p>
-              )}
-              <p className="muted">
-                Публікація потребує окремого налаштування YouTube. Генерація не
-                публікує відео.
-              </p>
-              <button
-                className="primary"
-                disabled={
-                  busy ||
-                  !form.rights_confirmed ||
-                  !metadata ||
-                  (form.preset === "gameplay" && !form.background)
-                }
-              >
-                Generate
-              </button>
-            </section>
-          </form>
+          />
         )}
         {page === "Jobs" && (
           <>
@@ -1086,10 +676,10 @@ function App() {
                   {(chosen.result.outputs || []).map((o, i) => (
                     <section key={o.name}>
                       <video
-                          controls
-                          preload="metadata"
-                          src={"/api/jobs/" + chosen.id + "/files/" + o.name}
-                        />
+                        controls
+                        preload="metadata"
+                        src={"/api/jobs/" + chosen.id + "/files/" + o.name}
+                      />
                       {o.drive && (
                         <a
                           target="_blank"
@@ -1105,6 +695,18 @@ function App() {
                         </a>
                       )}
                       <h3>{o.title}</h3>
+                      <OutputEditor
+                        job={chosen}
+                        output={o}
+                        index={i}
+                        act={act}
+                        post={post}
+                        onCreated={async (j) => {
+                          setSelected(j.id);
+                          await refresh();
+                          setPage("Jobs");
+                        }}
+                      />
                       <div className="actions">
                         <a href={"/api/jobs/" + chosen.id + "/files/" + o.name}>
                           MP4
@@ -1207,16 +809,14 @@ function App() {
                   </section>
                 ))}
                 {["json", "srt", "vtt"].map((ext) => (
-                    <a
-                      className="export"
-                      key={ext}
-                      href={
-                        "/api/jobs/" + chosen.id + "/files/transcript." + ext
-                      }
-                    >
-                      Transcript {ext.toUpperCase()}
-                    </a>
-                  ))}
+                  <a
+                    className="export"
+                    key={ext}
+                    href={"/api/jobs/" + chosen.id + "/files/transcript." + ext}
+                  >
+                    Transcript {ext.toUpperCase()}
+                  </a>
+                ))}
               </>
             ) : (
               <p className="muted">Створіть завдання, щоб відкрити редактор.</p>
@@ -1259,7 +859,19 @@ function App() {
                 )
                 .map((o) => (
                   <section key={o.job.id + o.name}>
-                    {o.thumbnail&&<img alt={o.title} style={{width:'100%',maxHeight:240,objectFit:'contain'}} src={'/api/jobs/'+o.job.id+'/files/'+o.thumbnail.name}/>}
+                    {o.thumbnail && (
+                      <img
+                        alt={o.title}
+                        style={{
+                          width: "100%",
+                          maxHeight: 240,
+                          objectFit: "contain",
+                        }}
+                        src={
+                          "/api/jobs/" + o.job.id + "/files/" + o.thumbnail.name
+                        }
+                      />
+                    )}
                     <h3>{o.title}</h3>
                     <p>
                       {o.job.result.language} · {o.job.request.mode} ·{" "}
@@ -1321,7 +933,12 @@ function App() {
             <section>
               <h2>Local AI</h2>
               <ModelConfiguration settings={settings} act={act} />
-              <p>Ollama · {settings?.ollama_model} · CPU inference</p>
+              <p>
+                Ollama · {settings?.ollama_model} ·{" "}
+                {settings?.inference_mode === "0"
+                  ? "CPU"
+                  : "bounded GPU offload"}
+              </p>
               <button
                 onClick={() =>
                   act(async () => {
@@ -1362,6 +979,7 @@ function App() {
                 />
               )}
             </section>
+            <VoiceSettings settings={settings} post={post} act={act} />
             <section>
               <h2>Ресурси та обмеження</h2>
               <p>

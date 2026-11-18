@@ -1,175 +1,197 @@
+"""One checkpointed clipping pipeline for local and authenticated remote workers."""
 import json
-from pathlib import Path
-import shutil
+import math
+import os
+import re
 import sys
 import threading
-import re
-import os
-from . import config, store, media
+from . import config,store,media
 from .models import JobRequest
 from .highlights import analyze
 from .resources import preflight
 from .cleanup import remove_workspace
+from .progress import Progress
+from jsonfile import write_json_atomic
+
+
+class NeedsReview(ValueError):
+    pass
+
+
+def transcribe_chunks(source,request,root,metadata,end,resolution,progress,update):
+    path=root/'transcript.json'
+    if path.is_file():
+        progress.done('extraction',message='Reused transcript checkpoint');progress.done('transcription',message='Reused transcript checkpoint')
+        return json.loads(path.read_text(encoding='utf-8'))
+    duration=end-request.start
+    segments=[];language=request.language
+    if metadata.get('has_audio',True) and not (request.intervals and not request.captions):
+        chunks=math.ceil(duration/900)
+        for index in range(chunks):
+            offset=index*900;chunk_end=min(offset+900,duration)
+            partial=root/f'transcript-{offset}.json'
+            if not partial.is_file():
+                progress.begin('extraction','DOWNLOADING',message=f'Audio chunk {index+1}/{chunks}')
+                audio=root/f'audio-{offset}.mka'
+                media.download(source,audio,request.start+offset,request.start+chunk_end,resolution,True,progress.tick)
+                progress.begin('transcription','TRANSCRIBING',duration,'seconds',f'Chunk {index+1}/{chunks}')
+                progress.tick(offset,duration)
+                def asr_tick(current=None,total=None):progress.tick(offset+current if current is not None else None,duration)
+                media.run([sys.executable,'-m','factory.transcribe',str(audio),str(partial),language or 'auto'],asr_tick,duration=chunk_end-offset,env={**os.environ,'WHISPER_MODEL':request.asr_model or config.ASR_MODEL})
+                audio.unlink(missing_ok=True)
+            part=json.loads(partial.read_text(encoding='utf-8'))
+            if part['segments']:language=language or part.get('language')
+            for segment in part['segments']:
+                segment['start']+=offset;segment['end']+=offset
+                for word in segment.get('words',[]):
+                    word['start']+=offset;word['end']+=offset
+                segments.append(segment)
+            update(result={'audio_chunks_completed':index+1,'audio_chunks_total':chunks})
+            progress.tick(chunk_end,duration)
+        progress.done('extraction');progress.done('transcription')
+    else:
+        progress.done('extraction','skipped','No audio or explicit manual intervals without captions')
+        progress.done('transcription','skipped','No speech analysis required')
+    transcript={'language':language if segments or request.language else None,'segments':segments,'text':' '.join(s['text'] for s in segments)}
+    write_json_atomic(path,transcript,ensure_ascii=True)
+    return transcript
 
 
 def process(claim):
-    job=claim['job']
-    jid=job['id']
-    lease=claim['lease']
-    request=JobRequest.model_validate(job['request'])
-    root=config.SCRATCH/jid
-    root.mkdir(parents=True,exist_ok=True)
-    stage='PROBING'
+    job=claim['job'];jid=job['id'];lease=claim['lease']
+    root=config.SCRATCH/jid;stage='PROBING'
+    cancel_event=threading.Event()
     def update(state=None,**kwargs):
         nonlocal stage
-        if state:
-            stage=state
+        if state:stage=state
         store.update(jid,lease,state=state,**kwargs)
-    def tick(current=None,total=None):
-        update(current=current,total=total)
-    stop=threading.Event()
+    progress=Progress(update)
     def renew():
-        while not stop.wait(15):
-            try:
-                store.update(jid,lease)
-            except Exception:
-                return
-    heartbeat=threading.Thread(target=renew,daemon=True)
-    heartbeat.start()
+        while not cancel_event.wait(15):
+            try:store.update(jid,lease)
+            except Exception:return
+    heartbeat=threading.Thread(target=renew,daemon=True);heartbeat.start()
     try:
+        request=JobRequest.model_validate(job['request'])
+        root.mkdir(parents=True,exist_ok=True)
         if job['result'].get('cloud_verified'):
-            # Crash between verified upload, cleanup and READY: no re-download.
-            remove_workspace(root)
-            update('READY')
-            return
-        preflight()
-        metadata=media.probe(request.source)
-        end=min(request.end,metadata['duration'])
-        if end<=request.start:
-            raise ValueError('Selected interval begins after the end of the source')
+            remove_workspace(root);update('READY');return
+        preflight();source=request.source
+        if source.startswith('edit:'):
+            _,origin,index=source.split(':')
+            original=store.get(origin)['result']['outputs'][int(index)]
+            if not original.get('edit_source'):raise NeedsReview('This older output has no preserved editable source. Re-upload the original once.')
+            media.fetch_drive(original['edit_source'],root/'edit-source.mp4',progress.tick)
+            source='job-local:'+jid
+        progress.begin('source','PROBING')
+        metadata=media.probe(source);end=min(request.end or metadata['duration'],metadata['duration'])
+        if end<=request.start:raise ValueError('Selected interval begins after the end of the source')
+        if end-request.start>86400:raise ValueError('Processing is bounded to 24 hours per job; select a shorter source interval')
         available=[r for r in metadata['resolutions'] if request.resolution=='best' or r<=request.resolution]
-        if not available:
-            raise ValueError('No source resolution at or below the selected quality is available')
+        if media.local_source(source):available=[max(metadata['resolutions']) if request.resolution=='best' else min(max(metadata['resolutions']),request.resolution)]
+        if not available:raise ValueError('No source resolution at or below the selected quality is available')
         resolution=max(available)
         update(result={'source':metadata,'actual_resolution':resolution,'source_start':request.start,'processing_end':end,'ingest_strategy':'audio-first bounded chunks' if metadata.get('independent_audio',True) else 'bounded muxed segments: independent audio stream unavailable'})
-        transcript_path=root/'transcript.json'
-        if request.mode=='longs' and not request.captions and not transcript_path.exists():
-            transcript_path.write_text(json.dumps({'language':request.language,'segments':[],'text':''}),encoding='utf-8')
-        if not transcript_path.exists():
-            segments=[]
-            language=request.language
-            for start in range(0,int(end-request.start)+1,900):
-                stop=min(start+900,end-request.start)
-                if stop<=start:
-                    break
-                partial=root/f'transcript-{start}.json'
-                if not partial.exists():
-                    update('DOWNLOADING')
-                    audio=root/f'audio-{start}.mka'
-                    media.download(request.source,audio,request.start+start,request.start+stop,resolution,True,tick)
-                    update('TRANSCRIBING',current=start,total=end-request.start)
-                    media.run([sys.executable,'-m','factory.transcribe',str(audio),str(partial),language or 'auto'],tick,env={**os.environ,'WHISPER_MODEL':request.asr_model or config.ASR_MODEL})
-                    audio.unlink(missing_ok=True)
-                part=json.loads(partial.read_text(encoding='utf-8'))
-                language=language or part['language']
-                for segment in part['segments']:
-                    for name in ('start','end'):
-                        segment[name]+=start
-                    for word in segment.get('words',[]):
-                        word['start']+=start
-                        word['end']+=start
-                    segments.append(segment)
-                update('TRANSCRIBING',current=stop,total=end-request.start)
-            transcript={'language':language,'segments':segments,'text':' '.join(s['text'] for s in segments)}
-            from jsonfile import write_json_atomic
-            write_json_atomic(transcript_path,transcript,ensure_ascii=True)
-        transcript=json.loads(transcript_path.read_text(encoding='utf-8'))
+        progress.done()
+        background=config.DATA/'backgrounds'/request.background if request.background else next(iter(sorted((config.DATA/'backgrounds').glob('*.mp4'))),None)
+        if request.preset=='gameplay' and (not background or not background.is_file()):raise NeedsReview('Add an authorized background asset or select Automatic / Blurred Background')
+        transcript=transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
+        progress.begin('language','TRANSCRIBING');update(result={'language':transcript['language']});progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
         from subtitles import generate_srt
-        if not generate_srt(transcript,0,end-request.start,str(root/'transcript.srt')):
-            (root/'transcript.srt').write_text('',encoding='utf-8')
+        if not generate_srt(transcript,0,end-request.start,str(root/'transcript.srt')):(root/'transcript.srt').write_text('',encoding='utf-8')
         srt=(root/'transcript.srt').read_text(encoding='utf-8')
         (root/'transcript.vtt').write_text('WEBVTT\n\n'+re.sub(r'(\d\d:\d\d:\d\d),(\d{3})',r'\1.\2',srt.lstrip('\ufeff')),encoding='utf-8')
-        if request.mode=='longs' or request.intervals:
-            intervals=request.intervals or [(request.start,end)]
-            candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in sorted(intervals)]
+        progress.begin('highlights','ANALYZING')
+        if request.intervals:
+            if any(b>end for a,b in request.intervals):raise ValueError('Manual interval extends beyond the actual source duration')
+            candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in sorted(request.intervals)]
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
+        elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
+            candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
+            result={'candidates':candidates,'analysis':'whole short visual source; no AI claim'}
         else:
-            update('ANALYZING')
-            result=analyze(transcript,request,end-request.start,tick)
-            candidates=result['candidates']
-        update(result={**result,'language':transcript['language']})
-        if not candidates:
-            raise ValueError('No suitable highlight found within the duration bounds. Inspect the transcript or select another interval.')
-        outputs=[]
-        update('RENDERING')
+            result=analyze(transcript,request,end-request.start,progress.tick);candidates=result['candidates']
+            if request.mode=='longs':candidates.sort(key=lambda c:c['start_seconds'])
+        update(result=result);progress.done()
+        if not candidates:raise NeedsReview('No suitable spoken highlight. '+('Visual/no-speech source: choose Silent Video with a short selected interval or set manual intervals.' if not transcript['segments'] else 'Inspect the suitability explanation or select a manual interval in Editor.'))
+        outputs=[];raw_sources={}
         for i,candidate in enumerate(candidates):
-            output=root/f'clip-{i+1}.mp4'
-            if output.exists():
+            duration=candidate['end_seconds']-candidate['start_seconds']
+            output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'
+            progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}')
+            if not clip.is_file():media.download(source,clip,request.start+candidate['start_seconds'],request.start+candidate['end_seconds'],resolution,False,progress.tick)
+            raw_sources[output.name]=clip;progress.done()
+            def render_stage(key):
+                if progress.active in ('rendering','captions_audio'):progress.done()
+                progress.begin(key,'RENDERING',duration if key=='rendering' else None,'seconds' if key=='rendering' else None,f'Clip {i+1}/{len(candidates)}')
+            if output.is_file():
                 try:
-                    media.validate_output(output,candidate['end_seconds']-candidate['start_seconds'])
-                except Exception:
-                    output.unlink()
-            if not output.exists():
-                clip=root/f'selected-{i+1}.mp4'
-                media.download(request.source,clip,request.start+candidate['start_seconds'],request.start+candidate['end_seconds'],resolution,False,tick)
-                background=config.DATA/'backgrounds'/request.background if request.background else None
-                media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,tick)
-                clip.unlink(missing_ok=True)
+                    checkpoint=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
+                    media.validate_output(output,checkpoint['duration'],request=request)
+                    progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
+                    progress.begin('validation','RENDERING')
+                except Exception:output.unlink()
+            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage)
+            progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
-            if not thumbnail.exists():
-                media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(output),'-frames:v','1','-vf','scale=320:-2',str(thumbnail)],tick)
-            outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'thumbnail':{'name':thumbnail.name}})
+            if not thumbnail.is_file():media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(output),'-frames:v','1','-vf','scale=320:-2',str(thumbnail)],progress.tick)
+            validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
+            outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name},'validation':validation})
+            update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
         if request.mode=='longs' and len(outputs)>1:
-            final=root/'long.mp4'
-            media.concatenate([root/o['name'] for o in outputs],final,tick)
-            outputs=[{'name':final.name,'title':metadata['title'],'approved':False}]
+            final=root/'long.mp4';media.concatenate([root/o['name'] for o in outputs],final,progress.tick)
+            validation=media.validate_output(final,sum(o['duration'] for o in outputs),request=request)
+            raw=root/'long-source.mp4';media.concatenate(list(raw_sources.values()),raw,progress.tick)
+            raw_sources[final.name]=raw
+            thumb=final.with_suffix('.jpg');media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(final),'-frames:v','1','-vf','scale=320:-2',str(thumb)],progress.tick)
+            outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':sum(c['end_seconds']-c['start_seconds'] for c in candidates),'validation':validation,'thumbnail':{'name':thumb.name}}]
         update(result={'outputs':outputs})
         metadata_obj={'job_id':jid,'request':request.model_dump(),'source':metadata,'language':transcript['language'],'candidates':candidates,'outputs':outputs}
-        (root/'metadata.json').write_text(json.dumps(metadata_obj,ensure_ascii=False,sort_keys=True),encoding='utf-8')
         if request.save_drive:
-            update('UPLOADING')
+            artifact_paths=[root/'transcript.json',root/'metadata.json',*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass'),*root.glob('*.validation.json')]
+            total_files=sum(1+bool(o.get('thumbnail'))+int(o['name'] in raw_sources) for o in outputs)+sum(p.name=='metadata.json' or (p.is_file() and p.stat().st_size>0) for p in artifact_paths)
+            progress.begin('drive','UPLOADING',total_files,'files');progress.tick(0,total_files)
             from .drive import Drive
             drive=Drive()
             try:
-                folders=drive.job_folders(jid)
-                uploaded=[]
+                folders=drive.job_folders(jid);uploaded=[]
+                uploaded_files=0
+                def upload_file(path,folder,key):
+                    nonlocal uploaded_files
+                    progress.counters['drive']['message']='Verifying '+path.name
+                    def bytes_tick(current=None,total=None):update(result={'upload_asset':{'name':path.name,'current':current,'total':total}})
+                    remote=drive.upload(path,folder,key,bytes_tick)
+                    uploaded_files+=1;progress.tick(uploaded_files,total_files)
+                    return remote
                 for output in outputs:
-                    remote=drive.upload(root/output['name'],folders[request.mode],jid+'-'+output['name'],tick)
+                    remote=upload_file(root/output['name'],folders[request.mode],jid+'-'+output['name'])
                     if output.get('thumbnail'):
-                        thumb=output['thumbnail']['name']
-                        output['thumbnail']['drive']=drive.upload(root/thumb,folders['thumbnails'],jid+'-'+thumb,tick)
-                    uploaded.append({**output,'drive':remote})
-                    update(result={'outputs':uploaded+outputs[len(uploaded):]})
+                        thumb=output['thumbnail']['name'];output['thumbnail']['drive']=upload_file(root/thumb,folders['thumbnails'],jid+'-'+thumb)
+                    if output['name'] in raw_sources:
+                        raw=raw_sources[output['name']];output['edit_source']=upload_file(raw,folders['sources'],jid+'-edit-'+output['name'])
+                    uploaded.append({**output,'drive':remote});update(result={'outputs':uploaded+outputs[len(uploaded):]})
                 metadata_obj['outputs']=uploaded
-                (root/'metadata.json').write_text(json.dumps(metadata_obj,ensure_ascii=False,sort_keys=True),encoding='utf-8')
+                write_json_atomic(root/'metadata.json',metadata_obj,ensure_ascii=True)
                 artifacts={}
-                for path in [transcript_path,root/'metadata.json',*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass')]:
-                    if path.stat().st_size==0:
-                        continue
+                for path in artifact_paths:
+                    if not path.stat().st_size:continue
                     folder=folders['job'] if path.suffix=='.json' else folders['subtitles']
-                    artifacts[path.name]=drive.upload(path,folder,jid+'-'+path.name,tick)
-                    update(result={'artifacts':artifacts})
+                    artifacts[path.name]=upload_file(path,folder,jid+'-'+path.name);update(result={'artifacts':artifacts})
                 update(result={'outputs':uploaded,'artifacts':artifacts,'cloud_verified':True})
-            finally:
-                drive.close()
-            # No removal before every required artifact has been verified.
-            remove_workspace(root)
-            source=media.local_source(request.source)
-            if source:
-                # Preserve sources referenced by any other job.
-                others=[j for j in store.list_jobs() if j['id']!=jid and j['request']['source']==request.source and j['state'] not in ('READY','CANCELLED')]
-                if not others:
-                    source.unlink(missing_ok=True)
+            finally:drive.close()
+            progress.done();remove_workspace(root)
+            if request.source.startswith('upload:'):
+                original=config.SCRATCH/'uploads'/request.source[7:]
+                others=[j for j in store.list_jobs() if j['id']!=jid and j['request']['source']==request.source and j['state']!='READY']
+                if original.is_file() and not others:original.unlink()
+        else:
+            write_json_atomic(root/'metadata.json',metadata_obj,ensure_ascii=True);progress.done('drive','skipped','Local export selected')
         update('READY')
-    except InterruptedError:
-        return
+    except InterruptedError:return
     except Exception as error:
-        # Never serialize raw third-party exception bodies (OAuth/URLs).
         safe=str(error) if isinstance(error,(ValueError,RuntimeError,TimeoutError)) else f'{type(error).__name__} in {stage}; inspect configuration and retry'
         try:
-            update('BLOCKED' if stage=='UPLOADING' else 'FAILED',error=safe[:500])
-        except InterruptedError:
-            pass
+            progress.done(status='failed',message=safe[:500]);update('BLOCKED' if stage=='UPLOADING' or isinstance(error,NeedsReview) else 'FAILED',error=safe[:500])
+        except InterruptedError:pass
     finally:
-        stop.set()
-        heartbeat.join(timeout=1)
+        cancel_event.set();heartbeat.join(timeout=1)

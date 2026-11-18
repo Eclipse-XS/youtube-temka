@@ -1,6 +1,8 @@
 # Optional NVIDIA acceleration. Default deployment remains CPU compatible.
 # docker compose -f docker-compose.yml -f compose.gpu.yml --profile controller up -d --build
 services:
+  ollama:
+    gpus: all
   controller:
     gpus: all
     build:
@@ -8,6 +10,7 @@ services:
         GPU: '1'
     environment:
       WHISPER_DEVICE: auto
+      OLLAMA_GPU_LAYERS: auto
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
   worker:
     gpus: all
@@ -16,4 +19,5 @@ services:
         GPU: '1'
     environment:
       WHISPER_DEVICE: auto
+      OLLAMA_GPU_LAYERS: auto
       NVIDIA_DRIVER_CAPABILITIES: compute,video,utility

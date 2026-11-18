@@ -18,7 +18,7 @@ def ffmpeg():
     if os.environ.get('FFMPEG_BINARY'):
         return os.environ['FFMPEG_BINARY']
     if shutil.which('ffmpeg'):
-        return 'ffmpeg'
+        return shutil.which('ffmpeg')
     import imageio_ffmpeg
     return imageio_ffmpeg.get_ffmpeg_exe()
 
@@ -53,6 +53,10 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
                     tick(float(line.split('=')[1])/1e6,duration)
                 except ValueError:
                     pass
+            elif 'Transcribing' in line and duration:
+                import re
+                measured=re.search(r'Transcribing.*?(\d+)%',line)
+                if measured:tick(min(100,int(measured[1]))/100*duration,duration)
         if process.wait() != 0:
             # Do not return raw downloader logs: URLs may carry credentials.
             raise RuntimeError('Media process failed. Check codec support, source accessibility and available disk space.')
@@ -67,6 +71,11 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
 
 
 def local_source(source):
+    if source.startswith('job-local:'):
+        import re
+        jid=source.split(':',1)[1]
+        if not re.fullmatch('[a-f0-9]{32}',jid):raise ValueError('Invalid editable source')
+        return config.SCRATCH/jid/'edit-source.mp4'
     if source.startswith('upload:'):
         name=source[7:]
         if not name or Path(name).name != name:
@@ -76,6 +85,34 @@ def local_source(source):
             raise ValueError('Uploaded source is missing')
         return path
     return None
+
+
+def fetch_drive(metadata,path,tick=lambda *_:None):
+    import hashlib
+    from .drive import Drive,BASE,CHUNK
+    if path.is_file():
+        with path.open('rb') as source:
+            if hashlib.file_digest(source,'md5').hexdigest()==metadata['md5Checksum']:return path
+    preflight(int(metadata['size']))
+    drive=Drive()
+    try:
+        offset=0;total=int(metadata['size'])
+        with path.open('wb') as output:
+            while offset<total:
+                end=min(total,offset+CHUNK)-1
+                with drive.client.stream('GET',BASE+'/files/'+metadata['id'],params={'alt':'media','supportsAllDrives':'true'},headers={'Range':f'bytes={offset}-{end}'}) as response:
+                    if response.status_code!=206 or response.headers.get('Content-Range')!=f'bytes {offset}-{end}/{total}':raise ValueError('Drive did not honor bounded editable-source retrieval')
+                    count=0
+                    for data in response.iter_bytes(256*1024):
+                        count+=len(data)
+                        if count>end-offset+1:raise ValueError('Drive response exceeded the requested range')
+                        preflight(len(data));output.write(data)
+                    if count!=end-offset+1:raise ValueError('Incomplete editable-source transfer; retry safely')
+                offset=end+1;tick(offset,total)
+        with path.open('rb') as source:
+            if hashlib.file_digest(source,'md5').hexdigest()!=metadata['md5Checksum']:raise ValueError('Editable source checksum mismatch')
+    finally:drive.close()
+    return path
 
 
 def validate_url(url):
@@ -95,7 +132,7 @@ def probe(source):
             video=next(iter(c.streams.video),None)
             if video is None or c.duration is None:
                 raise ValueError('Source must have a video stream and known duration')
-            return {'title':path.stem,'platform':'local','duration':c.duration/av.time_base,'resolutions':[video.height],'size':path.stat().st_size}
+            return {'title':path.stem,'platform':'local','duration':c.duration/av.time_base,'resolutions':[video.height],'size':path.stat().st_size,'has_audio':bool(c.streams.audio)}
     validate_url(source)
     import yt_dlp
     import ssrf_guard
@@ -105,7 +142,8 @@ def probe(source):
         raise ValueError('Only completed VODs are supported')
     if not item.get('duration'):
         raise ValueError('Unknown source duration; bounded processing cannot be guaranteed')
-    return {'title':item.get('title'),'platform':item.get('extractor_key'),'duration':item['duration'],'resolutions':sorted({int(f['height']) for f in item.get('formats',[]) if f.get('height')}),'size':item.get('filesize'),'independent_audio':any(f.get('vcodec')=='none' and f.get('acodec') not in ('none',None) for f in item.get('formats',[]))}
+    formats=item.get('formats',[])
+    return {'title':item.get('title'),'platform':item.get('extractor_key'),'duration':item['duration'],'resolutions':sorted({int(f['height']) for f in formats if f.get('height') and f.get('vcodec') not in ('none',None,'images') and f.get('ext')!='mhtml'}),'size':item.get('filesize'),'thumbnail':item.get('thumbnail'),'has_audio':any(f.get('acodec') not in ('none',None) for f in formats),'independent_audio':any(f.get('vcodec')=='none' and f.get('acodec') not in ('none',None) for f in formats)}
 
 
 def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
@@ -117,7 +155,7 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
         if audio:
             args+=['-vn','-ac','1','-ar','16000','-c:a','pcm_s16le']
         else:
-            args+=['-c:v','libx264','-preset','fast','-c:a','aac']
+            args+=['-vf',f'scale=-2:min(ih\\,{resolution})','-c:v','libx264','-preset','fast','-c:a','aac']
         run(args+['-progress','pipe:1',str(path)],tick,end-start)
         return path
     validate_url(source)
@@ -130,27 +168,66 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     duration=end-start
+    import av
+    with av.open(str(source)) as container:
+        has_audio=bool(container.streams.audio)
+    if stage:stage('captions_audio')
+    if request.silence_removal and request.audio_mode!='voiceover':
+        from .audio_edit import remove_pauses
+        source,transcript,start,end=remove_pauses(source,output.with_suffix('.trimmed.mp4'),transcript,start,end,has_audio,tick)
+        duration=end-start
+    narration=None
+    caption_start,caption_end=start,end
+    if request.audio_mode=='voiceover':
+        from .tts import synthesize
+        text=request.tts_text or ' '.join(s['text'] for s in transcript['segments'] if s['end']>start and s['start']<end)
+        narration=output.with_suffix('.voice.wav')
+        synthesize(text,request.tts_voice,request.tts_speed,transcript.get('language') or request.language or 'en',narration,tick)
+        with av.open(str(narration)) as audio_container:
+            voice_duration=audio_container.duration/av.time_base
+        if voice_duration>duration+.1:
+            raise ValueError('Voice-over is longer than the clip. Shorten its text or select a longer interval; words were not truncated.')
+        if request.captions:
+            import sys
+            timed=output.with_suffix('.voice.json')
+            run([sys.executable,'-m','factory.transcribe',str(narration),str(timed),transcript.get('language') or request.language or 'en'],tick)
+            transcript=json.loads(timed.read_text(encoding='utf-8'))
+            caption_start,caption_end=0,duration
     ass=output.with_suffix('.ass')
     srt=output.with_suffix('.srt')
-    generate_srt(transcript,start,end,str(srt))
-    generate_ass(transcript,start,end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
+    generate_srt(transcript,caption_start,caption_end,str(srt))
+    generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
+    preset=request.preset
+    framing={'strategy':preset}
+    if preset=='auto':preset='gameplay' if background and background.is_file() else 'smart'
+    trajectory=None
+    if request.mode=='shorts' and preset=='smart':
+        from .framing import trajectory as track,dedupe_sendcmd_lines
+        trajectory,framing=track(source,duration)
+        if trajectory:
+            crop_w,crop_h,positions=trajectory
+            commands=output.with_suffix('.camera.txt')
+            commands.write_text('\n'.join(dedupe_sendcmd_lines(positions,2)),encoding='utf-8')
+        else:preset='blur'
     if request.mode=='longs':
         graph=f'[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]'
-    elif request.preset=='gameplay':
+    elif preset=='gameplay':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
         args+=['-stream_loop','-1','-i',str(background)]
         top=2*round(1920*request.split_ratio/2)
         bottom=1920-top
         graph=f'[0:v]scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
-    elif request.preset=='crop':
+    elif preset=='smart' and trajectory:
+        graph=f"[0:v]sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
+    elif preset=='crop':
         # Explicit center framing fallback; no unverified face-tracking claim.
         graph='[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
     else:
@@ -165,22 +242,56 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
         hookfile.write_text('\n'.join(textwrap.wrap(request.hook,width=26)),encoding='utf-8')
         graph+=f";{video}drawtext=textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
         video='[hooked]'
-    args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video,'-map','0:a:0?',*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
+    audio_map=None
+    next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
+    music=config.DATA/'music'/request.music_asset if request.music_asset else None
+    if request.audio_mode=='music' and music and not music.is_file():raise ValueError('Selected music asset is missing; choose an available authorized asset')
+    if request.audio_mode=='voiceover':
+        args+=['-i',str(narration)]
+        graph+=f';[{next_input}:a]apad,atrim=duration={duration},{LOUDNORM_FILTER}[audio]'
+        audio_map='[audio]'
+    elif request.audio_mode=='music' and music and music.is_file():
+        args+=['-stream_loop','-1','-i',str(music)]
+        graph+=f';[{next_input}:a]atrim=duration={duration},afade=t=in:d=0.3,afade=t=out:st={max(0,duration-.5)}:d=0.5,volume=0.12[bed]'
+        if has_audio:
+            graph+=f';[0:a]asplit[original][side];[bed][side]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[duck];[original][duck]amix=inputs=2:normalize=0,{LOUDNORM_FILTER}[audio]'
+        else:graph+=f';[bed]{LOUDNORM_FILTER}[audio]'
+        audio_map='[audio]'
+    elif has_audio and request.audio_mode!='silent':
+        graph+=f';[0:a]{LOUDNORM_FILTER}[audio]';audio_map='[audio]'
+    args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video]
+    args+=['-map',audio_map,'-c:a','aac'] if audio_map else ['-an']
+    args+=[*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
     if not request.preserve_fps:
         args+=['-r','30']
-    args+=['-c:a','aac','-af',LOUDNORM_FILTER,'-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(output)]
+    args+=['-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(output)]
+    if stage:stage('rendering')
     run(args,tick,duration)
-    validate_output(output,duration)
+    if stage:stage('validation')
+    report=validate_output(output,duration,request=request,expected_audio=audio_map is not None)
+    output.with_suffix('.validation.json').write_text(json.dumps({**report,'framing':framing}),encoding='utf-8')
     return output
 
 
-def validate_output(path,duration):
+def validate_output(path,duration,request=None,expected_audio=None):
     import av
     with av.open(str(path)) as container:
         if not container.streams.video or not container.duration or abs(container.duration/av.time_base-duration)>1:
             raise RuntimeError('Rendered video validation failed (stream/duration)')
-        if next(container.decode(video=0),None) is None:
+        stream=container.streams.video[0]
+        if request:
+            expected=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
+            if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')
+        if expected_audio is not None and bool(container.streams.audio)!=expected_audio:
+            raise RuntimeError('Rendered audio track does not match the selected audio mode')
+        frames=0
+        try:
+            for frame in container.decode(video=0):frames+=1
+        except Exception:
+            raise RuntimeError('Rendered container has a corrupted video packet') from None
+        if not frames:
             raise RuntimeError('Rendered video has no decodable frame')
+        return {'duration':container.duration/av.time_base,'width':stream.width,'height':stream.height,'frames_decoded':frames,'audio':bool(container.streams.audio),'validated':True}
 
 
 def concatenate(paths,output,tick=lambda *_:None):

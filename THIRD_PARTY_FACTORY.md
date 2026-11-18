@@ -3,7 +3,7 @@
 Base: [mutonby/openshorts](https://github.com/mutonby/openshorts), commit
 `7f3eae66330d2aa3e580562769eccfc0fa9d8e1d`, MIT core, Copyright (c) 2024 OpenShorts.
 Original LICENSE and NOTICE are preserved. The original repository remains in
-Git history and the integration is on `feat/content-factory-v6`.
+Git history and the factory changes preserve the existing main-branch history.
 
 The deployed adapter directly reuses `transcribe_backends.py`, `subtitles.py`,
 `ffmpeg_utils.py`, `gpu_decode.py`, `jsonfile.py`, `security_utils.py` and
@@ -41,3 +41,8 @@ FFmpeg (Debian build), faster-whisper, CTranslate2, PyAV, yt-dlp, Ollama, and
 Qwen2.5 model weights. Qwen model weights are downloaded separately by Ollama;
 they are not embedded in this repository. Deployment does not grant rights to
 source videos, gameplay assets, fonts, or third-party services.
+
+Smart framing reuses the MIT sendcmd de-duplication idea from reframe_v2.py, with
+a CPU OpenCV Haar detector and smoothed camera trajectory. Optional Kokoro runtime,
+weights, voice selection and GPL dependency boundaries are documented in
+[the TTS provenance](docs/licenses/TTS.md).

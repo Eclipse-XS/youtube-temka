@@ -1,69 +1,61 @@
 # AI Content Factory
 
-Self-hosted video clipping/editing adapter on the MIT OpenShorts core.
+Self-hosted clipping and editing on the MIT OpenShorts core. Paste a completed
+YouTube/Twitch VOD, choose Shorts or Longs and a style, then Generate. The app
+probes the source, analyzes speech in bounded chunks, ranks highlights, renders,
+previews and stores verified outputs on Drive. Original audio is the default.
 
-The original AI Content Factory code and OAuth files were absent from the selected
-workspace. This implementation preserves the OpenShorts history and excludes its
-restricted cloud code from the deployed images. This is not yet a fully accepted
-production 6.0 release; verification and remaining blockers are recorded below.
+This release is undergoing acceptance; see [actual verification](verification/REPORT.md).
+YouTube uploads require an authorized channel and remain unverified in this environment.
 
 ## Start
 
-One-time configuration:
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/setup-factory.ps1
-```
-
-Preserve the generated `.env`. Mount existing Google authorized-user JSON files
-read-only under `secrets/` when available; they are never committed or overwritten.
-
-PC A:
-
-```powershell
+# PC A
 docker compose --profile controller up -d --build
-```
-
-PC B, after setting its private controller URL/token and its own Drive authorization:
-
-```powershell
+# PC B, after its private controller URL/token and Drive mount are configured
 docker compose --profile worker up -d --build
 ```
 
-Open http://localhost:5175 and sign in with the token from `.env`. Initial model
-setup is available in Settings. Default processing is CPU/int8; the optional
-`compose.gpu.yml` configuration is documented separately.
+Open [localhost:5175](http://localhost:5175) and use the token from the ignored
+`.env`. Configure models once in Settings. Existing OAuth files mount read-only;
+no credential regeneration or replacement is necessary for supported formats.
+A working legacy split Drive client/token integration has been reused and verified.
 
-## What is connected
+## Included
 
-- FastAPI + React, one durable SQLite queue, authenticated controller/worker calls.
-- Bounded URL/local ingest, 15-minute audio chunks, faster-whisper small, language
-  detection and word timestamps; no unconditional multi-hour video download.
-- Ollama structured ranking with honest deterministic fallback.
-- Real FFmpeg vertical center-crop/blur/gameplay layouts, multilingual karaoke
-  captions, opening text, bitrate/FPS controls, and chronological 16:9 Longs.
-- Preview/approval, transcript exports, verified resumable Drive uploads and cleanup.
-- Direct Drive-to-YouTube chunk transfer, private/review defaults, native scheduling,
-  daily channel limits, durable sessions, duplicate protection and uncertain states.
+- FastAPI + React, persistent SQLite queue, fenced local/remote workers.
+- Automatic source probing, collapsible advanced controls, reusable preferences.
+- Multi-hour audio-first analysis in 15-minute checkpointed chunks; selected video
+  retrieval only. No full-VOD download fallback.
+- Ollama structured ranking, explained unsuitable/visual decisions, visible
+  heuristic fallback on malformed/empty responses or technical failures.
+- Original sound, authorized music ducking/fades, silent mode and optional CPU
+  Kokoro EN/ES narration with real voice previews.
+- CPU face-sampled Smart Crop with smoothing and honest blur fallback, Gameplay
+  Split, subtitles, opening hooks, synchronized pause removal, chronological Longs.
+- Measured stages, preview/approval, verified resumable Drive uploads, checksummed
+  editable-source preservation and new versions after local cleanup.
+- Direct bounded Drive-to-YouTube resumable publishing, native schedules, channel
+  limits, durable sessions and uncertain-outcome protection. Private/review default.
 
-## Verification and operational limits
+## Guides and development
 
-- [Deployment guide](docs/FACTORY_DEPLOYMENT.md)
-- [Verification report](verification/REPORT.md)
-- [Licenses and upstream integration](THIRD_PARTY_FACTORY.md)
-- [Original upstream README](docs/UPSTREAM_README.md)
+- [Deployment: PC A / PC B, GPU, OAuth, recovery](docs/FACTORY_DEPLOYMENT.md)
+- [Verification and remaining blockers](verification/REPORT.md)
+- [Integration provenance](THIRD_PARTY_FACTORY.md)
+- [Optional TTS licenses](docs/licenses/TTS.md)
+- [Upstream README](docs/UPSTREAM_README.md)
 
-Run the adapter tests:
+Default Docker processing uses CPU/int8. The optional GPU overlay checks available
+VRAM and unloads sequential model stages; physical 4 GB cards are unverified.
+Narration is optional (`WITH_TTS=1`), requires a separate model download and adds
+GPL phonemizer/eSpeak dependencies; the normal clipping image excludes them.
 
-```powershell
-.venv\Scripts\python.exe -m pytest factory_tests -q
-```
-
-On a fresh development machine, create a Python 3.12 venv and install
-`requirements-factory.lock` first. Run the API with `uvicorn factory.api:app` and
-the dashboard with `npx vite --config vite.factory.config.js` from `dashboard/`.
-Normal operator usage uses the web application and Compose, not these commands.
-
-Do not assume real Drive/YouTube acceptance from HTTP fixture tests. Public uploads,
-physical dual-PC operation, 4 GB GPU operation and the complete browser workflow
-must be verified against the remaining acceptance requirements.
+Python 3.12 development: install `requirements-factory.lock`, plus pytest, in a
+venv. Run `python -m pytest factory_tests -q`. Build the actual UI with
+`npm run build -- --config vite.factory.config.js` in `dashboard/`.
+CI also exercises retained MIT modules on Linux, validates Compose and scans for
+credential patterns. HTTP protocol fixtures are never described as real Google
+acceptance tests. No public uploads occur without explicit channel authorization.

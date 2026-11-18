@@ -18,7 +18,10 @@ def local_loop(stop):
         store.heartbeat(worker,hardware())
         claimed=store.claim(worker)
         if claimed:
-            process(claimed)
+            try:process(claimed)
+            except Exception:
+                try:store.update(claimed['job']['id'],claimed['lease'],state='FAILED',error='Unexpected worker failure; checkpoints preserved. Retry after checking configuration.')
+                except InterruptedError:pass
         else:
             stop.wait(3)
 
@@ -58,7 +61,7 @@ def main():
                     pipeline.process(claim)
                 else:
                     time.sleep(3)
-            except httpx.HTTPError:
+            except (httpx.HTTPError,ValueError):
                 time.sleep(10)
 
 

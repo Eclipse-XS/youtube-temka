@@ -34,16 +34,22 @@ def connect():
             channel TEXT PRIMARY KEY, interval_minutes INTEGER NOT NULL DEFAULT 120)''')
         db.execute('''CREATE TABLE IF NOT EXISTS events (
             job TEXT NOT NULL, at REAL NOT NULL, state TEXT NOT NULL, message TEXT)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS job_stages (
+            job TEXT NOT NULL, key TEXT NOT NULL, status TEXT NOT NULL,
+            started REAL, finished REAL, current REAL, total REAL, unit TEXT,
+            message TEXT, PRIMARY KEY(job,key))''')
         yield db
 
 
-def decode(row):
+def decode(row,db=None):
     if row is None:
         return None
     item = dict(row)
     for k in ('request', 'result'):
         item[k] = json.loads(item[k])
     item.pop('lease', None)
+    if db is not None:
+        item['stages']=[dict(r) for r in db.execute('SELECT key,status,started,finished,current,total,unit,message FROM job_stages WHERE job=? ORDER BY started',(item['id'],))]
     return item
 
 
@@ -58,12 +64,12 @@ def create(request):
 
 def get(jid):
     with connect() as db:
-        return decode(db.execute('SELECT * FROM jobs WHERE id=?', (jid,)).fetchone())
+        return decode(db.execute('SELECT * FROM jobs WHERE id=?', (jid,)).fetchone(),db)
 
 
 def list_jobs():
     with connect() as db:
-        return [decode(r) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 200')]
+        return [decode(r,db) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 200').fetchall()]
 
 
 def claim(worker, remote=False):
@@ -73,6 +79,7 @@ def claim(worker, remote=False):
         expired=db.execute("UPDATE jobs SET state='BLOCKED',error='Worker lease expired; inspect outputs before retry',lease=NULL WHERE lease IS NOT NULL AND seen < ? RETURNING id", (time.time()-120,)).fetchall()
         for item in expired:
             db.execute('INSERT INTO events VALUES(?,?,?,?)',(item['id'],time.time(),'BLOCKED','Worker lease expired; inspect outputs before retry'))
+            db.execute("UPDATE job_stages SET status='failed',finished=?,message='Worker lease expired; checkpoints retained' WHERE job=? AND status='running'",(time.time(),item['id']))
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
         rows = db.execute("SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created").fetchall()
@@ -85,7 +92,7 @@ def claim(worker, remote=False):
         return {'job': decode(db.execute('SELECT * FROM jobs WHERE id=?', (row['id'],)).fetchone()), 'lease': lease}
 
 
-def update(jid, lease, state=None, result=None, error=None, current=None, total=None):
+def update(jid, lease, state=None, result=None, error=None, current=None, total=None,stage_update=None):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT * FROM jobs WHERE id=? AND lease=?', (jid,lease)).fetchone()
@@ -105,6 +112,16 @@ def update(jid, lease, state=None, result=None, error=None, current=None, total=
         db.execute('UPDATE workers SET seen=? WHERE id=?',(time.time(),row['worker']))
         if state and (state!=row['state'] or error):
             db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),state,error))
+        if stage_update:
+            s=stage_update
+            status=s.get('status','running')
+            if status not in ('running','completed','skipped','failed','pending'):
+                raise ValueError('Invalid stage status')
+            db.execute('''INSERT INTO job_stages VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(job,key) DO UPDATE SET status=excluded.status,
+                finished=excluded.finished,current=excluded.current,total=excluded.total,
+                unit=excluded.unit,message=excluded.message''',
+                (jid,s['key'],status,time.time(),time.time() if status in ('completed','skipped','failed') else None,s.get('current'),s.get('total'),s.get('unit'),s.get('message')))
 
 
 def heartbeat(worker, resources):

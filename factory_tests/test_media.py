@@ -96,3 +96,39 @@ def test_two_hour_fixture_extracts_only_selected_absolute_interval(fixture):
     media.download('upload:long-fixture.mp4',selected,7201,7206,480)
     media.validate_output(selected,5)
     assert selected.stat().st_size<long_source.stat().st_size/20
+
+
+@pytest.mark.parametrize('audio_mode',['silent','music'])
+def test_audio_modes_create_real_expected_tracks(fixture,audio_mode):
+    import av
+    source,transcript,tmp_path=fixture
+    music=config.DATA/'music';music.mkdir();(music/'licensed.mp4').write_bytes(source.read_bytes())
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,minimum=5,maximum=6,end=6,preset='crop',audio_mode=audio_mode,music_asset='licensed.mp4' if audio_mode=='music' else None)
+    output=tmp_path/(audio_mode+'.mp4');media.render(source,output,transcript,0,5,req)
+    with av.open(str(output)) as container:assert bool(container.streams.audio)==(audio_mode=='music')
+
+
+def test_pause_removal_really_trims_video_audio_and_captions(fixture):
+    source,_,tmp_path=fixture
+    transcript={'language':'en','segments':[{'start':0,'end':5,'text':' First last','words':[{'word':' First','start':.3,'end':.6},{'word':' last','start':4.3,'end':4.7}]}]}
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,silence_removal=True,preset='crop')
+    output=tmp_path/'without-pauses.mp4';media.render(source,output,transcript,0,5,req)
+    report=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
+    assert report['audio'] and 1<report['duration']<2
+    srt=output.with_suffix('.srt').read_text(encoding='utf-8')
+    assert 'last' in srt and '00:00:04' not in srt
+
+
+def test_smart_camera_path_is_accepted_by_real_ffmpeg(fixture,monkeypatch):
+    from factory import framing
+    source,transcript,tmp_path=fixture
+    monkeypatch.setattr(framing,'trajectory',lambda *_:((202,358,[0,30,60,90,120,150,180,210,240,270]),{'strategy':'face_tracking','detector_fixture':True}))
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,preset='smart')
+    output=tmp_path/'tracking.mp4';media.render(source,output,transcript,0,5,req)
+    assert output.with_suffix('.camera.txt').is_file()
+    media.validate_output(output,5,request=req)
+
+
+def test_corrupted_output_cannot_be_accepted(tmp_path):
+    broken=tmp_path/'broken.mp4';broken.write_bytes(b'not an MP4 container')
+    with pytest.raises(Exception):media.validate_output(broken,5)

@@ -1,174 +1,149 @@
-# AI Content Factory: deployment and limits
+# Deployment and recovery
 
-This integration is not yet accepted as a production-ready 6.0 release.
-See `verification/REPORT.md` for measured results and the acceptance matrix.
-The requested original AI Content Factory repository and its OAuth integrations
-were not present: the selected workspace was empty before OpenShorts was cloned.
-No working authentication files have been replaced or committed.
+See `verification/REPORT.md` for actual acceptance evidence and remaining blockers.
+Existing Drive OAuth was found in the earlier Factory worktree and reused through
+`factory/legacy_drive_oauth.py`. Original client/token files remain unchanged.
+No YouTube channel authorization was available; the user chose to continue without
+a real test publication.
 
-## PC A: controller and local worker
+## PC A
 
-Prerequisites: Windows 11, WSL2, working Docker Desktop Linux engine, enough
-space for Docker images and model weights in addition to the scratch allowance.
-The default path uses CPU/int8 for 4 GB GPU compatibility. NVIDIA acceleration
-is optional and separately configured.
-
-1. Run `powershell -ExecutionPolicy Bypass -File scripts/setup-factory.ps1` once.
-   This preserves an existing `.env` and creates a random controller token only
-   when missing/too short. It does not create Google credentials or contact Google.
-2. Open the existing `.env` to obtain `FACTORY_TOKEN` for the local login. Do not
-   commit it. All normal API and worker endpoints require authentication.
-3. If existing valid Drive OAuth is available, mount the standard authorized-user
-   JSON read-only at `secrets/drive-token.json`. Configure `DRIVE_PARENT_ID` for a
-   shared authorized parent folder, when required. A service-account key or OAuth
-   client-secret-only file is not an authorized-user refresh token. Settings can
-   test access without overwriting the original file. Unknown legacy token formats
-   still require an adapter after the original project is supplied.
-4. Optional YouTube credentials: place each independently authorized standard JSON
-   in `secrets/youtube/<alias>.json`. Settings does not expose token contents.
-   Publisher discovers the actual authenticated channels before accepting a queue
-   item. Do not assume a Drive-only token has YouTube scopes.
-
-Start after initial configuration:
+Windows 11 + WSL2 + Docker Desktop Linux engine, Python/Node only for development.
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-factory.ps1
 docker compose --profile controller up -d --build
 ```
 
-Open [http://localhost:5175](http://localhost:5175). The API binds to loopback on
-port 8000. Ollama has no published host port. SQLite lives in a named data volume;
-scratch is a host bind mount under `scratch/controller` or `scratch/worker`, so
-free-space preflight observes the physical Windows SSD instead of Docker's much
-larger thin virtual filesystem. Whisper/Ollama caches use separate volumes.
+Open http://localhost:5175 and sign in with the generated token in `.env`.
+Settings offers the one-time Ollama model download. Whisper caches on first use.
+The default CPU/int8 path does not require a GPU. Data and model caches persist
+in separate named volumes; scratch binds to the physical host SSD under
+`scratch/controller` for accurate free-space checks.
 
-In Settings, use **Download configured model** once to install `qwen2.5:3b`.
-Until available, highlight analysis explicitly reports heuristic fallback. Model
-pulls report actual downloaded bytes. Whisper small downloads on its first use.
-Normal starts reuse the model caches and usable OAuth refresh credentials.
+Standard Drive credentials: mount an existing authorized-user JSON at
+`secrets/drive-token.json`. Alternatively set `LEGACY_DRIVE_SECRETS_DIR` to the
+existing split-file directory, `DRIVE_OAUTH_CLIENT_FILE=/run/legacy-drive/client.json`
+and `DRIVE_OAUTH_TOKEN_FILE=/run/legacy-drive/token.json`. The mount is read-only.
+Do not replace working credentials. Set `DRIVE_PARENT_ID` only for an authorized
+private destination. Unknown or publicly shared destination permissions block uploads.
 
-## PC B: processing worker
+YouTube: mount independently authorized standard JSON files at
+`secrets/youtube/<alias>.json`, with YouTube upload/channel scopes. Publisher's
+Discover action reads the actual authorized channels. Drive-only authorization
+cannot grant YouTube access. Public/scheduled upload additionally needs explicit
+per-channel public authorization. The default is private and review first.
 
-Copy this project, without its runtime data or credentials. Configure `.env`:
+## PC B
+
+Clone the repository without `.env`, runtime data or credentials. Run setup with
+`-Role worker`, then set the following in its ignored `.env`:
 
 ```dotenv
 CONTROLLER_URL=http://<PC-A-private-or-Tailscale-IP>:8000
-FACTORY_TOKEN=<same-controller-token>
+FACTORY_TOKEN=<existing-controller-token>
 WORKER_ID=worker-b
+DRIVE_PARENT_ID=<authorized-private-shared-parent-if-used>
 ```
 
-On PC A, set `API_BIND` to its specific private/Tailscale IP, and permit port
-8000 only from the authorized worker in the host firewall. Prefer Tailscale for
-encrypted transport. Do not bind an unauthenticated worker API to the Internet.
-The worker makes outbound authenticated calls; it exposes no worker server.
-
-Authorize this machine appropriately for the shared Drive destination. Mount its
-own existing valid token read-only. Configure the same `DRIVE_PARENT_ID`.
+On PC A, bind `API_BIND` to its specific private/Tailscale IP and restrict its
+firewall to authorized workers. Tailscale supplies encrypted transport. The
+worker makes outbound authenticated calls and exposes no worker port.
+Mount appropriately authorized existing Drive tokens read-only on PC B.
 
 ```powershell
 docker compose --profile worker up -d --build
-```
-
-This starts a processing worker plus its local model daemon, without a second
-controller, dashboard, database service, Redis, or GPU pooling. Optional initial
-model installation on PC B:
-
-```powershell
+# One-time model setup on PC B
 docker compose --profile worker exec ollama ollama pull qwen2.5:3b
 ```
 
-Remote workers currently accept URL jobs with Drive storage enabled. Uploaded
-local source files remain assigned to PC A; complete sources are not transferred
-between workers. Remote gameplay assets must be available in that worker's own
-background library. Automatic background synchronization is not implemented.
-Worker registration is implicit in authenticated heartbeat/claim calls.
-Only one lease is active per worker ID. Keep one processing worker per PC.
+No second controller/UI/Postgres/Redis. Each PC has local model caches and one
+heavy pipeline. URL jobs with Drive enabled are eligible for a remote worker;
+controller uploads stay on PC A. No complete source video is transferred between
+PCs. Gameplay/music assets must exist in the selected worker's library; automatic
+asset synchronization is not implemented. Worker registration is automatic.
 
-## Optional GPU acceleration
-
-Requires Docker Desktop/WSL NVIDIA support. The optional image installs pinned
-CUDA user-space libraries for CTranslate2. Actual free VRAM is inspected before
-ASR selects GPU; each ASR chunk runs in its own process and releases model memory
-on exit. Ollama uses CPU, one inference at a time, `keep_alive=0` and 4096 context.
+## Optional GPU
 
 ```powershell
+# PC A
 docker compose -f docker-compose.yml -f compose.gpu.yml --profile controller up -d --build
+# PC B
 docker compose -f docker-compose.yml -f compose.gpu.yml --profile worker up -d --build
 ```
 
-These are alternatives to the default CPU commands. The machine inspected during
-development has RTX 3050 **6 GB**, not the requested 4 GB configuration. GPU
-performance and memory safety on physical 4 GB cards remain unverified. CPU mode
-does not reserve GPU model memory. `FFMPEG_ENCODER=auto` probes NVENC, otherwise
-use `x264`; GPU rendering is not required for a functional CPU deployment.
+The overlay installs pinned CUDA libraries and makes the GPU available to
+Whisper and Ollama. ASR chooses CUDA only with at least 2500 MiB free, otherwise
+CPU/int8. Each chunk exits its subprocess before LLM analysis. Ollama offload is
+bounded to 24 layers using measured free memory with a 1000 MiB reserve, context
+4096, one parallel request, `keep_alive=0`; a GPU server error retries on CPU.
+This is a conservative policy, not a guarantee for every competing GPU workload.
+The available card is RTX 3050 **6 GB**. Physical 4 GB validation remains UNVERIFIED.
+NVENC is optional through `FFMPEG_ENCODER=auto`; x264 is the default.
 
-## Operator workflow
+## Optional narration
 
-Create → confirm rights → probe URL or upload an authorized video → configure
-interval/Shorts/Longs → Generate → Jobs → Editor → review and approve.
-Gameplay requires an authorized MP4 background. Center Crop is an explicit fixed
-center fallback; automatic face tracking is not enabled in this adapter.
-Longs supports explicit source intervals in `start,end` seconds, one per line,
-assembled in chronological order. Source time controls use absolute seconds;
-Editor candidates use offsets from the selected analysis interval.
+Set `WITH_TTS=1` in `.env`, rebuild, then use Settings to download the pinned
+Kokoro model and listen to voice previews. EN/ES voices run on CPU in a separate
+process. Model downloads report actual byte counts and verify SHA-256. Ordinary
+clipping does not require this runtime or model. See `docs/licenses/TTS.md` for
+MIT/Apache weights and optional GPL dependencies. RU/UK narration is unavailable;
+original audio and multilingual captions remain usable. Voice-over is always an
+explicit per-job choice; a TTS failure cannot block unrelated original-audio jobs.
 
-Drive is enabled by default. Missing authorization leaves rendered artifacts in
-BLOCKED with an actionable explanation. Retry resumes from local transcript/
-render checkpoints and persisted Drive sessions. Every uploaded artifact is
-verified by size and MD5 before local job scratch is removed. READY does not
-depend on publishing. Local test/export mode is available by disabling Drive.
+## Operator workflow and recovery
 
-Publisher accepts only approved outputs with verified Drive metadata. It reads
-Drive in bounded 8 MiB ranges directly into YouTube resumable uploads; it does
-not create a complete local MP4 copy. Private is the default. Public/native
-scheduled release requires explicitly enabling public publication for that
-authenticated channel. Daily limits use UTC upload-day accounting. Browser
-schedule inputs are converted from local time to timezone-aware UTC timestamps.
-Automatic generation-to-publishing must be explicitly enabled in the selected
-channel's policy and selected for the particular generation job. It assigns
-future native YouTube slots at least two hours ahead, using the configured
-cadence and daily limit. Manual jobs retain review-before-publication behavior.
-There is no analytics-based posting optimizer or recurring calendar UI.
+Paste URL → automatic metadata → Shorts/Longs + style → confirm source rights →
+Generate → measured Jobs stages → Editor preview → approve → Publisher.
+Advanced options include full VOD, manual intervals, captions, sound modes,
+licensed background/music, hooks and output quality. Preferences exclude source
+URLs, rights assertions, narration text and automatic-publication consent.
 
-Duplicate queue requests share a unique job/output/channel identity. Retry first
-queries the saved upload session, including after a lost final response. An
-expired or uncertain session is blocked as UNCERTAIN and requires reconciliation
-in YouTube Studio. It never blindly inserts another video. Real Google upload
-acceptance remains unverified until valid authorized credentials are supplied.
+Automatic uses an approved gameplay asset when present, otherwise CPU face
+sampling with a smoothed horizontal camera. No detected face falls back to Blur.
+Explicit Crop is fixed center. Largest-face selection is basic: speaker diarization,
+identity tracking and visual-event understanding are not claimed.
 
-## Resource and recovery policy
+Longs ranks global candidates and assembles selected intervals chronologically.
+Silent/no-speech short footage can use Silent Video; longer visual sources require
+manual intervals. The application does not invent narrated content for them.
 
-- 8 GiB scratch allowance and 4 GiB free reserve, configurable per worker.
-- Inputs are limited to a 60-minute processing interval per job; choose another
-  bounded interval for a longer VOD. No silent full-VOD download fallback.
-- Audio-first remote analysis in chunks up to 15 minutes; selected video sections
-  are fetched after ranking. If independent audio is unavailable, bounded muxed
-  sections are used and the strategy is recorded. Downloads stop on budget limits.
-- One heavy pipeline per worker ID; 120-second leases with renewal. Disconnected
-  jobs become BLOCKED; manual retry can safely reassign and repeat bounded stages.
-- Failed/blocked/cancelled unleased scratch expires after 72 hours by default;
-  active jobs and recently touched workspaces are excluded. SQLite metadata is kept.
-- Verified cloud outputs are cleaned locally. Uploaded local originals are not
-  archived by default; once cleaned, layout edits requiring the original need a
-  new upload. URL sources can be fetched again. Unverified local export jobs retain
-  their output and consume the scratch budget until managed by the operator.
-- Large caches are model caches, not a persistent full-source video cache.
-- Progress percentages appear only when a measured numerator/denominator exists;
-  otherwise the stage is indeterminate. No ETA is invented.
+Audio-first chunks are at most 15 minutes with independent JSON checkpoints.
+Full-VOD analysis accepts known source duration up to 24 hours. Failed downloads
+never fall back to downloading a full remote VOD. Default scratch budget 8 GiB,
+free reserve 4 GiB; model cache and Docker images require additional disk space.
+Manual clips without captions skip ASR. Pause removal trims video/audio together
+and rebases word timestamps. Source audio remains the default.
 
-Check health and recent logs:
+Drive uploads rendered videos, thumbnails, transcripts, metadata and selected
+**raw editable intervals**, verifies size/MD5, then removes the local job workspace.
+The full original is not archived. Editor can retrieve a preserved interval with
+bounded/checksummed reads and create a new version after cleanup; trimming cannot
+extend beyond that preserved interval. Older outputs without these sources need
+one re-upload or their original URL. Local exports keep files under scratch.
 
-```powershell
-docker compose --profile controller ps
-docker compose --profile controller logs --tail=80 controller
-docker compose --profile worker logs --tail=80 worker
-```
+Cancel fences the old worker and kills its subprocess group. Retry resumes
+checkpoints. Worker leases expire after 120 seconds into BLOCKED, never blind
+external replay. Unleased failed/cancelled work expires after 72 hours; active
+jobs are excluded and metadata remains. The health endpoint detects a dead local
+worker. Authenticated stage history and transition events survive restarts.
 
-Stop without deleting persistent data:
+Publisher reads Drive in 8 MiB ranges directly into YouTube resumable uploads.
+It stores sessions, reconciles final acknowledgments, enforces daily limits and
+unique job/output/channel identity. UNCERTAIN requires YouTube Studio reconciliation;
+it never blindly inserts a duplicate. YouTube scheduling uses timezone-aware UTC.
+No real YouTube acceptance is claimed from fixture tests.
+
+## Development checks
 
 ```powershell
-docker compose --profile controller down
-docker compose --profile worker down
+.venv/Scripts/python.exe -m pytest factory_tests -q
+.venv/Scripts/python.exe -m compileall -q factory
+.venv/Scripts/python.exe scripts/check-secrets.py
+# dashboard directory
+npm run build -- --config vite.factory.config.js
 ```
 
-Do not use `down -v` unless you deliberately intend to remove data/model volumes.
-Back up the controller SQLite/data volume and keep OAuth files private.
+Retained upstream POSIX tests run on Linux in CI. The actual production UI is
+`factory.html`, built through `vite.factory.config.js`. Deployed images use an
+explicit MIT-core allowlist and exclude upstream `cloud/` code.

@@ -25,6 +25,7 @@ async def lifespan(app):
     if os.environ.get('FACTORY_LOCAL_WORKER','1')=='1':
         thread=threading.Thread(target=local_loop,args=(stop,),daemon=True)
         thread.start()
+        app.state.local_worker=thread
     if os.environ.get('FACTORY_PUBLISHER','1')=='1':
         from .publisher import loop
         threading.Thread(target=loop,args=(stop,),daemon=True).start()
@@ -55,7 +56,9 @@ async def authenticate(request, call_next):
 
 @app.get('/health')
 def health():
-    return {'status':'ok','configured':len(config.TOKEN)>=32}
+    worker=getattr(app.state,'local_worker',None)
+    if worker is not None and not worker.is_alive():raise HTTPException(503,'Local processing worker stopped; inspect controller logs')
+    return {'status':'ok','configured':len(config.TOKEN)>=32,'worker_alive':worker is None or worker.is_alive()}
 
 
 class Login(BaseModel):
@@ -84,7 +87,8 @@ def logout():
 def settings():
     from .model_setup import status
     from .publisher import channels
-    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'reason':'Connect existing YouTube OAuth authorized-user JSON in YOUTUBE_TOKEN_DIR, discover channels, and approve a verified Drive output before queuing. No real YouTube upload has been verified in this environment.'},'limits':{'interval_minutes':60,'concurrent_jobs':1},'notes':['Center crop currently uses fixed center framing; face tracking is not enabled.','GPU model inference is sequential; Ollama uses CPU by default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+    from .tts import status as tts_status
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'reason':'Connect an existing YouTube authorized-user JSON in YOUTUBE_TOKEN_DIR, discover channels, then approve a verified Drive output. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':15,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
 
 
 @app.post('/api/settings/check-ollama')
@@ -97,6 +101,39 @@ def check_ollama():
         return {'available':found,'action':None if found else 'ollama pull '+config.MODEL}
     except (httpx.HTTPError,KeyError,ValueError):
         return {'available':False,'action':'Start Ollama, then run: ollama pull '+config.MODEL}
+
+
+@app.post('/api/tts/setup')
+def tts_setup():
+    from .tts import setup,status
+    if not status()['runtime']:raise HTTPException(409,'Rebuild with WITH_TTS=1 for optional narration. Original audio works without it.')
+    return setup()
+
+
+class VoicePreview(BaseModel):
+    voice:str=Field(pattern=r'^(af_heart|af_bella|am_michael|ef_dora|em_alex)$')
+
+
+@app.post('/api/tts/preview')
+def voice_preview(body:VoicePreview):
+    from .tts import synthesize,VOICES
+    language=VOICES[body.voice]
+    text='A clear, friendly voice for your next video.' if language=='en' else 'Una voz clara y agradable para tu próximo vídeo.'
+    folder=config.DATA/'voice-previews';folder.mkdir(parents=True,exist_ok=True)
+    path=folder/(body.voice+'.wav')
+    try:
+        if not path.is_file():synthesize(text,body.voice,1,language,path)
+    except (ValueError,RuntimeError) as error:raise HTTPException(409,str(error)) from None
+    return {'url':'/api/tts/previews/'+body.voice+'.wav'}
+
+
+@app.get('/api/tts/previews/{name}')
+def voice_file(name:str):
+    from .tts import VOICES
+    if name not in [v+'.wav' for v in VOICES]:raise HTTPException(404,'Unknown voice')
+    path=config.DATA/'voice-previews'/name
+    if not path.is_file():raise HTTPException(404,'Generate the preview first')
+    return FileResponse(path,media_type='audio/wav')
 
 
 @app.post('/api/settings/setup-model')
@@ -150,13 +187,13 @@ def probe(body:Source):
 
 
 @app.post('/api/uploads')
-async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False)):
+async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False),music:bool=Form(False)):
     if not rights_confirmed:
         raise HTTPException(422,'Source/background rights confirmation is required')
     suffix=Path(file.filename or '').suffix.lower()
-    if suffix not in ('.mp4','.mkv','.mov') or (background and suffix!='.mp4'):
+    if suffix not in (('.mp3','.wav','.mp4') if music else ('.mp4','.mkv','.mov')) or (background and suffix!='.mp4'):
         raise HTTPException(422,'Upload MP4/MKV/MOV; backgrounds must be MP4')
-    folder=(config.DATA/'backgrounds') if background else config.SCRATCH/'uploads'
+    folder=config.DATA/'music' if music else ((config.DATA/'backgrounds') if background else config.SCRATCH/'uploads')
     folder.mkdir(parents=True,exist_ok=True)
     name=uuid.uuid4().hex+suffix
     target=folder/name
@@ -167,7 +204,7 @@ async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), bac
                 if target.stat().st_size+len(chunk)>2*1024**3:
                     raise ValueError('Upload exceeds 2 GB; use a bounded source URL or a smaller file')
                 output.write(chunk)
-        if not background:
+        if not background and not music:
             metadata=media.probe('upload:'+name)
         else:
             metadata=None
@@ -184,6 +221,11 @@ def backgrounds():
     return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4')]
 
 
+@app.get('/api/assets/music')
+def music_assets():
+    return [p.name for p in (config.DATA/'music').glob('*') if p.suffix in ('.mp3','.wav','.mp4')]
+
+
 @app.post('/api/jobs',status_code=201)
 def create(body:JobRequest):
     body.asr_model=body.asr_model or config.ASR_MODEL
@@ -194,9 +236,13 @@ def create(body:JobRequest):
         if not policy or not policy['public_allowed'] or not policy['automatic']:
             raise HTTPException(409,'Explicitly enable automatic public publishing for this authenticated channel first')
     try:
-        if not media.local_source(body.source):
+        if body.source.startswith('edit:'):
+            _,origin,index=body.source.split(':')
+            original=store.get(origin)
+            if not original or original['state']!='READY' or not original['result']['outputs'][int(index)].get('edit_source'):raise ValueError('Editable source unavailable; re-upload this older source once')
+        elif not media.local_source(body.source):
             media.validate_url(body.source)
-    except ValueError as error:
+    except (ValueError,IndexError,KeyError) as error:
         raise HTTPException(422,str(error)) from None
     try:
         preflight()
@@ -330,6 +376,7 @@ class Checkpoint(BaseModel):
     error:str|None=Field(default=None,max_length=500)
     current:float|None=None
     total:float|None=None
+    stage_update:dict|None=None
 
 
 @app.post('/api/workers/jobs/{jid}')

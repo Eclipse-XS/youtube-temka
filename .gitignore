@@ -15,6 +15,9 @@ scratch/
 secrets/
 *.upload-session
 verification/*.wav
+verification/*.mp3
+verification/*build*.log
+verification/linux-tests.log
 verification/*token*
 verification/runtime/
 verification/test-output/

@@ -102,7 +102,7 @@ class Drive:
         self.private_destination(root)
         folders={name:self.folder(name,root) for name in ('sources','jobs','backgrounds','archive')}
         job=self.folder(jid,folders['jobs'])
-        return {'job':job,**{name:self.folder(name,job) for name in ('subtitles','shorts','longs','thumbnails')}}
+        return {'job':job,**{name:self.folder(name,job) for name in ('subtitles','shorts','longs','thumbnails','sources')}}
 
     def private_destination(self,folder_id):
         item=self.request('GET',BASE+'/files/'+folder_id,params={'fields':'id,permissions(type)','supportsAllDrives':'true'}).json()

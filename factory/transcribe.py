@@ -43,7 +43,10 @@ def main():
     for s in segments:
         out.append({'start':float(s.start),'end':float(s.end),'text':s.text,'confidence':float(s.avg_logprob), 'words':merge_continuation_words([{'word':w.word,'start':float(w.start),'end':float(w.end)} for w in (s.words or [])])})
     from jsonfile import write_json_atomic
-    write_json_atomic(output,{'language':info.language,'segments':out,'text':' '.join(s['text'] for s in out)},ensure_ascii=True)
+    from subtitles import get_whisper_config
+    import transcribe_backends
+    actual=get_whisper_config()
+    write_json_atomic(output,{'language':info.language,'segments':out,'text':' '.join(s['text'] for s in out),'inference':{'device':'cpu' if transcribe_backends._whisper_force_cpu else actual['device'],'compute_type':actual['compute_type'],'model':actual['model_size']}},ensure_ascii=True)
 
 
 if __name__=='__main__':
