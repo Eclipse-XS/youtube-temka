@@ -676,6 +676,9 @@ function App() {
                     : chosen.result.analysis}
                 </p>
                 {chosen.result.selection_summary && <p className="muted">{chosen.result.selection_summary}</p>}
+                {(chosen.result.candidates || []).some((c) => c.editorial_review_required || c.selection_method === "heuristic" || c.score < 50 || c.confidence < .6) && (
+                  <p className="warning">Відбір або назва потребує редакторської перевірки. Перевірте уривок і назву перед схваленням; автоматична публікація таких уривків очікує схвалення.</p>
+                )}
                 {chosen.error && <p className="error">{chosen.error}</p>}
                 <div className="outputs">
                   {(chosen.result.outputs || []).map((o, i) => (

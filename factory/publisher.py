@@ -104,6 +104,12 @@ def valid_title(title):
     return title
 
 
+def needs_editorial_review(job,index):
+    candidates=job['result'].get('candidates',[])
+    selected=candidates if job['request'].get('mode')=='longs' else candidates[index:index+1]
+    return any(c.get('editorial_review_required') or c.get('selection_method')=='heuristic' or c.get('score',100)<50 or c.get('confidence',1)<.6 for c in selected)
+
+
 def edit(pid,title,description,privacy='private',publish_at=None):
     """Edit only before remote effects; an expired schedule can be corrected safely."""
     status=publication_status(privacy,publish_at)
@@ -137,6 +143,8 @@ def enqueue(jid,index,channel,title,description,privacy='private',publish_at=Non
         raise ValueError('Verify the Drive upload before publishing')
     if not output.get('approved') and not automatic:
         raise ValueError('Approve the output in Editor before publication')
+    if automatic and not output.get('approved') and needs_editorial_review(job,index):
+        raise ValueError('Weak or ungrounded selection requires editorial approval before automatic publication')
     status=publication_status(privacy,publish_at)
     snippet={'title':valid_title(title[:100]),'description':credited_description(description,job['request'].get('source_attribution','')),'categoryId':'22'}
     language=job['result'].get('language')
@@ -387,6 +395,7 @@ def auto_queue():
         channel=job['request'].get('publish_channel')
         try:
             for index,output in enumerate(job['result'].get('outputs',[])):
+                if not output.get('approved') and needs_editorial_review(job,index):continue
                 enqueue(job['id'],index,channel,output['title'][:100],job['result'].get('source',{}).get('title',''),automatic=True)
         except ValueError:
             # A revoked policy does not change READY rendering state or publish.

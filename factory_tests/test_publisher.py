@@ -271,3 +271,18 @@ def test_multilingual_metadata_enforces_youtube_byte_limit_before_upload(ready):
     with pytest.raises(ValueError,match='HTML'):
         publisher.enqueue(jid,0,'channel-fixture','Title','<b>Invalid description</b>')
     assert publisher.history()==[]
+
+
+def test_weak_selection_waits_for_editorial_approval_even_with_automatic_policy(ready):
+    jid,_,_=ready
+    publisher.set_policy('channel-fixture',3,True,True)
+    store.approve(jid,0,False)
+    with store.connect() as db:
+        result=json.loads(db.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()['result'])
+        result['candidates']=[{'score':9,'confidence':1,'selection_method':'ollama'}]
+        db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result),jid))
+    with pytest.raises(ValueError,match='editorial approval'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','',automatic=True)
+    assert publisher.history()==[]
+    store.approve(jid,0,True)
+    assert publisher.enqueue(jid,0,'channel-fixture','Reviewed title','',automatic=True)

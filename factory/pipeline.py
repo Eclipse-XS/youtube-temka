@@ -25,7 +25,8 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
         return json.loads(path.read_text(encoding='utf-8'))
     duration=end-request.start
     segments=[];language=request.language
-    if metadata.get('has_audio',True) and not (request.intervals and not request.captions):
+    silent_short=request.audio_mode=='silent' and not request.captions and request.minimum<=duration<=request.maximum
+    if metadata.get('has_audio',True) and not (request.intervals and not request.captions) and not silent_short:
         chunks=math.ceil(duration/900)
         for index in range(chunks):
             offset=index*900;chunk_end=min(offset+900,duration)
@@ -50,7 +51,7 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
             progress.tick(chunk_end,duration)
         progress.done('extraction');progress.done('transcription')
     else:
-        progress.done('extraction','skipped','No audio or explicit manual intervals without captions')
+        progress.done('extraction','skipped','No audio, manual intervals without captions, or an explicitly silent short source')
         progress.done('transcription','skipped','No speech analysis required')
     transcript={'language':language if segments or request.language else None,'segments':segments,'text':' '.join(s['text'] for s in segments)}
     write_json_atomic(path,transcript,ensure_ascii=True)
@@ -106,6 +107,11 @@ def process(claim,assets=None):
         analysis_checkpoint=root/'analysis.json'
         if analysis_checkpoint.is_file():
             result=json.loads(analysis_checkpoint.read_text(encoding='utf-8'));candidates=result['candidates']
+        elif job['result'].get('candidates'):
+            # Another worker may own the old scratch volume. The controller's
+            # saved selection still fences clip identity across that handoff.
+            result={key:job['result'][key] for key in ('candidates','analysis','model','analysis_outcome','analysis_diagnostics','selection_summary') if key in job['result']}
+            candidates=result['candidates']
         elif request.intervals:
             if any(b>end for a,b in request.intervals):raise ValueError('Manual interval extends beyond the actual source duration')
             candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in sorted(request.intervals)]

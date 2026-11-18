@@ -62,7 +62,7 @@ services:
     build:
       context: .
       dockerfile: deploy/factory-web.Dockerfile
-    ports: ['127.0.0.1:5175:80']
+    ports: ['${WEB_BIND:-127.0.0.1}:5175:80']
     depends_on:
       controller:
         condition: service_healthy

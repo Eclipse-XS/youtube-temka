@@ -185,6 +185,14 @@ multilingual descriptions receive a preflight error rather than silent truncatio
 
 ## Development checks
 
+For the exact Windows worker setup, private binding, shared authorization and
+physical acceptance limits, see [PC B setup](PC_B_WINDOWS.md). Two isolated local
+Docker workers have been exercised; this does not establish two physical PCs.
+
+Weak, heuristic or ungrounded selections require Editor approval even when
+automatic publishing is enabled. A source quote replaces an unsupported model
+title; that fallback is visible and is not a claim of editorial quality.
+
 ```powershell
 .venv/Scripts/python.exe -m pytest factory_tests -q
 .venv/Scripts/python.exe -m compileall -q factory

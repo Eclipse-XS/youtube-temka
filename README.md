@@ -46,6 +46,7 @@ A working legacy split Drive client/token integration has been reused and verifi
 ## Guides and development
 
 - [Deployment: PC A / PC B, GPU, OAuth, recovery](docs/FACTORY_DEPLOYMENT.md)
+- [Exact Windows PC B setup and physical acceptance limits](docs/PC_B_WINDOWS.md)
 - [Verification and remaining blockers](verification/REPORT.md)
 - [Integration provenance](THIRD_PARTY_FACTORY.md)
 - [Optional TTS licenses](docs/licenses/TTS.md)

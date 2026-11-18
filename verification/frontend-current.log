@@ -10,12 +10,7 @@ Browserslist: browsers data (caniuse-lite) is 11 months old. Please run:
 ✓ 1474 modules transformed.
 rendering chunks...
 computing gzip size...
-dist/factory.html                   0.41 kB │ gzip:  0.28 kB
+dist/factory.html                   0.41 kB │ gzip:  0.27 kB
 dist/assets/factory-d034e146.css    4.99 kB │ gzip:  1.72 kB
-dist/assets/factory-a025917b.js   184.60 kB │ gzip: 59.06 kB
-✓ built in 10.03s
-npm notice
-npm notice New major version of npm available! 10.9.8 -> 12.2.3
-npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
-npm notice To update run: npm install -g npm@12.2.3
-npm notice
+dist/assets/factory-4f0fed4d.js   184.92 kB │ gzip: 59.17 kB
+✓ built in 8.84s

@@ -200,3 +200,36 @@ def test_bounded_separate_webm_streams_produce_exact_mp4_destination(fixture,mon
     finally:server.shutdown();server.server_close();thread.join(timeout=2)
     assert destination.is_file() and not destination.with_suffix('.mp4.mkv').exists()
     media.validate_output(destination,5)
+
+
+def test_worker_handoff_uses_controller_selection_without_old_scratch(fixture,monkeypatch):
+    from factory import pipeline
+    _,transcript,_=fixture
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,preset='crop')
+    job=store.create(req.model_dump());first=store.claim('worker-a')
+    frozen=[{'start_seconds':0,'end_seconds':5,'title':'Controller-frozen interval'}]
+    store.update(job['id'],first['lease'],state='FAILED',result={'analysis':'ollama','candidates':frozen})
+    assert store.retry(job['id'])
+    root=config.SCRATCH/job['id'];root.mkdir()
+    (root/'transcript.json').write_text(json.dumps(transcript),encoding='utf-8')
+    assert not (root/'analysis.json').exists()
+    monkeypatch.setattr(pipeline,'analyze',lambda *_:pytest.fail('Worker handoff must not rerank persisted output identities'))
+    pipeline.process(store.claim('worker-b'))
+    complete=store.get(job['id'])
+    assert complete['state']=='READY',complete['error']
+    assert complete['worker']=='worker-b' and complete['result']['candidates']==frozen
+    media.validate_output(root/'clip-1.mp4',5)
+
+
+def test_silent_short_without_captions_needs_no_speech_model(fixture,monkeypatch):
+    from factory import pipeline
+    original=media.run
+    def checked(args,*a,**kw):
+        assert 'factory.transcribe' not in args,'Silent short sources without captions must not require ASR'
+        return original(args,*a,**kw)
+    monkeypatch.setattr(media,'run',checked)
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,preset='crop',audio_mode='silent',captions=False)
+    job=store.create(req.model_dump());pipeline.process(store.claim('silent-short'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    assert done['result']['outputs'][0]['validation']['audio'] is False
