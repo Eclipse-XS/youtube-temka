@@ -161,7 +161,8 @@ def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatc
     pipeline.process(store.claim('resumed-worker'))
     result=store.get(job['id'])
     assert result['state']=='READY',result['error']
-    assert result['result']['outputs'][0]['title']=='Frozen selection'
+    assert result['result']['candidates'][0]['title']=='Frozen selection'
+    assert result['result']['outputs'][0]['publishing_metadata']['title']
 
 
 def test_pipeline_renders_synchronized_background_and_music_without_local_library(fixture):

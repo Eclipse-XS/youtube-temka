@@ -17,6 +17,7 @@ x-worker-environment: &worker-environment
   DRIVE_OAUTH_TOKEN_FILE: ${DRIVE_OAUTH_TOKEN_FILE:-}
   DRIVE_PARENT_ID: ${DRIVE_PARENT_ID:-}
   YOUTUBE_TOKEN_DIR: /run/secrets/youtube
+  YOUTUBE_ANALYTICS_TOKEN_DIR: /run/secrets/analytics
   FFMPEG_ENCODER: ${FFMPEG_ENCODER:-x264}
 services:
   ollama:

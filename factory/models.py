@@ -31,6 +31,8 @@ class JobRequest(BaseModel):
     source_category: Literal['auto','podcast','stream','gameplay','visual'] = 'auto'
     background: str | None = Field(default=None, pattern=r'^[a-zA-Z0-9_-]+\.mp4$')
     language: str | None = Field(default=None, pattern=r'^[a-z]{2,3}$')
+    metadata_language: str | None = Field(default=None,pattern=r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$')
+    metadata_preferences: dict = Field(default_factory=dict)
     captions: bool = True
     save_drive: bool = True
     publish_channel: str | None = Field(default=None,pattern=r'^[A-Za-z0-9_-]{1,100}$')

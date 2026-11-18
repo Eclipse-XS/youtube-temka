@@ -15,7 +15,9 @@ import CreatePage from "./factory/CreatePage.jsx";
 import StageProgress from "./factory/StageProgress.jsx";
 import VoiceSettings from "./factory/VoiceSettings.jsx";
 import OutputEditor from "./factory/OutputEditor.jsx";
-import PublicationEditor from "./factory/PublicationEditor.jsx";
+import PublisherPanel from "./factory/PublisherPanel.jsx";
+import MetadataEditor from "./factory/MetadataEditor.jsx";
+import AnalyticsPanel from "./factory/AnalyticsPanel.jsx";
 
 async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
@@ -50,271 +52,9 @@ const pages = [
   ["Editor", Scissors],
   ["Library", FolderOpen],
   ["Publisher", Upload],
+  ["Analytics", Activity],
   ["Settings", Settings],
 ];
-function PublisherPanel({ outputs, settings, act }) {
-  const [data, setData] = useState({ channels: [], publications: [] }),
-    [channel, setChannel] = useState(""),
-    [output, setOutput] = useState(""),
-    [title, setTitle] = useState(""),
-    [description, setDescription] = useState(""),
-    [privacy, setPrivacy] = useState("private"),
-    [when, setWhen] = useState(""),
-    [daily, setDaily] = useState(3),
-    [automatic, setAutomatic] = useState(false),
-    [cadence, setCadence] = useState(120),
-    [allowPublic, setAllowPublic] = useState(false);
-  const refresh = async () => setData(await api("/publisher"));
-  useEffect(() => {
-    refresh().catch(() => {});
-    const interval = setInterval(() => refresh().catch(() => {}), 3000);
-    return () => clearInterval(interval);
-  }, []);
-  const eligible = outputs.filter(
-    (o) => o.approved && o.job.result.cloud_verified,
-  );
-  const current = eligible.find((o) => o.job.id + ":" + o.index === output);
-  const policy = data.channels.find((c) => c.id === channel);
-  return (
-    <>
-      <section>
-        <h2>Підключені YouTube-канали</h2>
-        <p>{settings?.publishing.reason}</p>
-        <button
-          onClick={() =>
-            act(async () => {
-              const result = await post("/publisher/discover");
-              await refresh();
-              if (result.errors.length)
-                throw new Error(
-                  result.errors.map((e) => e.alias + ": " + e.error).join("; "),
-                );
-            })
-          }
-        >
-          Перевірити OAuth і знайти канали
-        </button>
-        <label>
-          Канал
-          <select
-            value={channel}
-            onChange={(e) => {
-              setChannel(e.target.value);
-              const p = data.channels.find((c) => c.id === e.target.value);
-              setDaily(p?.daily_limit || 3);
-              setAllowPublic(!!p?.public_allowed);
-              setAutomatic(!!p?.automatic);
-              setCadence(p?.interval_minutes || 120);
-            }}
-          >
-            <option value="">Виберіть авторизований канал</option>
-            {data.channels.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        {policy && (
-          <>
-            <label>
-              Ліміт завантажень на добу
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={daily}
-                onChange={(e) => setDaily(+e.target.value)}
-              />
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={allowPublic}
-                onChange={(e) => setAllowPublic(e.target.checked)}
-              />
-              Я явно дозволяю публічні та заплановані публікації на цьому каналі
-            </label>
-            <button
-              onClick={() =>
-                act(async () => {
-                  await post("/publisher/channels/" + channel + "/policy", {
-                    daily_limit: daily,
-                    public_allowed: allowPublic,
-                    automatic,
-                    interval_minutes: cadence,
-                  });
-                  await refresh();
-                })
-              }
-            >
-              Зберегти політику каналу
-            </button>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={automatic}
-                onChange={(e) => setAutomatic(e.target.checked)}
-              />
-              Я явно вмикаю автоматичну чергу для нових завдань цього каналу
-            </label>
-            <label>
-              Інтервал автоматичних релізів, хвилини
-              <input
-                type="number"
-                min="30"
-                max="1440"
-                value={cadence}
-                onChange={(e) => setCadence(+e.target.value)}
-              />
-            </label>
-            <small>
-              Автоматичний режим призначає майбутні слоти щонайменше через 2
-              години з урахуванням інтервалу та добового ліміту.
-            </small>
-          </>
-        )}
-      </section>
-      <section>
-        <h2>Review before publication</h2>
-        <p>
-          До черги потрапляють схвалені відео з перевіреною копією в Drive. За
-          замовчуванням YouTube-відео буде приватним.
-        </p>
-        <label>
-          Схвалене відео
-          <select
-            value={output}
-            onChange={(e) => {
-              setOutput(e.target.value);
-              const o = eligible.find(
-                (o) => o.job.id + ":" + o.index === e.target.value,
-              );
-              setTitle((o?.title || "").slice(0, 100));
-              setDescription(o?.job.request.source_attribution || "");
-            }}
-          >
-            <option value="">Виберіть відео</option>
-            {eligible.map((o) => (
-              <option key={o.job.id + o.name} value={o.job.id + ":" + o.index}>
-                {o.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Назва
-          <input
-            maxLength="100"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </label>
-        <label>
-          Опис / хештеги
-          <textarea
-            maxLength="5000"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </label>
-        <p className="muted">Зазначене авторство джерела зберігається в описі автоматично.</p>
-        <div className="grid">
-          <label>
-            Видимість
-            <select
-              value={privacy}
-              onChange={(e) => setPrivacy(e.target.value)}
-            >
-              <option value="private">Private</option>
-              <option value="unlisted">Unlisted</option>
-              <option value="public" disabled={!policy?.public_allowed}>
-                Public
-              </option>
-            </select>
-          </label>
-          <label>
-            Публічний реліз за місцевим часом
-            <input
-              type="datetime-local"
-              disabled={!policy?.public_allowed}
-              value={when}
-              onChange={(e) => setWhen(e.target.value)}
-            />
-          </label>
-        </div>
-        <button
-          className="primary"
-          disabled={!current || !policy || !title}
-          onClick={() =>
-            act(async () => {
-              await post("/publisher/queue", {
-                job: current.job.id,
-                output: current.index,
-                channel,
-                title,
-                description,
-                privacy,
-                publish_at: when ? new Date(when).toISOString() : null,
-              });
-              await refresh();
-            })
-          }
-        >
-          Додати до черги YouTube
-        </button>
-      </section>
-      <h2>Черга та історія</h2>
-      {data.publications.map((p) => (
-        <section key={p.id}>
-          <b>{p.metadata.snippet.title}</b>
-          <p>
-            {p.state} ·{" "}
-            {p.metadata.status.publishAt || p.metadata.status.privacyStatus}
-          </p>
-          {p.total > 0 && (
-            <>
-              <progress max={p.total} value={p.current} />
-              <small>
-                {p.current.toLocaleString()} / {p.total.toLocaleString()} bytes
-              </small>
-            </>
-          )}
-          {p.error && <p className="error">{p.error}</p>}
-          {p.editable && <PublicationEditor publication={p} api={api} act={act} refresh={refresh} />}
-          {p.video_id && (
-            <a
-              target="_blank"
-              rel="noreferrer"
-              href={"https://www.youtube.com/watch?v=" + p.video_id}
-            >
-              YouTube
-            </a>
-          )}
-          {p.state === "FAILED" && (
-            <button
-              onClick={() =>
-                act(async () => {
-                  await post("/publisher/" + p.id + "/retry");
-                  await refresh();
-                })
-              }
-            >
-              Продовжити збережену сесію
-            </button>
-          )}
-          {p.state === "UNCERTAIN" && (
-            <p className="warning">
-              Перевірте YouTube Studio перед новим завантаженням. Автоматичний
-              повтор заблоковано.
-            </p>
-          )}
-        </section>
-      ))}
-    </>
-  );
-}
-
 function ModelConfiguration({ settings, act }) {
   const [ollama, setOllama] = useState(settings?.ollama_model || "qwen2.5:3b");
   const [whisper, setWhisper] = useState(settings?.whisper_model || "small");
@@ -633,6 +373,7 @@ function App() {
             ))}
           </>
         )}
+        {page === 'Analytics' && <AnalyticsPanel api={api} post={post} act={act}/>}
         {page === "Create" && (
           <CreatePage
             api={api}
@@ -703,6 +444,7 @@ function App() {
                         </a>
                       )}
                       <h3>{o.title}</h3>
+                      <MetadataEditor job={chosen} output={o} index={i} api={api} post={post} act={act} onSaved={refresh}/>
                       <OutputEditor
                         job={chosen}
                         output={o}
@@ -916,7 +658,7 @@ function App() {
           </>
         )}
         {page === "Publisher" && (
-          <PublisherPanel outputs={outputs} settings={settings} act={act} />
+          <PublisherPanel outputs={outputs} settings={settings} act={act} api={api} post={post} refreshJobs={refresh} />
         )}
         {page === "Settings" && (
           <>

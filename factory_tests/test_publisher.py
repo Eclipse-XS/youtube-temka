@@ -42,7 +42,7 @@ def test_concurrent_queue_requests_create_one_publication(ready):
     assert 'session' not in publisher.history()[0]
 
 
-def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,wrong_channel=False):
+def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,wrong_channel=False,snippet=None):
     calls={'insert':0,'range':[],'put':0,'finished':False}
     monkeypatch.setattr(publisher,'CHUNK',8)
     monkeypatch.setattr(publisher,'token_file',lambda alias:alias)
@@ -51,9 +51,12 @@ def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,
         if path.endswith('/channels'):
             return httpx.Response(200,json={'items':[{'id':'wrong' if wrong_channel else 'channel-fixture'}]})
         if path.endswith('/videos') and request.method=='GET':
-            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture'},'status':{'privacyStatus':'private','uploadStatus':'uploaded'}}]})
+            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture',**(snippet or {})},'status':{'privacyStatus':'private','uploadStatus':'uploaded'}}]})
+        if path.endswith('/videoCategories'):
+            return httpx.Response(200,json={'items':[{'id':'28','snippet':{'assignable':True}}]})
         if path.endswith('/videos') and request.method=='POST':
             calls['insert']+=1
+            calls['body']=json.loads(request.content)
             return httpx.Response(200,headers={'Location':'https://www.googleapis.com/upload/fixture'})
         if path.endswith('/files/drive-fixture') and 'alt' not in request.url.params:
             return httpx.Response(200,json=remote)
@@ -87,6 +90,79 @@ def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,
             self.client.close()
     monkeypatch.setattr(publisher,'Drive',Google)
     return calls
+
+
+def strict_draft(jid):
+    from factory_tests.test_metadata import context,draft
+    from factory.metadata import finalize
+    with store.connect() as db:
+        result=json.loads(db.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()['result'])
+        result['outputs'][0]['publishing_metadata']={**finalize(draft(),context()).model_dump(),'version':'fixture-v1'}
+        db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result),jid))
+
+
+def test_strict_metadata_sent_and_verified_without_internal_fields(ready,monkeypatch):
+    jid,data,remote=ready;strict_draft(jid)
+    pid=publisher.enqueue(jid,0,'channel-fixture')
+    expected=publisher.history()[0]['metadata']['snippet']
+    calls=install_transport(monkeypatch,data,remote,snippet={**expected,'tags':list(reversed(expected['tags']))})
+    publisher.upload(publisher.claim())
+    assert publisher.history()[0]['state']=='PUBLISHED'
+    assert calls['body']=={'snippet':expected,'status':{'privacyStatus':'private','selfDeclaredMadeForKids':False}}
+    assert expected['categoryId']=='28' and expected['defaultAudioLanguage']=='en'
+    assert expected['defaultLanguage']=='en' and expected['tags']==['launch','engineers']
+
+
+def test_delayed_remote_tags_reconcile_existing_identity_without_insert(ready,monkeypatch):
+    jid,data,remote=ready;strict_draft(jid)
+    pid=publisher.enqueue(jid,0,'channel-fixture');expected=publisher.history()[0]['metadata']['snippet']
+    calls=install_transport(monkeypatch,data,remote,snippet={**expected,'tags':[]})
+    publisher.upload(publisher.claim())
+    assert publisher.history()[0]['state']=='UNCERTAIN' and calls['insert']==1
+    assert publisher.retry(pid) is False
+    calls=install_transport(monkeypatch,data,remote,snippet=expected)
+    publisher.reconcile(pid)
+    row=publisher.history()[0]
+    assert row['state']=='PUBLISHED' and row['error'] is None
+    assert calls['insert']==calls['put']==0 and not calls['range']
+
+
+def test_versioned_draft_cannot_bypass_approval_through_queue_editor(ready):
+    jid,_,_=ready;strict_draft(jid)
+    pid=publisher.enqueue(jid,0,'channel-fixture')
+    with pytest.raises(ValueError,match='versioned metadata'):
+        publisher.edit(pid,'Unsupported new claim','Changed description')
+    assert publisher.history()[0]['metadata']['metadata_version']=='fixture-v1'
+
+
+def test_revised_draft_retains_automatic_native_schedule(ready):
+    jid,_,_=ready
+    publisher.set_policy('channel-fixture',3,True,True)
+    pid=publisher.enqueue(jid,0,'channel-fixture',automatic=True)
+    with store.connect() as db:db.execute("UPDATE publications SET state='DRAFT' WHERE id=?",(pid,))
+    assert publisher.enqueue(jid,0,'channel-fixture',automatic=True)==pid
+    assert publisher.history()[0]['metadata']['status'].get('publishAt')
+
+
+def test_withdrawing_approval_stops_a_queue_without_remote_effects(ready):
+    jid,_,_=ready
+    publisher.enqueue(jid,0,'channel-fixture')
+    store.approve(jid,0,False)
+    assert publisher.history()[0]['state']=='DRAFT'
+    assert publisher.claim() is None
+
+
+def test_revision_or_approval_race_does_not_queue_a_stale_snapshot(ready,monkeypatch):
+    jid,_,_=ready
+    original=store.get
+    def race(key):
+        snapshot=original(key)
+        store.approve(key,0,False)
+        return snapshot
+    monkeypatch.setattr(store,'get',race)
+    with pytest.raises(ValueError,match='changed while queueing'):
+        publisher.enqueue(jid,0,'channel-fixture')
+    assert publisher.history()==[]
 
 
 def test_bounded_drive_to_private_youtube_and_remote_verification(ready,monkeypatch):
@@ -140,13 +216,13 @@ def test_automatic_queue_requires_explicit_policy_and_respects_daily_slots(ready
     jid,_,_=ready
     with pytest.raises(ValueError,match='explicit public'):
         publisher.set_policy('channel-fixture',2,False,True)
-    publisher.set_policy('channel-fixture',2,True,True,120)
+    publisher.set_policy('channel-fixture',2,True,True,120,preferences={'auto_approve':True,'review_first':False})
     with store.connect() as db:
         row=db.execute('SELECT request,result FROM jobs WHERE id=?',(jid,)).fetchone()
         req=json.loads(row['request'])
         req.update(publish_automatic=True,publish_channel='channel-fixture')
         result=json.loads(row['result'])
-        result['outputs']=[{**result['outputs'][0],'name':f'clip-{i}.mp4','approved':False} for i in range(5)]
+        result['outputs']=[{**result['outputs'][0],'name':f'clip-{i}.mp4','approved':False,'editorial':{'technical_valid':True,'status':'READY_FOR_REVIEW','review_required':False}} for i in range(5)]
         db.execute('UPDATE jobs SET request=?,result=? WHERE id=?',(json.dumps(req),json.dumps(result),jid))
     publisher.auto_queue()
     publisher.auto_queue()

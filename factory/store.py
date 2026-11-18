@@ -38,6 +38,23 @@ def connect():
             job TEXT NOT NULL, key TEXT NOT NULL, status TEXT NOT NULL,
             started REAL, finished REAL, current REAL, total REAL, unit TEXT,
             message TEXT, PRIMARY KEY(job,key))''')
+        db.execute('''CREATE TABLE IF NOT EXISTS metadata_versions (
+            job TEXT NOT NULL, output INTEGER NOT NULL, version TEXT NOT NULL,
+            metadata TEXT NOT NULL, provenance TEXT NOT NULL, created REAL NOT NULL,
+            manual INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(job,output,version))''')
+        db.execute('''CREATE TABLE IF NOT EXISTS channel_preferences (
+            channel TEXT PRIMARY KEY, preferences TEXT NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS analytics_connections (
+            channel TEXT PRIMARY KEY, alias TEXT NOT NULL, title TEXT NOT NULL,
+            last_sync REAL, last_attempt REAL, state TEXT NOT NULL DEFAULT 'CONNECTED',
+            error TEXT, progress INTEGER NOT NULL DEFAULT 0, total INTEGER)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS analytics_videos (
+            channel TEXT NOT NULL, video TEXT NOT NULL, data TEXT NOT NULL,
+            seen REAL NOT NULL, PRIMARY KEY(channel,video))''')
+        db.execute('''CREATE TABLE IF NOT EXISTS analytics_reports (
+            channel TEXT PRIMARY KEY, report TEXT NOT NULL, seen REAL NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS publication_artifacts (
+            publication TEXT PRIMARY KEY, state TEXT NOT NULL, error TEXT, seen REAL NOT NULL)''')
         yield db
 
 
@@ -100,6 +117,12 @@ def update(jid, lease, state=None, result=None, error=None, current=None, total=
             raise InterruptedError('Job cancelled or worker lease lost')
         value = json.loads(row['result'])
         if result:
+            result=json.loads(json.dumps(result,ensure_ascii=False))
+            for index,output in enumerate(result.get('outputs',[])):
+                metadata=output.get('publishing_metadata')
+                if metadata:
+                    provenance=metadata.pop('_provenance',{})
+                    db.execute('INSERT OR IGNORE INTO metadata_versions VALUES(?,?,?,?,?,?,?)',(jid,index,metadata['version'],json.dumps(metadata,ensure_ascii=False),json.dumps(provenance,ensure_ascii=False),time.time(),0))
             value.update(result)
         if state is None:
             if current is None:
@@ -162,5 +185,42 @@ def approve(jid,index,value):
         if not row or row['state']!='READY':
             raise ValueError('Only a completed output can be approved')
         result=json.loads(row['result'])
+        editorial=result['outputs'][index].get('editorial',{})
+        if value and editorial.get('technical_valid') is False:raise ValueError('Hard technical validations failed; re-render before approval')
+        if value and editorial.get('status')=='REJECTED':raise ValueError('Rejected or duplicate output cannot be approved; create a corrected version')
         result['outputs'][index]['approved']=value
+        if editorial:
+            editorial['human_reviewed']=bool(value)
+            editorial['status']='READY_FOR_PUBLISHING' if value and result.get('cloud_verified') else 'APPROVED' if value else 'NEEDS_REVIEW' if editorial.get('issues') else 'READY_FOR_REVIEW'
         db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),jid))
+        if not value:
+            db.execute("UPDATE publications SET state='DRAFT',error='Approval withdrawn; review and queue again' WHERE job=? AND output=? AND state IN ('QUEUED','FAILED','RETRYING') AND session IS NULL AND video_id IS NULL",(jid,index))
+
+
+def metadata_history(jid,index):
+    with connect() as db:
+        return [{'version':r['version'],'metadata':json.loads(r['metadata']),'provenance':json.loads(r['provenance']),'created':r['created'],'manual':bool(r['manual'])} for r in db.execute('SELECT * FROM metadata_versions WHERE job=? AND output=? ORDER BY created DESC',(jid,index))]
+
+
+def revise_metadata(jid,index,metadata,manual=True):
+    """A revision invalidates old approval; queued remote effects are immutable."""
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT state,result FROM jobs WHERE id=?',(jid,)).fetchone()
+        if not row or row['state']!='READY':raise ValueError('Only completed outputs can be edited')
+        if db.execute("SELECT 1 FROM publications WHERE job=? AND output=? AND (session IS NOT NULL OR video_id IS NOT NULL OR state='PUBLISHING')",(jid,index)).fetchone():raise ValueError('Publication already has external effects; its metadata cannot be changed')
+        result=json.loads(row['result']);output=result['outputs'][index]
+        metadata=json.loads(json.dumps(metadata,ensure_ascii=False));provenance=metadata.pop('_provenance',{})
+        db.execute('INSERT INTO metadata_versions VALUES(?,?,?,?,?,?,?)',(jid,index,metadata['version'],json.dumps(metadata,ensure_ascii=False),json.dumps(provenance,ensure_ascii=False),time.time(),int(manual)))
+        output['publishing_metadata']=metadata;output['title']=metadata['title'];output['approved']=False
+        output['editorial']={**output.get('editorial',{}),'status':'NEEDS_REVIEW','review_required':True,'human_reviewed':False}
+        db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),jid))
+        # Do not silently change an already reviewed publication. Stop its queue
+        # entry until the operator approves/requeues the revised draft.
+        db.execute("UPDATE publications SET state='DRAFT',error='Output metadata changed; approve the revision and queue again' WHERE job=? AND output=? AND session IS NULL AND video_id IS NULL",(jid,index))
+
+
+def preferences(channel):
+    with connect() as db:
+        row=db.execute('SELECT preferences FROM channel_preferences WHERE channel=?',(channel,)).fetchone()
+        return json.loads(row['preferences']) if row else {}

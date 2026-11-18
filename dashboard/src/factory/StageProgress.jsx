@@ -9,7 +9,9 @@ const stages = [
   ["captions_audio", "Audio / Captions"],
   ["rendering", "Rendering"],
   ["validation", "Validation"],
-  ["drive", "Google Drive"],
+  ["metadata", "Metadata Generation"],
+  ["editorial", "Editorial Validation"],
+  ["drive", "Drive Upload / Verification"],
   ["approval", "Approval / Publishing"],
 ];
 export default function StageProgress({ job }) {

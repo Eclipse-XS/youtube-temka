@@ -147,7 +147,7 @@ def load_tokens(http: httpx.Client) -> AccessTokens:
     return AccessTokens(http, client, token)
 
 
-def receive_code(client: OAuthClient, verifier: str) -> tuple[str, str]:
+def receive_code(client: OAuthClient, verifier: str, *, open_browser: bool=False) -> tuple[str, str]:
     state = secrets.token_urlsafe(32)
     result: list[str] = []
 
@@ -178,8 +178,14 @@ def receive_code(client: OAuthClient, verifier: str) -> tuple[str, str]:
 
     with HTTPServer(("127.0.0.1", 0), Callback) as server:
         redirect = f"http://127.0.0.1:{server.server_port}/oauth/callback"
-        print("Open this URL in your browser and choose the intended Google account:")
-        print(client.authorization_url(redirect, state, verifier), flush=True)
+        url=client.authorization_url(redirect,state,verifier)
+        if open_browser:
+            import webbrowser
+            if not webbrowser.open(url):raise DriveError('oauth_browser_open_failed')
+            print('Google consent opened in your browser. Choose the intended account/channel and confirm the requested permissions.',flush=True)
+        else:
+            print("Open this URL in your browser and choose the intended Google account:")
+            print(url,flush=True)
         server.timeout = 1
         deadline = monotonic() + 300
         while not result and monotonic() < deadline:

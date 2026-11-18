@@ -50,16 +50,18 @@ def discover_channels():
 
 def channels():
     with store.connect() as db:
-        return [dict(row) for row in db.execute('SELECT c.*,coalesce(s.interval_minutes,120) interval_minutes FROM channels c LEFT JOIN channel_schedules s ON s.channel=c.id')]
+        return [{**dict(row),'preferences':store.preferences(row['id'])} for row in db.execute('SELECT c.*,coalesce(s.interval_minutes,120) interval_minutes FROM channels c LEFT JOIN channel_schedules s ON s.channel=c.id')]
 
 
-def set_policy(channel,daily_limit,public_allowed,automatic,interval_minutes=120):
+def set_policy(channel,daily_limit,public_allowed,automatic,interval_minutes=120,preferences=None):
     if automatic and not public_allowed:
         raise ValueError('Automatic publishing requires explicit public publishing authorization for this channel')
     with store.connect() as db:
         if not db.execute('UPDATE channels SET daily_limit=?,public_allowed=?,automatic=? WHERE id=?',(daily_limit,public_allowed,automatic,channel)).rowcount:
             raise ValueError('Connect this authorized channel first')
         db.execute('INSERT OR REPLACE INTO channel_schedules VALUES(?,?)',(channel,interval_minutes))
+        if preferences is not None:
+            db.execute('INSERT OR REPLACE INTO channel_preferences VALUES(?,?)',(channel,json.dumps(preferences,ensure_ascii=False)))
 
 
 def history():
@@ -70,6 +72,8 @@ def history():
             value.pop('session',None)
             value['editable']=row['session'] is None and row['video_id'] is None and row['state'] in ('QUEUED','FAILED')
             value['metadata']=json.loads(value['metadata'])
+            artifact=db.execute('SELECT state,error FROM publication_artifacts WHERE publication=?',(row['id'],)).fetchone()
+            value['thumbnail_status']=dict(artifact) if artifact else None
             rows.append(value)
         return rows
 
@@ -105,6 +109,9 @@ def valid_title(title):
 
 
 def needs_editorial_review(job,index):
+    output=job['result'].get('outputs',[])[index]
+    if output.get('editorial',{}).get('status') in ('REJECTED','NEEDS_REVIEW'):return True
+    if output.get('publishing_metadata',{}).get('review_required'):return True
     candidates=job['result'].get('candidates',[])
     selected=candidates if job['request'].get('mode')=='longs' else candidates[index:index+1]
     return any(c.get('editorial_review_required') or c.get('selection_method')=='heuristic' or c.get('score',100)<50 or c.get('confidence',1)<.6 for c in selected)
@@ -123,6 +130,12 @@ def edit(pid,title,description,privacy='private',publish_at=None):
         if not policy or ((privacy=='public' or publish_at) and not policy['public_allowed']):
             raise ValueError('Public publishing has not been explicitly enabled for this channel')
         metadata=json.loads(row['metadata'])
+        if metadata.get('strict_metadata') and (title!=metadata['snippet']['title'] or description!=metadata['snippet']['description']):
+            raise ValueError('Edit and approve the versioned metadata in Editor before queueing the revision')
+        if publish_at:
+            from .calendar import schedule
+            cadence=db.execute('SELECT interval_minutes FROM channel_schedules WHERE channel=?',(row['channel'],)).fetchone()
+            schedule(db,row['channel'],datetime.fromisoformat(status['publishAt']),policy['daily_limit'],cadence['interval_minutes'] if cadence else 120,store.preferences(row['channel']).get('timezone','UTC'),exclude=pid,manual=True)
         job=db.execute('SELECT request FROM jobs WHERE id=?',(row['job'],)).fetchone()
         attribution=json.loads(job['request']).get('source_attribution','') if job else ''
         metadata['snippet'].update(title=title,description=credited_description(description,attribution))
@@ -131,7 +144,7 @@ def edit(pid,title,description,privacy='private',publish_at=None):
         db.execute("UPDATE publications SET metadata=?,state='QUEUED',error=NULL WHERE id=?",(json.dumps(metadata,ensure_ascii=False),pid))
 
 
-def enqueue(jid,index,channel,title,description,privacy='private',publish_at=None,automatic=False):
+def enqueue(jid,index,channel,title=None,description=None,privacy='private',publish_at=None,automatic=False):
     job=store.get(jid)
     if not job or job['state']!='READY' or index<0:
         raise ValueError('Only READY outputs can be queued')
@@ -141,18 +154,29 @@ def enqueue(jid,index,channel,title,description,privacy='private',publish_at=Non
         raise ValueError('Output not found') from None
     if not output.get('drive') or not job['result'].get('cloud_verified'):
         raise ValueError('Verify the Drive upload before publishing')
+    if output.get('editorial',{}).get('technical_valid') is False or output.get('editorial',{}).get('status')=='REJECTED':raise ValueError('Output failed hard technical or duplicate checks; create a corrected version')
     if not output.get('approved') and not automatic:
         raise ValueError('Approve the output in Editor before publication')
     if automatic and not output.get('approved') and needs_editorial_review(job,index):
         raise ValueError('Weak or ungrounded selection requires editorial approval before automatic publication')
     status=publication_status(privacy,publish_at)
-    snippet={'title':valid_title(title[:100]),'description':credited_description(description,job['request'].get('source_attribution','')),'categoryId':'22'}
-    language=job['result'].get('language')
-    if language:
-        snippet['defaultLanguage']=language
-        snippet['defaultAudioLanguage']=language
+    draft=output.get('publishing_metadata')
+    if draft:
+        from .metadata import PublishingMetadata
+        validated=PublishingMetadata.model_validate({k:v for k,v in draft.items() if k in PublishingMetadata.model_fields})
+        if title is not None and title!=validated.title or description is not None and description!=validated.description:raise ValueError('Save and approve the metadata revision in Editor before queueing it')
+        snippet={'title':validated.title,'description':credited_description(validated.description,job['request'].get('source_attribution','')),'tags':validated.tags,'categoryId':validated.category_id}
+        if validated.metadata_language!='und':snippet['defaultLanguage']=validated.metadata_language
+        if validated.audio_language and validated.audio_language!='und':snippet['defaultAudioLanguage']=validated.audio_language
+    else:
+        snippet={'title':valid_title(title or output.get('title','')),'description':credited_description(description or '',job['request'].get('source_attribution','')),'categoryId':'22'}
+        language=job['result'].get('language')
+        if language:snippet.update(defaultLanguage=language,defaultAudioLanguage=language)
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        current=db.execute('SELECT state,result FROM jobs WHERE id=?',(jid,)).fetchone()
+        if not current or current['state']!='READY' or json.loads(current['result'])['outputs'][index]!=output:
+            raise ValueError('Output or approval changed while queueing; refresh and review the current revision')
         policy=db.execute('SELECT * FROM channels WHERE id=?',(channel,)).fetchone()
         if not policy:
             raise ValueError('Select an authenticated YouTube channel')
@@ -160,25 +184,26 @@ def enqueue(jid,index,channel,title,description,privacy='private',publish_at=Non
             raise ValueError('Public publishing has not been explicitly enabled for this channel')
         if automatic and not policy['automatic']:
             raise ValueError('Automatic mode has not been enabled for this channel')
-        prior=db.execute('SELECT id FROM publications WHERE job=? AND output=? AND channel=?',(jid,index,channel)).fetchone()
-        if prior:
-            return prior['id']
+        if automatic and not output.get('approved'):
+            prefs=store.preferences(channel)
+            if not prefs.get('auto_approve') or output.get('editorial',{}).get('review_required',True):raise ValueError('Explicit editorial approval or channel auto-approval safeguards are required')
+        prior=db.execute('SELECT id,state FROM publications WHERE job=? AND output=? AND channel=?',(jid,index,channel)).fetchone()
+        if publish_at:
+            from .calendar import schedule
+            cadence=db.execute('SELECT interval_minutes FROM channel_schedules WHERE channel=?',(channel,)).fetchone()
+            schedule(db,channel,datetime.fromisoformat(status['publishAt']),policy['daily_limit'],cadence['interval_minutes'] if cadence else 120,store.preferences(channel).get('timezone','UTC'),exclude=prior['id'] if prior else None,manual=True)
+        if prior and prior['state']!='DRAFT':return prior['id']
         if automatic and not publish_at:
             cadence=db.execute('SELECT interval_minutes FROM channel_schedules WHERE channel=?',(channel,)).fetchone()
             minutes=cadence['interval_minutes'] if cadence else 120
-            planned=[]
-            for row in db.execute('SELECT metadata FROM publications WHERE channel=?',(channel,)):
-                scheduled=json.loads(row['metadata'])['status'].get('publishAt')
-                if scheduled:
-                    planned.append(datetime.fromisoformat(scheduled.replace('Z','+00:00')))
-            next_time=max(datetime.now(timezone.utc)+timedelta(hours=2),max(planned,default=datetime.now(timezone.utc))+timedelta(minutes=minutes))
-            for _ in range(1000):
-                if sum(t.date()==next_time.date() for t in planned)<policy['daily_limit']:
-                    break
-                next_time+=timedelta(minutes=minutes)
+            from .calendar import schedule
+            next_time=schedule(db,channel,datetime.now(timezone.utc)+timedelta(hours=2),policy['daily_limit'],minutes,store.preferences(channel).get('timezone','UTC'),exclude=prior['id'] if prior else None)
             status={'privacyStatus':'private','publishAt':next_time.isoformat(),'selfDeclaredMadeForKids':False}
         pid=uuid.uuid4().hex
-        metadata={'snippet':snippet,'status':status,'drive':output['drive'],'automatic':automatic}
+        metadata={'snippet':snippet,'status':status,'drive':output['drive'],'automatic':automatic,'metadata_version':draft.get('version') if draft else None,'thumbnail':output.get('thumbnail'),'format':job['request'].get('mode','shorts'),'strict_metadata':bool(draft)}
+        if prior:
+            db.execute("UPDATE publications SET state='QUEUED',metadata=?,error=NULL WHERE id=? AND state='DRAFT' AND session IS NULL AND video_id IS NULL",(json.dumps(metadata,ensure_ascii=False),prior['id']))
+            return prior['id']
         db.execute('INSERT INTO publications(id,job,output,channel,state,metadata,created) VALUES(?,?,?,?,?,?,?)',(pid,jid,index,channel,'QUEUED',json.dumps(metadata,ensure_ascii=False),time.time()))
         return pid
 
@@ -190,7 +215,9 @@ def claim():
         # A process can resume only the saved session, never insert a second video.
         db.execute("UPDATE publications SET state=CASE WHEN session IS NULL THEN 'FAILED' ELSE 'RETRYING' END,error='Publisher restarted; retry the saved session',seen=? WHERE state='PUBLISHING' AND seen<?",(now,now-180))
         for row in db.execute("SELECT p.*,c.alias,c.daily_limit FROM publications p JOIN channels c ON c.id=p.channel WHERE p.state='QUEUED' OR (p.state='RETRYING' AND (p.seen IS NULL OR p.seen<?)) ORDER BY p.created",(now-30,)).fetchall():
-            day=now-now%86400
+            from zoneinfo import ZoneInfo
+            local=datetime.fromtimestamp(now,timezone.utc).astimezone(ZoneInfo(store.preferences(row['channel']).get('timezone','UTC')))
+            day=local.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
             used=db.execute("SELECT count(*) FROM publications WHERE channel=? AND state IN ('PUBLISHED','SCHEDULED','PUBLISHING') AND seen>=?",(row['channel'],day)).fetchone()[0]
             if used>=row['daily_limit']:
                 continue
@@ -211,6 +238,25 @@ def retry(pid):
     with store.connect() as db:
         # UNCERTAIN requires remote reconciliation, never an automatic new insert.
         return bool(db.execute("UPDATE publications SET state='RETRYING',seen=NULL WHERE id=? AND state IN ('FAILED','RETRYING')",(pid,)).rowcount)
+
+
+def reconcile(pid):
+    """Verify an existing video identity using GET only; never create an upload."""
+    with store.connect() as db:
+        row=db.execute('SELECT p.*,c.alias FROM publications p JOIN channels c ON c.id=p.channel WHERE p.id=?',(pid,)).fetchone()
+        if not row or not row['video_id'] or row['state'] not in ('UNCERTAIN','FAILED'):
+            raise ValueError('Reconciliation requires an existing video ID and an uncertain or failed result')
+        publication=dict(row)
+    body=json.loads(publication['metadata'])
+    youtube=Drive(token_file(publication['alias']))
+    try:
+        complete(pid,{'id':publication['video_id']},body,youtube,publication['channel'])
+        checkpoint(pid,error=None)
+    except Uncertain as error:
+        checkpoint(pid,state='UNCERTAIN',error=str(error))
+        raise
+    finally:
+        youtube.close()
 
 
 def validate_session(url):
@@ -257,6 +303,7 @@ def upload(publication):
         body=json.loads(publication['metadata'])
         remote=body.pop('drive')
         automatic=body.pop('automatic',False)
+        internal={k:body.pop(k,None) for k in ('metadata_version','thumbnail','format','strict_metadata')}
         with store.connect() as db:
             policy=db.execute('SELECT * FROM channels WHERE id=?',(publication['channel'],)).fetchone()
             if not policy or ((body['status']['privacyStatus']=='public' or body['status'].get('publishAt')) and not policy['public_allowed']) or (automatic and not policy['automatic']):
@@ -271,18 +318,13 @@ def upload(publication):
                 db.execute('BEGIN IMMEDIATE')
                 cadence=db.execute('SELECT interval_minutes FROM channel_schedules WHERE channel=?',(publication['channel'],)).fetchone()
                 minutes=cadence['interval_minutes'] if cadence else 120
-                planned=[]
-                for row in db.execute('SELECT metadata FROM publications WHERE channel=? AND id<>?',(publication['channel'],pid)):
-                    when=json.loads(row['metadata'])['status'].get('publishAt')
-                    if when:
-                        planned.append(datetime.fromisoformat(when.replace('Z','+00:00')))
-                next_time=max(datetime.now(timezone.utc)+timedelta(hours=2),max(planned,default=datetime.now(timezone.utc))+timedelta(minutes=minutes))
-                for _ in range(1000):
-                    if sum(t.date()==next_time.date() for t in planned)<policy['daily_limit']:
-                        break
-                    next_time+=timedelta(minutes=minutes)
+                from .calendar import schedule
+                next_time=schedule(db,publication['channel'],datetime.now(timezone.utc)+timedelta(hours=2),policy['daily_limit'],minutes,store.preferences(publication['channel']).get('timezone','UTC'),exclude=pid)
                 body['status']['publishAt']=next_time.isoformat()
-                db.execute('UPDATE publications SET metadata=? WHERE id=?',(json.dumps({**body,'drive':remote,'automatic':automatic},ensure_ascii=False),pid))
+                db.execute('UPDATE publications SET metadata=? WHERE id=?',(json.dumps({**body,**internal,'drive':remote,'automatic':automatic},ensure_ascii=False),pid))
+        if internal.get('strict_metadata') and not publication['session'] and not publication.get('video_id'):
+            categories=youtube.request('GET',YT+'/videoCategories',params={'part':'snippet','id':body['snippet']['categoryId']}).json().get('items',[])
+            if not any(c.get('id')==body['snippet']['categoryId'] and c.get('snippet',{}).get('assignable') for c in categories):raise ValueError('YouTube category is not assignable; correct publishing metadata before retry')
         if publication.get('video_id'):
             # A returned video identity is authoritative even if a later GET failed.
             # Reconcile it directly; never depend on a possibly expired session.
@@ -373,12 +415,21 @@ def complete(pid,response,metadata,youtube,channel):
         if not actual or datetime.fromisoformat(actual.replace('Z','+00:00'))!=datetime.fromisoformat(expected.replace('Z','+00:00')):
             raise Uncertain('Video ID exists but native schedule was not confirmed; inspect YouTube Studio')
     with store.connect() as db:
-        total=db.execute('SELECT total FROM publications WHERE id=?',(pid,)).fetchone()['total']
+        saved=db.execute('SELECT total,metadata FROM publications WHERE id=?',(pid,)).fetchone()
+        total=saved['total']
+        strict=json.loads(saved['metadata']).get('strict_metadata')
+    if strict:
+        actual=remote[0]['snippet'];expected=metadata['snippet']
+        for key in ('title','description','categoryId','defaultLanguage','defaultAudioLanguage'):
+            if key in expected and actual.get(key)!=expected[key]:raise Uncertain('Video exists but '+key+' metadata verification failed; inspect YouTube Studio')
+        if sorted(actual.get('tags',[]))!=sorted(expected.get('tags',[])):raise Uncertain('Video exists but tags verification failed; inspect YouTube Studio')
     checkpoint(pid,state='SCHEDULED' if metadata['status'].get('publishAt') else 'PUBLISHED',video_id=response['id'],current=total)
 
 
 def loop(stop):
     while not stop.is_set():
+        from .youtube_thumbnails import pending
+        pending()
         auto_queue()
         publication=claim()
         if publication:
@@ -396,7 +447,7 @@ def auto_queue():
         try:
             for index,output in enumerate(job['result'].get('outputs',[])):
                 if not output.get('approved') and needs_editorial_review(job,index):continue
-                enqueue(job['id'],index,channel,output['title'][:100],job['result'].get('source',{}).get('title',''),automatic=True)
+                enqueue(job['id'],index,channel,automatic=True)
         except ValueError:
             # A revoked policy does not change READY rendering state or publish.
             continue

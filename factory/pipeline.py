@@ -80,10 +80,12 @@ def process(claim,assets=None):
         preflight();source=request.source
         if source.startswith('edit:'):
             _,origin,index=source.split(':')
-            original=store.get(origin)['result']['outputs'][int(index)]
+            origin_job=store.get(origin)
+            original=origin_job['result']['outputs'][int(index)]
             if not original.get('edit_source'):raise NeedsReview('This older output has no preserved editable source. Re-upload the original once.')
             media.fetch_drive(original['edit_source'],root/'edit-source.mp4',progress.tick)
             source='job-local:'+jid
+        source_url=request.source if request.source.startswith('https://') else origin_job['result'].get('source_url') if request.source.startswith('edit:') else None
         progress.begin('source','PROBING')
         metadata=media.probe(source);end=min(request.end or metadata['duration'],metadata['duration'])
         if end<=request.start:raise ValueError('Selected interval begins after the end of the source')
@@ -92,7 +94,7 @@ def process(claim,assets=None):
         if media.local_source(source):available=[max(metadata['resolutions']) if request.resolution=='best' else min(max(metadata['resolutions']),request.resolution)]
         if not available:raise ValueError('No source resolution at or below the selected quality is available')
         resolution=max(available)
-        update(result={'source':metadata,'actual_resolution':resolution,'source_start':request.start,'processing_end':end,'ingest_strategy':'audio-first bounded chunks' if metadata.get('independent_audio',True) else 'bounded muxed segments: independent audio stream unavailable'})
+        update(result={'source':metadata,'source_url':source_url,'actual_resolution':resolution,'source_start':request.start,'processing_end':end,'ingest_strategy':'audio-first bounded chunks' if metadata.get('independent_audio',True) else 'bounded muxed segments: independent audio stream unavailable'})
         progress.done()
         background=config.DATA/'backgrounds'/request.background if request.background else next(iter(sorted((config.DATA/'backgrounds').glob('*.mp4'))),None)
         if assets is not None:background=assets.get('backgrounds')
@@ -141,25 +143,42 @@ def process(claim,assets=None):
             if output.is_file():
                 try:
                     checkpoint=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
-                    media.validate_output(output,checkpoint['duration'],request=request)
+                    refreshed=media.validate_output(output,checkpoint['duration'],request=request)
+                    output.with_suffix('.validation.json').write_text(json.dumps({**checkpoint,**refreshed}),encoding='utf-8')
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
                     progress.begin('validation','RENDERING')
                 except Exception:output.unlink()
             if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage,music_path=assets.get('music') if assets is not None else None)
             progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
-            if not thumbnail.is_file():media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(output),'-frames:v','1','-vf','scale=320:-2',str(thumbnail)],progress.tick)
+            from .thumbnails import create as make_thumbnail
+            thumbnail_report=make_thumbnail(output,thumbnail,tick=progress.tick) if not thumbnail.is_file() else {'method':'reused_existing_frame'}
             validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
-            outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name},'validation':validation})
+            outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name,**thumbnail_report},'validation':validation})
             update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
         if request.mode=='longs' and len(outputs)>1:
             final=root/'long.mp4';media.concatenate([root/o['name'] for o in outputs],final,progress.tick)
             validation=media.validate_output(final,sum(o['duration'] for o in outputs),request=request)
             raw=root/'long-source.mp4';media.concatenate(list(raw_sources.values()),raw,progress.tick)
             raw_sources[final.name]=raw
-            thumb=final.with_suffix('.jpg');media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(final),'-frames:v','1','-vf','scale=320:-2',str(thumb)],progress.tick)
-            outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':sum(c['end_seconds']-c['start_seconds'] for c in candidates),'validation':validation,'thumbnail':{'name':thumb.name}}]
-        update(result={'outputs':outputs})
+            thumb=final.with_suffix('.jpg');thumbnail_report=make_thumbnail(final,thumb,tick=progress.tick)
+            outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':sum(c['end_seconds']-c['start_seconds'] for c in candidates),'validation':validation,'thumbnail':{'name':thumb.name,**thumbnail_report}}]
+        from . import metadata as publishing_metadata
+        from .editorial import assess
+        contexts=[publishing_metadata.context(transcript,request,metadata,candidates if request.mode=='longs' else candidates[i:i+1],output,source_url) for i,output in enumerate(outputs)]
+        previous=[o.get('publishing_metadata') for o in job['result'].get('outputs',[])]
+        progress.begin('metadata','ANALYZING',len(outputs),'clips')
+        drafts=publishing_metadata.generate_outputs(contexts,request.llm_model,previous,progress.tick)
+        progress.done();progress.begin('editorial','ANALYZING',len(outputs),'clips')
+        assessed=[]
+        for i,(output,draft,ctx) in enumerate(zip(outputs,drafts,contexts)):
+            output['publishing_metadata']=draft;output['title']=draft['title']
+            if draft.get('thumbnail_text'):
+                output['thumbnail'].update(make_thumbnail(root/output['name'],root/output['thumbnail']['name'],draft['thumbnail_text'],progress.tick))
+            output['editorial']=assess(output,transcript,candidates if request.mode=='longs' else candidates[i:i+1],request,draft,assessed,request.metadata_preferences)
+            assessed.append(output['editorial']);progress.tick(i+1,len(outputs))
+        progress.done()
+        update(result={'outputs':outputs,'publishing_state':'AWAITING_EDITORIAL_REVIEW'})
         metadata_obj={'job_id':jid,'request':request.model_dump(),'source':metadata,'language':transcript['language'],'candidates':candidates,'outputs':outputs}
         if request.save_drive:
             artifact_paths=[root/'transcript.json',root/'metadata.json',*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass'),*root.glob('*.validation.json')]

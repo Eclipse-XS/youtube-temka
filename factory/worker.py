@@ -10,20 +10,24 @@ def local_loop(stop):
     from .pipeline import process
     worker=os.environ.get('WORKER_ID','controller-'+socket.gethostname())
     from .cleanup import sweep
+    from .inference import HEAVY_LOCK
     last_sweep=0
     while not stop.is_set():
         if time.monotonic()-last_sweep>60:
             sweep()
             last_sweep=time.monotonic()
         store.heartbeat(worker,hardware())
-        claimed=store.claim(worker)
-        if claimed:
-            try:process(claimed)
-            except Exception:
-                try:store.update(claimed['job']['id'],claimed['lease'],state='FAILED',error='Unexpected worker failure; checkpoints preserved. Retry after checking configuration.')
-                except InterruptedError:pass
-        else:
-            stop.wait(3)
+        if not HEAVY_LOCK.acquire(False):
+            stop.wait(1);continue
+        try:
+            claimed=store.claim(worker)
+            if claimed:
+                try:process(claimed)
+                except Exception:
+                    try:store.update(claimed['job']['id'],claimed['lease'],state='FAILED',error='Unexpected worker failure; checkpoints preserved. Retry after checking configuration.')
+                    except InterruptedError:pass
+            else:stop.wait(3)
+        finally:HEAVY_LOCK.release()
 
 
 class RemoteStore:

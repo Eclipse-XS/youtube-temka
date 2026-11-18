@@ -29,6 +29,9 @@ async def lifespan(app):
     if os.environ.get('FACTORY_PUBLISHER','1')=='1':
         from .publisher import loop
         threading.Thread(target=loop,args=(stop,),daemon=True).start()
+    if os.environ.get('FACTORY_ANALYTICS','1')=='1':
+        from .analytics import loop as analytics_loop
+        threading.Thread(target=analytics_loop,args=(stop,),daemon=True).start()
     yield
     stop.set()
 
@@ -88,7 +91,7 @@ def settings():
     from .model_setup import status
     from .publisher import channels
     from .tts import status as tts_status
-    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'reason':'Connect an existing YouTube authorized-user JSON in YOUTUBE_TOKEN_DIR, discover channels, then approve a verified Drive output. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':15,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':15,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
 
 
 @app.post('/api/settings/check-ollama')
@@ -230,6 +233,7 @@ def music_assets():
 def create(body:JobRequest):
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
+    if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
     if body.publish_automatic:
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
@@ -296,6 +300,40 @@ def approve(jid:str,index:int,body:Approval):
     except (ValueError,IndexError):
         raise HTTPException(409,'Output unavailable or not complete') from None
     return get_job(jid)
+
+
+@app.post('/api/jobs/{jid}/metadata')
+def generate_metadata(jid:str):
+    from .drafts import regenerate
+    from .inference import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'The processing slot is busy. Metadata regeneration can run after the current GPU task finishes.')
+    try:return regenerate(jid)
+    except (ValueError,KeyError,IndexError) as error:raise HTTPException(409,str(error)) from None
+    finally:HEAVY_LOCK.release()
+
+
+class MetadataEdit(BaseModel):
+    title:str|None=Field(default=None,min_length=1,max_length=100)
+    alternative_titles:list[str]|None=None
+    description:str|None=Field(default=None,min_length=1,max_length=5000)
+    tags:list[str]|None=None
+    hashtags:list[str]|None=None
+    category_id:str|None=None
+    metadata_language:str|None=None
+    thumbnail_text:str|None=Field(default=None,max_length=60)
+
+
+@app.patch('/api/jobs/{jid}/outputs/{index}/metadata')
+def edit_metadata(jid:str,index:int,body:MetadataEdit):
+    from .drafts import revise
+    try:return revise(jid,index,body.model_dump(exclude_none=True))
+    except (ValueError,KeyError,IndexError) as error:raise HTTPException(409,str(error)) from None
+
+
+@app.get('/api/jobs/{jid}/outputs/{index}/metadata/history')
+def metadata_history(jid:str,index:int):
+    get_job(jid)
+    return store.metadata_history(jid,index)
 
 
 @app.get('/api/jobs/{jid}/files/{name}')
@@ -427,17 +465,53 @@ def discover_channels():
     return discover_channels()
 
 
+@app.get('/api/analytics')
+def analytics_dashboard():
+    from .analytics import snapshot
+    return snapshot()
+
+
+@app.post('/api/analytics/discover')
+def discover_analytics():
+    from .analytics import discover
+    return discover()
+
+
+@app.post('/api/analytics/{channel}/sync')
+def sync_analytics(channel:str):
+    from .analytics import start_sync
+    try:return start_sync(channel)
+    except ValueError as error:raise HTTPException(409,str(error)) from None
+
+
+class ChannelPreferences(BaseModel):
+    metadata_language:str|None=Field(default=None,pattern=r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$')
+    category_id:str|None=Field(default=None,pattern=r'^\d{1,3}$')
+    description_footer:str=Field(default='',max_length=500)
+    review_first:bool=True
+    auto_approve:bool=False
+    max_silence_fraction:float=Field(default=.65,ge=.1,le=.8)
+    timezone:str=Field(default='Europe/Kyiv',max_length=80)
+
+
 class Policy(BaseModel):
     daily_limit:int=Field(default=3,ge=1,le=20)
     public_allowed:bool=False
     automatic:bool=False
     interval_minutes:int=Field(default=120,ge=30,le=1440)
+    preferences:ChannelPreferences|None=None
 
 
 @app.post('/api/publisher/channels/{channel}/policy')
 def policy(channel:str,body:Policy):
     from .publisher import set_policy
     try:
+        if body.preferences:
+            from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
+            try:ZoneInfo(body.preferences.timezone)
+            except (ZoneInfoNotFoundError,ValueError):raise ValueError('Choose a valid IANA timezone, for example Europe/Kyiv') from None
+            from .metadata import CATEGORIES
+            if body.preferences.category_id and body.preferences.category_id not in CATEGORIES:raise ValueError('Choose a supported YouTube category')
         set_policy(channel,**body.model_dump())
         return {'ok':True}
     except ValueError as error:
@@ -448,8 +522,8 @@ class Publication(BaseModel):
     job:str=Field(pattern=r'^[a-f0-9]{32}$')
     output:int=Field(ge=0)
     channel:str=Field(pattern=r'^[A-Za-z0-9_-]{1,100}$')
-    title:str=Field(min_length=1,max_length=100)
-    description:str=Field(default='',max_length=5000)
+    title:str|None=Field(default=None,min_length=1,max_length=100)
+    description:str|None=Field(default=None,max_length=5000)
     privacy:str='private'
     publish_at:str|None=None
 
@@ -471,6 +545,16 @@ def retry_publication(pid:str):
     from .publisher import retry
     if not retry(pid):
         raise HTTPException(409,'Only failed uploads can resume. An UNCERTAIN outcome requires YouTube Studio reconciliation.')
+    return {'ok':True}
+
+
+@app.post('/api/publisher/{pid}/reconcile')
+def reconcile_publication(pid:str):
+    from .publisher import reconcile
+    try:
+        reconcile(pid)
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
     return {'ok':True}
 
 

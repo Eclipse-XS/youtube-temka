@@ -293,14 +293,35 @@ def validate_output(path,duration,request=None,expected_audio=None):
             if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')
         if expected_audio is not None and bool(container.streams.audio)!=expected_audio:
             raise RuntimeError('Rendered audio track does not match the selected audio mode')
-        frames=0
+        frames=0;black_samples=0;sampled_frames=0
         try:
-            for frame in container.decode(video=0):frames+=1
+            for frame in container.decode(video=0):
+                if frames % max(1,round(float(stream.average_rate or 30)))==0:
+                    pixels=frame.reformat(width=64,height=64,format='gray').to_ndarray()
+                    sampled_frames+=1;black_samples+=int((pixels<16).mean()>.95)
+                frames+=1
         except Exception:
             raise RuntimeError('Rendered container has a corrupted video packet') from None
         if not frames:
             raise RuntimeError('Rendered video has no decodable frame')
-        return {'duration':container.duration/av.time_base,'width':stream.width,'height':stream.height,'frames_decoded':frames,'audio':bool(container.streams.audio),'validated':True}
+        report={'duration':container.duration/av.time_base,'width':stream.width,'height':stream.height,'frames_decoded':frames,'audio':bool(container.streams.audio),'validated':True,'black_frame_fraction':black_samples/sampled_frames,'black_frames_sampled':sampled_frames}
+    if report['audio']:
+        import numpy as np
+        peak=0.;samples=clipped=silent=0
+        with av.open(str(path)) as container:
+            try:
+                for frame in container.decode(audio=0):
+                    values=frame.to_ndarray()
+                    scale=max(abs(np.iinfo(values.dtype).min),np.iinfo(values.dtype).max) if np.issubdtype(values.dtype,np.integer) else 1
+                    values=values.astype(np.float32)/scale
+                    peak=max(peak,float(np.abs(values).max()));samples+=values.size
+                    clipped+=int((np.abs(values)>=.9999).sum())
+                    if float(np.sqrt(np.mean(values**2)))<.001:silent+=values.size
+            except Exception:
+                raise RuntimeError('Rendered container has a corrupted audio packet') from None
+        if not samples:raise RuntimeError('Rendered audio has no decodable samples')
+        report.update(audio_peak=peak,audio_clipped_fraction=clipped/samples,audio_silence_fraction=silent/samples,audio_samples_decoded=samples,audio_silence_threshold_db=-60)
+    return report
 
 
 def concatenate(paths,output,tick=lambda *_:None):
