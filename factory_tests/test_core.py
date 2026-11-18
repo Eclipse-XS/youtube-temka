@@ -153,3 +153,13 @@ def test_heuristic_waits_for_complete_sentence_within_duration_bounds():
     candidates=heuristics(transcript,request())
     assert candidates[0].start_seconds==0 and candidates[0].end_seconds==26
     assert all(c.end_seconds-c.start_seconds<=60 for c in candidates)
+
+
+def test_heuristic_does_not_turn_asr_fragments_into_sentence_boundaries():
+    from factory.highlights import heuristics
+    segments=[{'start':i*10,'end':(i+1)*10-.1,'text':'this contains enough words to score well but is a continuation with no sentence ending'} for i in range(9)]
+    segments[7]['text']+='.'
+    candidates=heuristics({'language':'en','segments':segments},request())
+    # The first thought exceeds the maximum, and the final complete thought is
+    # too short. Neither a mid-sentence start nor the maximum duration is a cut.
+    assert candidates==[]

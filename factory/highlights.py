@@ -22,7 +22,10 @@ def select(candidates, request, duration):
 def heuristics(transcript, request):
     segments = transcript['segments']
     out = []
+    def complete(text):return text.strip().rstrip('"\u201d\u00bb\u2019)]').endswith(('.','!','?','\u2026','\u3002','\uff01','\uff1f'))
     for i, first in enumerate(segments):
+        if i and first['start']-segments[i-1]['end']<.6 and not complete(segments[i-1]['text']):
+            continue
         texts=[];eligible=None
         for j,last in enumerate(segments[i:],start=i):
             if last['end']-first['start'] > request.maximum:
@@ -31,10 +34,11 @@ def heuristics(transcript, request):
             if last['end']-first['start'] >= request.minimum:
                 text=' '.join(texts).strip()
                 if len(text.split()) >= 12:
-                    natural=text.rstrip('"\u201d\u00bb\u2019').endswith(('.','!','?','\u2026'))
+                    natural=complete(text)
                     pause=j+1==len(segments) or segments[j+1]['start']-last['end']>=.6
-                    eligible=Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10+5*natural+3*pause),title=text[:100],language=transcript['language'] or 'und',reason='Heuristic: speech density, sentence endings and pauses; editorial review required',confidence=.35)
-                    if natural or pause:break
+                    if natural or pause:
+                        eligible=Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10+5*natural+3*pause),title=text[:100],language=transcript['language'] or 'und',reason='Heuristic: speech density, sentence endings and pauses; editorial review required',confidence=.35)
+                        break
         if eligible:out.append(eligible)
     return out
 
@@ -124,6 +128,6 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
         'selection_summary':f'Selected {len(selected)} of {request.count} requested clips from {len(candidates)} candidates after duration and overlap checks. Editorial review is required.',
         'analysis':'heuristic' if failed or not calls else 'ollama',
         'model':None if failed or not calls else model,
-        'analysis_outcome':fallback_reason or ('insufficient_speech' if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
+        'analysis_outcome':fallback_reason or (('no_coherent_intervals' if transcript['segments'] else 'insufficient_speech') if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
         'analysis_diagnostics':{'requests':calls,'rejected_intervals':rejected,'windows':len(windows),'decisions':decisions},
     }
