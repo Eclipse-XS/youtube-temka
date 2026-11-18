@@ -257,3 +257,21 @@ The launcher performs model initialization before starting a stopped controller'
 queue consumer. It refuses deployment changes while the reachable controller has
 active jobs; `-Status` remains available. Persistent writable data/scratch/model
 mounts and the read-only OAuth mount are inspected on the actual container.
+
+## Fork/upstream updates and maintenance safety
+
+The updater finds the canonical `denusbtw/youtube-temka` by configured URL, giving
+`upstream` preference over `origin`. `origin` may remain your fork. With only a
+GitHub `*/youtube-temka` origin, it adds the canonical `upstream` (or
+`factory-upstream` when that name is occupied), preserving existing remotes.
+`-UpstreamRemote <name>` selects an already configured canonical remote explicitly.
+The fetched main SHA is verified from FETCH_HEAD before checking ancestry. Clean
+behind branches fast-forward; ahead branches retain local commits and report both
+SHAs. Diverged and dirty worktrees stop without discarding work. Git fetch uses
+quiet mode so successful Git stderr does not become a PowerShell 5.1 failure.
+
+Stop/restart/update check processing before changing running services. Active or
+unverifiable work prevents stopping; publishing in PUBLISHING state is protected.
+Startup waits for an already running controller to become readable before checking
+its jobs. Source fingerprints are sorted so staging files does not alter image
+identity. None of these commands removes Docker volumes or changes OAuth files.

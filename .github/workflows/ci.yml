@@ -13,6 +13,18 @@ jobs:
       - name: First-run and configuration preservation (mocked Docker)
         shell: powershell
         run: ./verification/check_launcher.ps1
+      - name: Fork/upstream update and preservation (real isolated Git)
+        shell: powershell
+        run: ./verification/check_updater.ps1
+      - name: Stop/restart active-job protection
+        shell: powershell
+        run: ./verification/check_maintenance.ps1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest==9.0.2 python-dotenv==1.2.2
+      - name: Native Windows locks and guarded quality probe
+        run: python -m pytest tests/test_file_locks.py tests/test_transcribe_backends.py::TestHostAsrSlot tests/test_ssrf_guard.py -q
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -25,7 +37,7 @@ jobs:
       - name: Actual factory tests including media renders
         run: python -m pytest factory_tests -q
       - name: Retained MIT modules used by the factory
-        run: python -m pytest tests/test_jsonfile.py tests/test_ffmpeg_utils.py tests/test_subtitles.py tests/test_ssrf_guard.py tests/test_ssrf_connect_guard.py tests/test_transcribe_backends.py -q
+        run: python -m pytest tests/test_jsonfile.py tests/test_ffmpeg_utils.py tests/test_subtitles.py tests/test_ssrf_guard.py tests/test_ssrf_connect_guard.py tests/test_transcribe_backends.py tests/test_file_locks.py -q
       - run: python -m compileall -q factory
       - run: python scripts/check-secrets.py
       - run: docker compose --profile controller --profile worker config --quiet

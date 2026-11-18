@@ -148,3 +148,11 @@ in [ONE_COMMAND_DEPLOYMENT.md](ONE_COMMAND_DEPLOYMENT.md). The controller comman
 Analytics were verified after operator consent. GPU/CPU video generation to Drive
 and controlled container recovery passed.
 Historical evidence above is retained and is not substituted for these new checks.
+
+## Final integration and maintenance pass — 2026-11-19
+
+See [FINAL_DEPLOYMENT_2026-11-19.md](FINAL_DEPLOYMENT_2026-11-19.md) for the latest
+execution and Windows compatibility results: 295 Linux tests passed; four genuine
+native defects fixed, seven POSIX-only native failures remain documented. Local
+services are READY. PR #2 merge was rejected by upstream permissions and is not
+claimed as completed.

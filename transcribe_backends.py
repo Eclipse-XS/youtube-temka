@@ -71,7 +71,8 @@ class host_asr_slot:
 
     Blocks (polling once a second) until a slot is free. A crashed holder
     releases its lock with its file descriptor, so a slot can never leak.
-    Degrades to a no-op where flock or the directory is unavailable.
+    Uses flock on Unix and descriptor byte locks on Windows. Degrades to a
+    no-op only where the lock directory/backend is unavailable.
     """
 
     def __init__(self, slots=None, lock_dir=None, poll=1.0):
@@ -84,7 +85,7 @@ class host_asr_slot:
         if self.slots <= 0:
             return self
         try:
-            import fcntl
+            import file_locks as fcntl
             os.makedirs(self.lock_dir, exist_ok=True)
         except Exception:
             return self
@@ -112,7 +113,7 @@ class host_asr_slot:
     def __exit__(self, *exc):
         if self._fh is not None:
             try:
-                import fcntl
+                import file_locks as fcntl
                 fcntl.flock(self._fh, fcntl.LOCK_UN)
             except Exception:
                 pass

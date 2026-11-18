@@ -102,14 +102,21 @@ try {
         }
         if ($Role -eq 'Controller') {
             $existingJobs=$null
-            try { $existingJobs=Invoke-RestMethod ($apiBase+'/api/jobs') -Headers @{Authorization='Bearer '+$settings.FACTORY_TOKEN} -TimeoutSec 5 } catch { }
+            try { $existingJobs=Invoke-RestMethod ($apiBase+'/api/jobs') -Headers @{Authorization='Bearer '+$settings.FACTORY_TOKEN} -TimeoutSec 5 } catch {
+                $existingContainer=& docker @compose ps -q controller
+                if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the existing controller; deployment stopped without restarting it.' }
+                if ($existingContainer) {
+                    WaitHttp ($apiBase+'/health') | Out-Null
+                    $existingJobs=Invoke-RestMethod ($apiBase+'/api/jobs') -Headers @{Authorization='Bearer '+$settings.FACTORY_TOKEN} -TimeoutSec 15
+                }
+            }
             if (@($existingJobs | Where-Object { $_ -and $_.state -notin @('READY','PUBLISHED','FAILED','BLOCKED','CANCELLED') }).Count) {
                 throw 'Active jobs detected. Use -Status; rerun startup after processing finishes to avoid interrupting work.'
             }
         }
         if ($WithTTS) { $env:WITH_TTS='1' }
         DockerRun ($compose+@('config','--quiet'))
-        $inputs=@(& git ls-files --cached --others --exclude-standard)
+        $inputs=@(& git ls-files --cached --others --exclude-standard | Sort-Object -Unique)
         $hashes=foreach ($inputPath in $inputs) {
             if ($inputPath -match '^(factory/|deploy/|dashboard/|requirements.*lock$|.*\.py$)' -and (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
                 $inputPath+':'+(Get-FileHash -LiteralPath $inputPath -Algorithm SHA256).Hash
