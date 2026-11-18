@@ -3,8 +3,9 @@
 See `verification/REPORT.md` for actual acceptance evidence and remaining blockers.
 Existing Drive OAuth was found in the earlier Factory worktree and reused through
 `factory/legacy_drive_oauth.py`. Original client/token files remain unchanged.
-No YouTube channel authorization was available; the user chose to continue without
-a real test publication.
+Current release checks are in `verification/RELEASE_2026-11-18.md`. No authorized
+YouTube channel token is available in this workspace or the inspected legacy
+connection ledger; live publication remains blocked.
 
 ## PC A
 
@@ -34,6 +35,19 @@ Discover action reads the actual authorized channels. Drive-only authorization
 cannot grant YouTube access. Public/scheduled upload additionally needs explicit
 per-channel public authorization. The default is private and review first.
 
+For a channel that has not been authorized, enable the YouTube Data API in its
+existing Google project and use a **desktop** OAuth client on the host:
+
+```powershell
+.venv/Scripts/python.exe -m factory.youtube_oauth --client C:/private/youtube-desktop-client.json --output secrets/youtube/operator.json
+```
+
+The browser consent uses PKCE, a loopback callback and a five-minute deadline.
+It requests `youtube.upload` and `youtube.readonly`, creates a new standard
+authorized-user file exclusively, and never replaces existing credentials or
+uploads a video. Mount `secrets/youtube` read-only and use Publisher Discover to
+verify the intended channel. A Drive-only token cannot satisfy this consent.
+
 ## PC B
 
 Clone the repository without `.env`, runtime data or credentials. Run setup with
@@ -60,8 +74,19 @@ docker compose --profile worker exec ollama ollama pull qwen2.5:3b
 No second controller/UI/Postgres/Redis. Each PC has local model caches and one
 heavy pipeline. URL jobs with Drive enabled are eligible for a remote worker;
 controller uploads stay on PC A. No complete source video is transferred between
-PCs. Gameplay/music assets must exist in the selected worker's library; automatic
-asset synchronization is not implemented. Worker registration is automatic.
+PCs. Worker registration is automatic. Upload rights-confirmed background/music
+assets once through the controller. Claims include a manifest for only the
+required assets, including the controller's automatic background choice. Workers
+fetch them over the same authenticated private connection and verify SHA-256
+and byte size before rendering. No source library or credential directory is
+exposed by the asset endpoint.
+
+The worker cache is limited by `ASSET_CACHE_BYTES` (default 2 GiB) and also counts
+toward its 8 GiB processing budget. Intact current assets are reused; corrupt
+files are fetched again, obsolete cache files and failed partial transfers are
+removed. Oversized assets block the job with recovery guidance. Original approved
+controller assets are retained. Use the private LAN/Tailscale endpoint described
+above; this transfer adds no storage service or public worker port.
 
 ## Optional GPU
 
@@ -78,7 +103,11 @@ CPU/int8. Each chunk exits its subprocess before LLM analysis. Ollama offload is
 bounded to 24 layers using measured free memory with a 1000 MiB reserve, context
 4096, one parallel request, `keep_alive=0`; a GPU server error retries on CPU.
 This is a conservative policy, not a guarantee for every competing GPU workload.
-The available card is RTX 3050 **6 GB**. Physical 4 GB validation remains UNVERIFIED.
+The current machine has RTX 3050 **4 GB**. Docker CUDA initialization, small ASR
+with `int8_float16`, sequential local Qwen inference and rendering have been
+exercised on it. See the release report for sampled peaks and the exact limits
+of this acceptance; a short smoke test does not establish sustained multi-hour
+reliability or compatibility with arbitrary competing GPU workloads.
 NVENC is optional through `FFMPEG_ENCODER=auto`; x264 is the default.
 
 ## Optional narration
@@ -122,6 +151,11 @@ bounded/checksummed reads and create a new version after cleanup; trimming canno
 extend beyond that preserved interval. Older outputs without these sources need
 one re-upload or their original URL. Local exports keep files under scratch.
 
+Drive artifacts and preserved editable intervals are retained indefinitely;
+there is no automatic cloud deletion. Monitor the authorized Drive quota and
+review old outputs and their editable sources together before manually removing
+them. Local cleanup never substitutes for verified persistent storage.
+
 Cancel fences the old worker and kills its subprocess group. Retry resumes
 checkpoints. Worker leases expire after 120 seconds into BLOCKED, never blind
 external replay. Unleased failed/cancelled work expires after 72 hours; active
@@ -133,6 +167,11 @@ It stores sessions, reconciles final acknowledgments, enforces daily limits and
 unique job/output/channel identity. UNCERTAIN requires YouTube Studio reconciliation;
 it never blindly inserts a duplicate. YouTube scheduling uses timezone-aware UTC.
 No real YouTube acceptance is claimed from fixture tests.
+Before an upload session exists, Publisher lets the operator edit queued/failed
+titles, descriptions, visibility and future schedules, then requeue. Session or
+video identity prevents editing and duplicate reinsertion. Quota/permission
+failures have bounded, sanitized diagnostics. Remote verification checks channel,
+privacy, successful upload status and the exact native schedule.
 
 ## Development checks
 

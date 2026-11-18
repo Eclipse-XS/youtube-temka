@@ -132,3 +132,24 @@ def test_verified_cloud_checkpoint_recovers_without_original_source():
     assert store.retry(job['id'])
     process(store.claim('restart'))
     assert store.get(job['id'])['state']=='READY'
+
+
+def test_first_start_creates_data_directory_with_independent_scratch(tmp_path,monkeypatch):
+    data=tmp_path/'new-data'
+    monkeypatch.setattr(config,'DATA',data)
+    monkeypatch.setattr(config,'DB',data/'jobs.sqlite3')
+    monkeypatch.setattr(config,'SCRATCH',tmp_path/'separate-scratch')
+    job=store.create(request().model_dump())
+    assert store.get(job['id'])['state']=='QUEUED'
+    assert data.is_dir() and config.SCRATCH.is_dir()
+
+
+def test_heuristic_waits_for_complete_sentence_within_duration_bounds():
+    from factory.highlights import heuristics
+    transcript={'language':'uk','segments':[
+        {'start':0,'end':20,'text':'Це достатньо довгий початок важливої думки який містить понад дванадцять слів але ще не завершений'},
+        {'start':20.1,'end':26,'text':'і ось її логічне завершення.'},
+        {'start':28,'end':50,'text':'Наступна незалежна думка має інший зміст і достатньо слів для окремого уривка.'}]}
+    candidates=heuristics(transcript,request())
+    assert candidates[0].start_seconds==0 and candidates[0].end_seconds==26
+    assert all(c.end_seconds-c.start_seconds<=60 for c in candidates)

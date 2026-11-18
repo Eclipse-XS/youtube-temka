@@ -366,7 +366,26 @@ def heartbeat(body:Worker):
 @app.post('/api/workers/claim')
 def claim(body:Worker):
     store.heartbeat(body.worker,body.resources)
-    return store.claim(body.worker,remote=True)
+    claimed=store.claim(body.worker,remote=True)
+    if claimed:
+        from .assets import manifest
+        try:claimed['assets']=manifest(claimed['job']['request'])
+        except ValueError as error:
+            store.update(claimed['job']['id'],claimed['lease'],state='BLOCKED',error=str(error))
+            return None
+    return claimed
+
+
+@app.get('/api/workers/assets/{kind}/{name}')
+def worker_asset(kind:str,name:str,sha256:str):
+    import hashlib
+    from .assets import asset_path
+    try:path=asset_path(kind,name)
+    except ValueError:raise HTTPException(404,'Approved asset unavailable') from None
+    with path.open('rb') as source:digest=hashlib.file_digest(source,'sha256').hexdigest()
+    if not hmac.compare_digest(digest,sha256):
+        raise HTTPException(409,'Asset changed; retry to fetch the current approved version')
+    return FileResponse(path)
 
 
 class Checkpoint(BaseModel):
@@ -447,4 +466,19 @@ def retry_publication(pid:str):
     from .publisher import retry
     if not retry(pid):
         raise HTTPException(409,'Only failed uploads can resume. An UNCERTAIN outcome requires YouTube Studio reconciliation.')
+    return {'ok':True}
+
+
+class PublicationEdit(BaseModel):
+    title:str=Field(min_length=1,max_length=100)
+    description:str=Field(default='',max_length=5000)
+    privacy:str='private'
+    publish_at:str|None=None
+
+
+@app.patch('/api/publisher/{pid}')
+def edit_publication(pid:str,body:PublicationEdit):
+    from .publisher import edit
+    try:edit(pid,**body.model_dump())
+    except ValueError as error:raise HTTPException(409,str(error)) from None
     return {'ok':True}

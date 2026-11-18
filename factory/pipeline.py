@@ -57,7 +57,7 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
     return transcript
 
 
-def process(claim):
+def process(claim,assets=None):
     job=claim['job'];jid=job['id'];lease=claim['lease']
     root=config.SCRATCH/jid;stage='PROBING'
     cancel_event=threading.Event()
@@ -94,6 +94,7 @@ def process(claim):
         update(result={'source':metadata,'actual_resolution':resolution,'source_start':request.start,'processing_end':end,'ingest_strategy':'audio-first bounded chunks' if metadata.get('independent_audio',True) else 'bounded muxed segments: independent audio stream unavailable'})
         progress.done()
         background=config.DATA/'backgrounds'/request.background if request.background else next(iter(sorted((config.DATA/'backgrounds').glob('*.mp4'))),None)
+        if assets is not None:background=assets.get('backgrounds')
         if request.preset=='gameplay' and (not background or not background.is_file()):raise NeedsReview('Add an authorized background asset or select Automatic / Blurred Background')
         transcript=transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
         progress.begin('language','TRANSCRIBING');update(result={'language':transcript['language']});progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
@@ -138,7 +139,7 @@ def process(claim):
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
                     progress.begin('validation','RENDERING')
                 except Exception:output.unlink()
-            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage)
+            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage,music_path=assets.get('music') if assets is not None else None)
             progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
             if not thumbnail.is_file():media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(output),'-frames:v','1','-vf','scale=320:-2',str(thumbnail)],progress.tick)

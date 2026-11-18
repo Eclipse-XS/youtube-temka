@@ -146,3 +146,25 @@ def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatc
     result=store.get(job['id'])
     assert result['state']=='READY',result['error']
     assert result['result']['outputs'][0]['title']=='Frozen selection'
+
+
+def test_pipeline_renders_synchronized_background_and_music_without_local_library(fixture):
+    import hashlib
+    import httpx
+    from factory import assets,pipeline
+    source,transcript,_=fixture
+    payload=source.read_bytes()
+    digest=hashlib.sha256(payload).hexdigest()
+    manifest=[{'kind':kind,'name':'approved.mp4','size':len(payload),'sha256':digest} for kind in ('backgrounds','music')]
+    with httpx.Client(base_url='http://controller',transport=httpx.MockTransport(lambda _:httpx.Response(200,content=payload))) as client:
+        paths=assets.sync(client,manifest)
+    assert set(paths)=={'backgrounds','music'}
+    assert not (config.DATA/'backgrounds').exists() and not (config.DATA/'music').exists()
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,intervals=[(0,5)],preset='gameplay',audio_mode='music',music_asset='approved.mp4')
+    job=store.create(req.model_dump());root=config.SCRATCH/job['id'];root.mkdir()
+    (root/'transcript.json').write_text(json.dumps(transcript),encoding='utf-8')
+    pipeline.process(store.claim('remote-assets-test'),assets=paths)
+    complete=store.get(job['id'])
+    assert complete['state']=='READY',complete['error']
+    report=complete['result']['outputs'][0]['validation']
+    assert report['audio'] and (report['width'],report['height'])==(1080,1920)

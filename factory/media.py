@@ -168,7 +168,7 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     duration=end-start
@@ -240,11 +240,17 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
         hookfile.write_text('\n'.join(textwrap.wrap(request.hook,width=26)),encoding='utf-8')
-        graph+=f";{video}drawtext=textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
+        # Windows FFmpeg builds may have no fontconfig configuration. An explicit
+        # installed font avoids drawtext terminating the entire render process.
+        font=''
+        if os.name=='nt':
+            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
+            if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
+        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
-    music=config.DATA/'music'/request.music_asset if request.music_asset else None
+    music=music_path or (config.DATA/'music'/request.music_asset if request.music_asset else None)
     if request.audio_mode=='music' and music and not music.is_file():raise ValueError('Selected music asset is missing; choose an available authorized asset')
     if request.audio_mode=='voiceover':
         args+=['-i',str(narration)]

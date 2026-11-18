@@ -15,6 +15,7 @@ import CreatePage from "./factory/CreatePage.jsx";
 import StageProgress from "./factory/StageProgress.jsx";
 import VoiceSettings from "./factory/VoiceSettings.jsx";
 import OutputEditor from "./factory/OutputEditor.jsx";
+import PublicationEditor from "./factory/PublicationEditor.jsx";
 
 async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
@@ -278,6 +279,7 @@ function PublisherPanel({ outputs, settings, act }) {
             </>
           )}
           {p.error && <p className="error">{p.error}</p>}
+          {p.editable && <PublicationEditor publication={p} api={api} act={act} refresh={refresh} />}
           {p.video_id && (
             <a
               target="_blank"

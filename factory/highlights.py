@@ -23,16 +23,19 @@ def heuristics(transcript, request):
     segments = transcript['segments']
     out = []
     for i, first in enumerate(segments):
-        texts=[]
-        for last in segments[i:]:
+        texts=[];eligible=None
+        for j,last in enumerate(segments[i:],start=i):
             if last['end']-first['start'] > request.maximum:
                 break
             texts.append(last['text'])
             if last['end']-first['start'] >= request.minimum:
                 text=' '.join(texts).strip()
                 if len(text.split()) >= 12:
-                    out.append(Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10),title=text[:100],language=transcript['language'],reason='Heuristic: speech density and complete transcript segment boundaries; editorial review required',confidence=.35))
-                break
+                    natural=text.rstrip('"\u201d\u00bb\u2019').endswith(('.','!','?','\u2026'))
+                    pause=j+1==len(segments) or segments[j+1]['start']-last['end']>=.6
+                    eligible=Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10+5*natural+3*pause),title=text[:100],language=transcript['language'] or 'und',reason='Heuristic: speech density, sentence endings and pauses; editorial review required',confidence=.35)
+                    if natural or pause:break
+        if eligible:out.append(eligible)
     return out
 
 
@@ -41,6 +44,7 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
     from .inference import generate
     model = request.llm_model or config.MODEL
     candidates = []
+    llm_candidates=[]
     failed = False
     rejected = 0
     calls = 0
@@ -98,6 +102,7 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
                         if ranking.candidates and not valid:
                             raise ValueError('LLM returned no semantically valid supplied interval')
                         candidates.extend(valid)
+                        llm_candidates.extend(c.model_dump() for c in valid)
                         break
                     except (ValueError,KeyError):
                         if attempt == 1:
@@ -109,8 +114,14 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
         fallback_reason=fallback_reason or 'technical_llm_failure'
     if failed or not calls:
         candidates = candidates+[c for c in fallback if not any(d['start']<=c.start_seconds and c.end_seconds<=d['end'] for d in decisions)]
+    selected=select(candidates,request,duration)
+    for candidate in selected:
+        used_llm=candidate in llm_candidates
+        candidate['selection_method']='ollama' if used_llm else 'heuristic'
+        candidate['analysis_model']=model if used_llm else None
     return {
-        'candidates':select(candidates,request,duration),
+        'candidates':selected,
+        'selection_summary':f'Selected {len(selected)} of {request.count} requested clips from {len(candidates)} candidates after duration and overlap checks. Editorial review is required.',
         'analysis':'heuristic' if failed or not calls else 'ollama',
         'model':None if failed or not calls else model,
         'analysis_outcome':fallback_reason or ('insufficient_speech' if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
