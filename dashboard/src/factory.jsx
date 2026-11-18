@@ -15,6 +15,7 @@ import CreatePage from "./factory/CreatePage.jsx";
 import StageProgress from "./factory/StageProgress.jsx";
 import VoiceSettings from "./factory/VoiceSettings.jsx";
 import OutputEditor from "./factory/OutputEditor.jsx";
+import PublicationEditor from "./factory/PublicationEditor.jsx";
 
 async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
@@ -190,6 +191,7 @@ function PublisherPanel({ outputs, settings, act }) {
                 (o) => o.job.id + ":" + o.index === e.target.value,
               );
               setTitle((o?.title || "").slice(0, 100));
+              setDescription(o?.job.request.source_attribution || "");
             }}
           >
             <option value="">Виберіть відео</option>
@@ -216,6 +218,7 @@ function PublisherPanel({ outputs, settings, act }) {
             onChange={(e) => setDescription(e.target.value)}
           />
         </label>
+        <p className="muted">Зазначене авторство джерела зберігається в описі автоматично.</p>
         <div className="grid">
           <label>
             Видимість
@@ -278,6 +281,7 @@ function PublisherPanel({ outputs, settings, act }) {
             </>
           )}
           {p.error && <p className="error">{p.error}</p>}
+          {p.editable && <PublicationEditor publication={p} api={api} act={act} refresh={refresh} />}
           {p.video_id && (
             <a
               target="_blank"
@@ -671,6 +675,10 @@ function App() {
                     ? "Heuristic fallback: локальний LLM недоступний або повернув некоректні дані. Потрібен редакторський перегляд."
                     : chosen.result.analysis}
                 </p>
+                {chosen.result.selection_summary && <p className="muted">{chosen.result.selection_summary}</p>}
+                {(chosen.result.candidates || []).some((c) => c.editorial_review_required || c.selection_method === "heuristic" || c.score < 50 || c.confidence < .6) && (
+                  <p className="warning">Відбір або назва потребує редакторської перевірки. Перевірте уривок і назву перед схваленням; автоматична публікація таких уривків очікує схвалення.</p>
+                )}
                 {chosen.error && <p className="error">{chosen.error}</p>}
                 <div className="outputs">
                   {(chosen.result.outputs || []).map((o, i) => (

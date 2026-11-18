@@ -3,6 +3,8 @@
 services:
   ollama:
     gpus: all
+    environment:
+      OLLAMA_LLM_LIBRARY: ${OLLAMA_LLM_LIBRARY:-cuda_v12}
   controller:
     gpus: all
     build:

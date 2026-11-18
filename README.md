@@ -7,6 +7,7 @@ previews and stores verified outputs on Drive. Original audio is the default.
 
 This release is undergoing acceptance; see [actual verification](verification/REPORT.md).
 YouTube uploads require an authorized channel and remain unverified in this environment.
+Latest improvements and fresh test evidence: [current release checks](verification/RELEASE_2026-11-18.md).
 
 ## Start
 
@@ -26,6 +27,7 @@ A working legacy split Drive client/token integration has been reused and verifi
 ## Included
 
 - FastAPI + React, persistent SQLite queue, fenced local/remote workers.
+- Authenticated, checksummed background/music synchronization with a bounded worker cache.
 - Automatic source probing, collapsible advanced controls, reusable preferences.
 - Multi-hour audio-first analysis in 15-minute checkpointed chunks; selected video
   retrieval only. No full-VOD download fallback.
@@ -39,17 +41,20 @@ A working legacy split Drive client/token integration has been reused and verifi
   editable-source preservation and new versions after local cleanup.
 - Direct bounded Drive-to-YouTube resumable publishing, native schedules, channel
   limits, durable sessions and uncertain-outcome protection. Private/review default.
+- One-time independent YouTube consent and editable queue metadata before upload.
 
 ## Guides and development
 
 - [Deployment: PC A / PC B, GPU, OAuth, recovery](docs/FACTORY_DEPLOYMENT.md)
+- [Exact Windows PC B setup and physical acceptance limits](docs/PC_B_WINDOWS.md)
 - [Verification and remaining blockers](verification/REPORT.md)
 - [Integration provenance](THIRD_PARTY_FACTORY.md)
 - [Optional TTS licenses](docs/licenses/TTS.md)
 - [Upstream README](docs/UPSTREAM_README.md)
 
 Default Docker processing uses CPU/int8. The optional GPU overlay checks available
-VRAM and unloads sequential model stages; physical 4 GB cards are unverified.
+VRAM and unloads sequential model stages; current physical 4 GB smoke results
+and remaining sustained-load limitations are recorded in the release checks.
 Narration is optional (`WITH_TTS=1`), requires a separate model download and adds
 GPL phonemizer/eSpeak dependencies; the normal clipping image excludes them.
 

@@ -16,6 +16,10 @@ def main():
           'format':fmt,'ffmpeg_location':binary,'outtmpl':destination,
           'download_ranges':download_range_func(None,[(float(start),float(end))]),
           'force_keyframes_at_cuts':True,'overwrites':True}
+    if Path(destination).suffix.lower()=='.mp4':
+        # Separate VP9/Opus streams otherwise select Matroska and yt-dlp writes
+        # destination.mp4.mkv, leaving the pipeline's expected interval missing.
+        opts['merge_output_format']='mp4'
     with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
         info=ydl.extract_info(source,download=False)
         ssrf_guard.assert_public_urls(info)

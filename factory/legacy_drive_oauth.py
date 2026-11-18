@@ -31,6 +31,7 @@ class DriveError(Exception):
 class OAuthClient:
     client_id: str
     client_secret: str
+    scopes: str = SCOPE
 
     @classmethod
     def read(cls, path: Path):
@@ -56,7 +57,7 @@ class OAuthClient:
             "client_id": self.client_id,
             "redirect_uri": redirect,
             "response_type": "code",
-            "scope": SCOPE,
+            "scope": self.scopes,
             "access_type": "offline",
             "prompt": "consent select_account",
             "state": state,
@@ -87,7 +88,7 @@ class OAuthClient:
             )
         try:
             token = response.json()
-            if token.get("scope", SCOPE).split() != [SCOPE]:
+            if set(token.get("scope", self.scopes).split()) != set(self.scopes.split()):
                 raise DriveError("oauth_scope_mismatch")
             if not isinstance(token["access_token"], str) or not token["access_token"]:
                 raise ValueError

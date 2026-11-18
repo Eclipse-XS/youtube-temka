@@ -28,6 +28,37 @@ def test_empty_unexplained_ranking_retries_and_produces_reviewable_fallback(monk
     assert result['analysis_diagnostics']['requests']==2
 
 
+def test_malformed_window_does_not_skip_semantic_analysis_of_later_speech(monkeypatch):
+    calls=[]
+    def respond(*a,**kw):
+        if 'prompt' not in kw['json']:
+            return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'done':True})
+        calls.append(kw['json'])
+        candidate={'start_seconds':30,'end_seconds':55,'score':90,'title':'Later complete thought','language':'en','reason':'fixture','confidence':.8}
+        result={'candidates':[]} if len(calls)<=2 else {'candidates':[candidate]}
+        return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'response':json.dumps(result)})
+    monkeypatch.setattr(httpx.Client,'post',respond)
+    transcript={'language':'en','segments':[{'start':0,'end':25,'text':'word '*720+'.'},{'start':30,'end':55,'text':'A later self contained thought has enough words to be considered independently and ends naturally.'}]}
+    result=analyze(transcript,req(),60)
+    assert len(calls)==3 and result['analysis_diagnostics']['windows']==2
+    later=next(c for c in result['candidates'] if c['start_seconds']==30)
+    assert later['selection_method']=='ollama' and later['analysis_model']
+    assert result['analysis']=='heuristic'  # The mixed fallback remains visible.
+
+
+def test_invented_title_is_replaced_with_source_quote_and_requires_review(monkeypatch):
+    def respond(*a,**kw):
+        candidate={'start_seconds':0,'end_seconds':25,'score':9,'title':"Leo's Vision for the Space Station",'language':'en','reason':'fixture','confidence':1}
+        return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'response':json.dumps({'candidates':[candidate]})})
+    monkeypatch.setattr(httpx.Client,'post',respond)
+    text='The space station has been the cornerstone of low Earth orbit for over two decades and continues to support important research.'
+    result=analyze({'language':'en','segments':[{'start':0,'end':25,'text':text}]},req(),25)
+    candidate=result['candidates'][0]
+    assert candidate['editorial_review_required'] and candidate['title_method']=='transcript_quote'
+    assert "Leo" not in candidate['title'] and text.startswith(candidate['title'])
+    assert candidate['suggested_title']=="Leo's Vision for the Space Station"
+
+
 def test_pause_removal_maps_words_and_video_to_same_timeline():
     transcript={'language':'en','segments':[{'start':10,'end':18,'text':' one two','words':[{'word':' one','start':10.5,'end':11},{'word':' two','start':17,'end':17.5}]}]}
     ranges,timed,start,end=speech_timeline(transcript,10,18)

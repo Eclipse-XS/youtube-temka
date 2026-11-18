@@ -17,6 +17,7 @@ secrets/
 verification/*.wav
 verification/*.mp3
 verification/*build*.log
+verification/*pull*.log
 verification/linux-tests.log
 verification/*token*
 verification/runtime/

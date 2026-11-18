@@ -104,6 +104,8 @@ def test_semantically_invalid_llm_intervals_retry_then_fall_back(monkeypatch):
     import httpx
     calls=[]
     def respond(*_,**__):
+        if 'prompt' not in __['json']:
+            return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'done':True})
         calls.append(1)
         invalid={'start_seconds':0,'end_seconds':5,'score':90,'title':'Invalid too-short interval','language':'en','reason':'fixture','confidence':.9}
         return httpx.Response(200,request=httpx.Request('POST','http://fixture.invalid'),json={'response':json.dumps({'candidates':[invalid]})})
@@ -132,3 +134,34 @@ def test_verified_cloud_checkpoint_recovers_without_original_source():
     assert store.retry(job['id'])
     process(store.claim('restart'))
     assert store.get(job['id'])['state']=='READY'
+
+
+def test_first_start_creates_data_directory_with_independent_scratch(tmp_path,monkeypatch):
+    data=tmp_path/'new-data'
+    monkeypatch.setattr(config,'DATA',data)
+    monkeypatch.setattr(config,'DB',data/'jobs.sqlite3')
+    monkeypatch.setattr(config,'SCRATCH',tmp_path/'separate-scratch')
+    job=store.create(request().model_dump())
+    assert store.get(job['id'])['state']=='QUEUED'
+    assert data.is_dir() and config.SCRATCH.is_dir()
+
+
+def test_heuristic_waits_for_complete_sentence_within_duration_bounds():
+    from factory.highlights import heuristics
+    transcript={'language':'uk','segments':[
+        {'start':0,'end':20,'text':'Це достатньо довгий початок важливої думки який містить понад дванадцять слів але ще не завершений'},
+        {'start':20.1,'end':26,'text':'і ось її логічне завершення.'},
+        {'start':28,'end':50,'text':'Наступна незалежна думка має інший зміст і достатньо слів для окремого уривка.'}]}
+    candidates=heuristics(transcript,request())
+    assert candidates[0].start_seconds==0 and candidates[0].end_seconds==26
+    assert all(c.end_seconds-c.start_seconds<=60 for c in candidates)
+
+
+def test_heuristic_does_not_turn_asr_fragments_into_sentence_boundaries():
+    from factory.highlights import heuristics
+    segments=[{'start':i*10,'end':(i+1)*10-.1,'text':'this contains enough words to score well but is a continuation with no sentence ending'} for i in range(9)]
+    segments[7]['text']+='.'
+    candidates=heuristics({'language':'en','segments':segments},request())
+    # The first thought exceeds the maximum, and the final complete thought is
+    # too short. Neither a mid-sentence start nor the maximum duration is a cut.
+    assert candidates==[]

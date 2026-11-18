@@ -25,7 +25,8 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
         return json.loads(path.read_text(encoding='utf-8'))
     duration=end-request.start
     segments=[];language=request.language
-    if metadata.get('has_audio',True) and not (request.intervals and not request.captions):
+    silent_short=request.audio_mode=='silent' and not request.captions and request.minimum<=duration<=request.maximum
+    if metadata.get('has_audio',True) and not (request.intervals and not request.captions) and not silent_short:
         chunks=math.ceil(duration/900)
         for index in range(chunks):
             offset=index*900;chunk_end=min(offset+900,duration)
@@ -50,14 +51,14 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
             progress.tick(chunk_end,duration)
         progress.done('extraction');progress.done('transcription')
     else:
-        progress.done('extraction','skipped','No audio or explicit manual intervals without captions')
+        progress.done('extraction','skipped','No audio, manual intervals without captions, or an explicitly silent short source')
         progress.done('transcription','skipped','No speech analysis required')
     transcript={'language':language if segments or request.language else None,'segments':segments,'text':' '.join(s['text'] for s in segments)}
     write_json_atomic(path,transcript,ensure_ascii=True)
     return transcript
 
 
-def process(claim):
+def process(claim,assets=None):
     job=claim['job'];jid=job['id'];lease=claim['lease']
     root=config.SCRATCH/jid;stage='PROBING'
     cancel_event=threading.Event()
@@ -94,6 +95,7 @@ def process(claim):
         update(result={'source':metadata,'actual_resolution':resolution,'source_start':request.start,'processing_end':end,'ingest_strategy':'audio-first bounded chunks' if metadata.get('independent_audio',True) else 'bounded muxed segments: independent audio stream unavailable'})
         progress.done()
         background=config.DATA/'backgrounds'/request.background if request.background else next(iter(sorted((config.DATA/'backgrounds').glob('*.mp4'))),None)
+        if assets is not None:background=assets.get('backgrounds')
         if request.preset=='gameplay' and (not background or not background.is_file()):raise NeedsReview('Add an authorized background asset or select Automatic / Blurred Background')
         transcript=transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
         progress.begin('language','TRANSCRIBING');update(result={'language':transcript['language']});progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
@@ -105,6 +107,11 @@ def process(claim):
         analysis_checkpoint=root/'analysis.json'
         if analysis_checkpoint.is_file():
             result=json.loads(analysis_checkpoint.read_text(encoding='utf-8'));candidates=result['candidates']
+        elif job['result'].get('candidates'):
+            # Another worker may own the old scratch volume. The controller's
+            # saved selection still fences clip identity across that handoff.
+            result={key:job['result'][key] for key in ('candidates','analysis','model','analysis_outcome','analysis_diagnostics','selection_summary') if key in job['result']}
+            candidates=result['candidates']
         elif request.intervals:
             if any(b>end for a,b in request.intervals):raise ValueError('Manual interval extends beyond the actual source duration')
             candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in sorted(request.intervals)]
@@ -138,7 +145,7 @@ def process(claim):
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
                     progress.begin('validation','RENDERING')
                 except Exception:output.unlink()
-            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage)
+            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],request,background,progress.tick,stage=render_stage,music_path=assets.get('music') if assets is not None else None)
             progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
             if not thumbnail.is_file():media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(output),'-frames:v','1','-vf','scale=320:-2',str(thumbnail)],progress.tick)

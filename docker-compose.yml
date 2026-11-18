@@ -4,6 +4,7 @@ x-worker-environment: &worker-environment
   FACTORY_TOKEN: ${FACTORY_TOKEN:-}
   SCRATCH_GB: ${SCRATCH_GB:-8}
   FREE_RESERVE_GB: ${FREE_RESERVE_GB:-4}
+  ASSET_CACHE_BYTES: ${ASSET_CACHE_BYTES:-2147483648}
   WHISPER_MODEL: ${WHISPER_MODEL:-small}
   WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
   WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
@@ -61,7 +62,7 @@ services:
     build:
       context: .
       dockerfile: deploy/factory-web.Dockerfile
-    ports: ['127.0.0.1:5175:80']
+    ports: ['${WEB_BIND:-127.0.0.1}:5175:80']
     depends_on:
       controller:
         condition: service_healthy

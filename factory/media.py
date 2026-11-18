@@ -168,9 +168,12 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
+    # Loudnorm alone can overshoot after AAC encoding, especially for transient
+    # synthetic speech. Limit at the final sample rate with makeup gain disabled.
+    audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
     duration=end-start
     import av
     with av.open(str(source)) as container:
@@ -240,27 +243,33 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
         hookfile.write_text('\n'.join(textwrap.wrap(request.hook,width=26)),encoding='utf-8')
-        graph+=f";{video}drawtext=textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
+        # Windows FFmpeg builds may have no fontconfig configuration. An explicit
+        # installed font avoids drawtext terminating the entire render process.
+        font=''
+        if os.name=='nt':
+            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
+            if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
+        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
-    music=config.DATA/'music'/request.music_asset if request.music_asset else None
+    music=music_path or (config.DATA/'music'/request.music_asset if request.music_asset else None)
     if request.audio_mode=='music' and music and not music.is_file():raise ValueError('Selected music asset is missing; choose an available authorized asset')
     if request.audio_mode=='voiceover':
         args+=['-i',str(narration)]
-        graph+=f';[{next_input}:a]apad,atrim=duration={duration},{LOUDNORM_FILTER}[audio]'
+        graph+=f';[{next_input}:a]apad,atrim=duration={duration},{audio_filter}[audio]'
         audio_map='[audio]'
     elif request.audio_mode=='music' and music and music.is_file():
         args+=['-stream_loop','-1','-i',str(music)]
         graph+=f';[{next_input}:a]atrim=duration={duration},afade=t=in:d=0.3,afade=t=out:st={max(0,duration-.5)}:d=0.5,volume=0.12[bed]'
         if has_audio:
-            graph+=f';[0:a]asplit[original][side];[bed][side]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[duck];[original][duck]amix=inputs=2:normalize=0,{LOUDNORM_FILTER}[audio]'
-        else:graph+=f';[bed]{LOUDNORM_FILTER}[audio]'
+            graph+=f';[0:a]asplit[original][side];[bed][side]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[duck];[original][duck]amix=inputs=2:normalize=0,{audio_filter}[audio]'
+        else:graph+=f';[bed]{audio_filter}[audio]'
         audio_map='[audio]'
     elif has_audio and request.audio_mode!='silent':
-        graph+=f';[0:a]{LOUDNORM_FILTER}[audio]';audio_map='[audio]'
+        graph+=f';[0:a]{audio_filter}[audio]';audio_map='[audio]'
     args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video]
-    args+=['-map',audio_map,'-c:a','aac'] if audio_map else ['-an']
+    args+=['-map',audio_map,'-c:a','aac','-b:a','192k','-ar','48000'] if audio_map else ['-an']
     args+=[*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
     if not request.preserve_fps:
         args+=['-r','30']

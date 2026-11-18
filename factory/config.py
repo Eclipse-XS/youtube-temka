@@ -31,4 +31,5 @@ except (OSError,ValueError):
 
 
 def initialize():
+    DATA.mkdir(parents=True, exist_ok=True)
     SCRATCH.mkdir(parents=True, exist_ok=True)

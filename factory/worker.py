@@ -41,6 +41,11 @@ class RemoteStore:
         response.raise_for_status()
         return response.json()
 
+    def list_jobs(self):
+        response=self.client.get('/api/jobs')
+        response.raise_for_status()
+        return response.json()
+
 
 def main():
     import httpx
@@ -58,7 +63,14 @@ def main():
                 response.raise_for_status()
                 claim=response.json()
                 if claim:
-                    pipeline.process(claim)
+                    from .assets import sync
+                    try:
+                        assets=sync(client,claim.get('assets',[]),lambda:pipeline.store.update(claim['job']['id'],claim['lease']))
+                        pipeline.process(claim,assets=assets)
+                    except InterruptedError:pass
+                    except (httpx.HTTPError,ValueError,OSError,RuntimeError):
+                        try:pipeline.store.update(claim['job']['id'],claim['lease'],state='BLOCKED',error='Worker asset synchronization failed; check the approved library, connection and cache budget, then retry.')
+                        except InterruptedError:pass
                 else:
                     time.sleep(3)
             except (httpx.HTTPError,ValueError):

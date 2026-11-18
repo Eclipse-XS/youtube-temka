@@ -51,7 +51,7 @@ def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,
         if path.endswith('/channels'):
             return httpx.Response(200,json={'items':[{'id':'wrong' if wrong_channel else 'channel-fixture'}]})
         if path.endswith('/videos') and request.method=='GET':
-            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture'},'status':{'privacyStatus':'private'}}]})
+            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture'},'status':{'privacyStatus':'private','uploadStatus':'uploaded'}}]})
         if path.endswith('/videos') and request.method=='POST':
             calls['insert']+=1
             return httpx.Response(200,headers={'Location':'https://www.googleapis.com/upload/fixture'})
@@ -168,3 +168,121 @@ def test_revoked_public_policy_blocks_a_queued_public_upload(ready,monkeypatch):
     publisher.upload(publisher.claim())
     assert calls['insert']==0
     assert publisher.history()[0]['state']=='FAILED'
+
+
+def test_known_video_id_reconciles_without_reopening_upload_session(ready,monkeypatch):
+    jid,data,remote=ready
+    calls=install_transport(monkeypatch,data,remote,expired=True)
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','')
+    publisher.checkpoint(pid,video_id='youtube-fixture',session='https://www.googleapis.com/upload/fixture',total=len(data))
+    publisher.upload(publisher.claim())
+    assert publisher.history()[0]['state']=='PUBLISHED'
+    assert calls['insert']==calls['put']==0 and calls['range']==[]
+
+
+def test_wrong_native_schedule_is_uncertain(ready,monkeypatch):
+    from datetime import datetime,timezone,timedelta
+    jid,_,_=ready
+    publisher.set_policy('channel-fixture',3,True,False)
+    when=datetime.now(timezone.utc)+timedelta(days=2)
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','',publish_at=when.isoformat())
+    class YouTube:
+        def request(self,*a,**kw):
+            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture'},'status':{'privacyStatus':'private','uploadStatus':'uploaded','publishAt':(when+timedelta(hours=1)).isoformat()}}]})
+    with pytest.raises(publisher.Uncertain,match='schedule'):
+        publisher.complete(pid,{'id':'youtube-fixture'},publisher.history()[0]['metadata'],YouTube(),'channel-fixture')
+    assert publisher.history()[0]['video_id']=='youtube-fixture'
+
+
+def test_expired_queue_item_can_be_corrected_before_remote_effects(ready):
+    from datetime import datetime,timezone,timedelta
+    jid,_,remote=ready
+    pid=publisher.enqueue(jid,0,'channel-fixture','Old title','Old description')
+    publisher.checkpoint(pid,state='FAILED',error='Schedule elapsed')
+    publisher.set_policy('channel-fixture',3,True,False)
+    when=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat()
+    publisher.edit(pid,'New title','New description',publish_at=when)
+    row=publisher.history()[0]
+    assert row['state']=='QUEUED' and row['error'] is None
+    assert row['metadata']['snippet']['title']=='New title'
+    assert row['metadata']['status']['publishAt']==when
+    assert row['metadata']['drive']==remote
+    assert row['metadata']['automatic'] is False
+
+
+@pytest.mark.parametrize('effect',[{'session':'https://www.googleapis.com/upload/fixture'},{'video_id':'youtube-fixture'},{'state':'PUBLISHING'},{'state':'UNCERTAIN'}])
+def test_remote_effects_or_active_claim_block_queue_edits(ready,effect):
+    jid,_,_=ready
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','')
+    publisher.checkpoint(pid,**effect)
+    with pytest.raises(ValueError,match='can be edited'):publisher.edit(pid,'Changed','')
+
+
+def test_queue_edit_cannot_bypass_public_policy(ready):
+    jid,_,_=ready
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','')
+    with pytest.raises(ValueError,match='Public publishing'):publisher.edit(pid,'Title','','public')
+    with pytest.raises(ValueError,match='title'):publisher.edit(pid,'  ','')
+
+
+@pytest.mark.parametrize('status',['failed','rejected','deleted',None])
+def test_failed_remote_upload_status_cannot_be_reported_as_published(ready,status):
+    jid,_,_=ready
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','')
+    class YouTube:
+        def request(self,*a,**kw):
+            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture'},'status':{'privacyStatus':'private','uploadStatus':status}}]})
+    with pytest.raises(publisher.Uncertain,match='upload status'):
+        publisher.complete(pid,{'id':'youtube-fixture'},publisher.history()[0]['metadata'],YouTube(),'channel-fixture')
+    assert publisher.history()[0]['video_id']=='youtube-fixture'
+
+
+def test_quota_diagnostic_is_actionable_and_never_exposes_raw_response():
+    response=httpx.Response(403,json={'error':{'message':'private session URL must not escape','errors':[{'reason':'quotaExceeded'}]}})
+    error=publisher.upload_error(response,'YouTube upload')
+    assert 'quota is exhausted' in str(error) and 'HTTP 403' in str(error)
+    assert 'private session' not in str(error)
+
+
+def test_explicit_source_credit_survives_queue_creation_and_edits(ready):
+    jid,_,_=ready
+    credit='Credit: NASA. Informational software verification; no endorsement.'
+    with store.connect() as db:
+        request=json.loads(db.execute('SELECT request FROM jobs WHERE id=?',(jid,)).fetchone()['request'])
+        request['source_attribution']=credit
+        db.execute('UPDATE jobs SET request=? WHERE id=?',(json.dumps(request),jid))
+    with pytest.raises(ValueError,match='UTF-8 bytes'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','x'*4990)
+    pid=publisher.enqueue(jid,0,'channel-fixture','Title','Description about the source.')
+    description=publisher.history()[0]['metadata']['snippet']['description']
+    assert description.endswith(credit) and len(description)<=5000
+    publisher.edit(pid,'Edited','Changed description')
+    assert publisher.history()[0]['metadata']['snippet']['description'].endswith(credit)
+    publisher.edit(pid,'Edited',credit)
+    assert publisher.history()[0]['metadata']['snippet']['description']==credit
+
+
+def test_multilingual_metadata_enforces_youtube_byte_limit_before_upload(ready):
+    jid,_,_=ready
+    with pytest.raises(ValueError,match='UTF-8 bytes'):
+        publisher.enqueue(jid,0,'channel-fixture','Український заголовок','Ї'*3000)
+    with pytest.raises(ValueError,match='without'):
+        publisher.enqueue(jid,0,'channel-fixture','<Invalid title>','')
+    with pytest.raises(ValueError,match='HTML'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','<b>Invalid description</b>')
+    assert publisher.history()==[]
+
+
+def test_weak_selection_waits_for_editorial_approval_even_with_automatic_policy(ready):
+    jid,_,_=ready
+    publisher.set_policy('channel-fixture',3,True,True)
+    store.approve(jid,0,False)
+    with store.connect() as db:
+        result=json.loads(db.execute('SELECT result FROM jobs WHERE id=?',(jid,)).fetchone()['result'])
+        result['candidates']=[{'score':9,'confidence':1,'selection_method':'ollama'}]
+        db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result),jid))
+    with pytest.raises(ValueError,match='editorial approval'):
+        publisher.enqueue(jid,0,'channel-fixture','Title','',automatic=True)
+    assert publisher.history()==[]
+    store.approve(jid,0,True)
+    assert publisher.enqueue(jid,0,'channel-fixture','Reviewed title','',automatic=True)

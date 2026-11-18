@@ -66,3 +66,47 @@ def test_two_isolated_workers_claim_independent_jobs_and_are_fenced(client):
     wrong=client.post('/api/workers/jobs/'+a['job']['id'],json={'lease':b['lease'],'state':'READY'})
     assert wrong.status_code==409
     assert client.post('/api/workers/jobs/'+a['job']['id'],json={'lease':a['lease'],'state':'READY'}).status_code==200
+
+
+def test_worker_asset_transfer_is_authenticated_and_versioned(client):
+    from factory import store
+    folder=config.DATA/'backgrounds';folder.mkdir()
+    (folder/'approved.mp4').write_bytes(b'approved')
+    assert client.get('/api/workers/assets/backgrounds/approved.mp4?sha256=wrong').status_code==401
+    client.headers['Authorization']='Bearer '+'a'*40
+    store.create({'source':'https://www.youtube.com/watch?v=fixture','save_drive':True,'preset':'auto'})
+    claim=client.post('/api/workers/claim',json={'worker':'remote'}).json()
+    item=claim['assets'][0]
+    url=f"/api/workers/assets/backgrounds/approved.mp4?sha256={item['sha256']}"
+    assert client.get(url).content==b'approved'
+    (folder/'approved.mp4').write_bytes(b'new-version')
+    assert client.get(url).status_code==409
+    assert client.get('/api/workers/assets/secrets/approved.mp4?sha256=wrong').status_code==404
+
+
+def test_remote_store_supports_source_cleanup_query(client):
+    from factory.worker import RemoteStore
+    client.headers['Authorization']='Bearer '+'a'*40
+    assert RemoteStore(client).list_jobs()==[]
+
+
+def test_publication_edit_requires_auth_and_reports_unavailable_item(client):
+    assert client.patch('/api/publisher/absent',json={'title':'Changed'}).status_code==401
+    client.headers['Authorization']='Bearer '+'a'*40
+    assert client.patch('/api/publisher/absent',json={'title':'Changed'}).status_code==409
+
+
+def test_retry_keeps_original_asset_version_and_automatic_choice(client):
+    from factory import store
+    folder=config.DATA/'backgrounds';folder.mkdir()
+    (folder/'original.mp4').write_bytes(b'approved-original-version')
+    client.headers['Authorization']='Bearer '+'a'*40
+    job=store.create({'source':'https://www.youtube.com/watch?v=fixture','save_drive':True,'preset':'auto'})
+    first=client.post('/api/workers/claim',json={'worker':'remote'}).json()
+    store.cancel(job['id']);assert store.retry(job['id'])
+    (folder/'original.mp4').write_bytes(b'changed-version')
+    (folder/'another.mp4').write_bytes(b'another-automatic-choice')
+    second=client.post('/api/workers/claim',json={'worker':'remote'}).json()
+    assert second['assets']==first['assets']
+    assert second['assets'][0]['name']=='original.mp4'
+    assert store.get(job['id'])['result']['asset_manifest']==first['assets']

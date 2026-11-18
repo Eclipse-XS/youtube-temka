@@ -68,10 +68,67 @@ def history():
         for row in db.execute('SELECT * FROM publications ORDER BY created DESC LIMIT 200'):
             value=dict(row)
             value.pop('session',None)
-            value['editable']=row['session'] is None and row['state'] in ('QUEUED','FAILED')
+            value['editable']=row['session'] is None and row['video_id'] is None and row['state'] in ('QUEUED','FAILED')
             value['metadata']=json.loads(value['metadata'])
             rows.append(value)
         return rows
+
+
+def publication_status(privacy,publish_at):
+    if privacy not in ('private','public','unlisted'):
+        raise ValueError('Invalid privacy mode')
+    status={'privacyStatus':privacy,'selfDeclaredMadeForKids':False}
+    if publish_at:
+        when=datetime.fromisoformat(publish_at.replace('Z','+00:00'))
+        if when.tzinfo is None or when<=datetime.now(timezone.utc):
+            raise ValueError('Schedule must be a future timezone-aware timestamp')
+        status={'privacyStatus':'private','publishAt':when.astimezone(timezone.utc).isoformat(),'selfDeclaredMadeForKids':False}
+    return status
+
+
+def credited_description(description,attribution):
+    """Preserve the operator's explicit credit, including when metadata is edited."""
+    credit=(attribution or '').strip()
+    if credit and credit not in description:
+        description=(description.rstrip()+'\n\n' if description.strip() else '')+credit
+    if len(description.encode('utf-8'))>5000:
+        raise ValueError('YouTube descriptions, including source credit, are limited to 5000 UTF-8 bytes. Shorten the description.')
+    if '<' in description or '>' in description:
+        raise ValueError('YouTube descriptions cannot contain < or >. Remove HTML markup.')
+    return description
+
+
+def valid_title(title):
+    if not title.strip() or len(title)>100 or '<' in title or '>' in title:
+        raise ValueError('Provide a nonempty title up to 100 characters without < or >')
+    return title
+
+
+def needs_editorial_review(job,index):
+    candidates=job['result'].get('candidates',[])
+    selected=candidates if job['request'].get('mode')=='longs' else candidates[index:index+1]
+    return any(c.get('editorial_review_required') or c.get('selection_method')=='heuristic' or c.get('score',100)<50 or c.get('confidence',1)<.6 for c in selected)
+
+
+def edit(pid,title,description,privacy='private',publish_at=None):
+    """Edit only before remote effects; an expired schedule can be corrected safely."""
+    status=publication_status(privacy,publish_at)
+    valid_title(title)
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute('SELECT * FROM publications WHERE id=?',(pid,)).fetchone()
+        if not row or row['state'] not in ('QUEUED','FAILED') or row['session'] or row['video_id']:
+            raise ValueError('Only queued/failed items without an upload session or video ID can be edited')
+        policy=db.execute('SELECT * FROM channels WHERE id=?',(row['channel'],)).fetchone()
+        if not policy or ((privacy=='public' or publish_at) and not policy['public_allowed']):
+            raise ValueError('Public publishing has not been explicitly enabled for this channel')
+        metadata=json.loads(row['metadata'])
+        job=db.execute('SELECT request FROM jobs WHERE id=?',(row['job'],)).fetchone()
+        attribution=json.loads(job['request']).get('source_attribution','') if job else ''
+        metadata['snippet'].update(title=title,description=credited_description(description,attribution))
+        metadata['status']=status
+        metadata['automatic']=False
+        db.execute("UPDATE publications SET metadata=?,state='QUEUED',error=NULL WHERE id=?",(json.dumps(metadata,ensure_ascii=False),pid))
 
 
 def enqueue(jid,index,channel,title,description,privacy='private',publish_at=None,automatic=False):
@@ -86,15 +143,10 @@ def enqueue(jid,index,channel,title,description,privacy='private',publish_at=Non
         raise ValueError('Verify the Drive upload before publishing')
     if not output.get('approved') and not automatic:
         raise ValueError('Approve the output in Editor before publication')
-    if privacy not in ('private','public','unlisted'):
-        raise ValueError('Invalid privacy mode')
-    status={'privacyStatus':privacy,'selfDeclaredMadeForKids':False}
-    if publish_at:
-        when=datetime.fromisoformat(publish_at.replace('Z','+00:00'))
-        if when.tzinfo is None or when<=datetime.now(timezone.utc):
-            raise ValueError('Schedule must be a future timezone-aware timestamp')
-        status={'privacyStatus':'private','publishAt':when.astimezone(timezone.utc).isoformat(),'selfDeclaredMadeForKids':False}
-    snippet={'title':title[:100],'description':description[:5000],'categoryId':'22'}
+    if automatic and not output.get('approved') and needs_editorial_review(job,index):
+        raise ValueError('Weak or ungrounded selection requires editorial approval before automatic publication')
+    status=publication_status(privacy,publish_at)
+    snippet={'title':valid_title(title[:100]),'description':credited_description(description,job['request'].get('source_attribution','')),'categoryId':'22'}
     language=job['result'].get('language')
     if language:
         snippet['defaultLanguage']=language
@@ -170,6 +222,28 @@ class Uncertain(ValueError):
     pass
 
 
+class PublicationError(ValueError):
+    pass
+
+
+def upload_error(response,operation):
+    """Expose known API reasons, never raw Google payloads or session URLs."""
+    reasons={
+        'quotaExceeded':'YouTube API quota is exhausted; wait for its reset',
+        'dailyLimitExceeded':'YouTube API daily limit is exhausted; wait for its reset',
+        'uploadLimitExceeded':'This channel reached its upload limit; wait before retrying',
+        'insufficientPermissions':'Reauthorize this channel with youtube.upload and youtube.readonly scopes',
+        'forbidden':'The API project or channel does not permit this upload; check authorization',
+        'invalidTitle':'Correct the title before retrying',
+        'invalidDescription':'Correct the description before retrying; maximum 5000 UTF-8 bytes and no HTML angle brackets',
+        'invalidPublishAt':'Correct the future publication time before retrying',
+    }
+    try:reason=response.json()['error']['errors'][0]['reason']
+    except (ValueError,KeyError,IndexError,TypeError):reason=None
+    advice=reasons.get(reason,'Check channel authorization, API project access and network connectivity')
+    return PublicationError(f'{operation} failed (HTTP {response.status_code}). {advice}. Existing upload identity is preserved.')
+
+
 def upload(publication):
     pid=publication['id']
     youtube=None
@@ -209,6 +283,11 @@ def upload(publication):
                     next_time+=timedelta(minutes=minutes)
                 body['status']['publishAt']=next_time.isoformat()
                 db.execute('UPDATE publications SET metadata=? WHERE id=?',(json.dumps({**body,'drive':remote,'automatic':automatic},ensure_ascii=False),pid))
+        if publication.get('video_id'):
+            # A returned video identity is authoritative even if a later GET failed.
+            # Reconcile it directly; never depend on a possibly expired session.
+            complete(pid,{'id':publication['video_id']},body,youtube,publication['channel'])
+            return
         file_id=remote['id']
         verified=drive.request('GET',BASE+'/files/'+file_id,params={'fields':'id,size,md5Checksum','supportsAllDrives':'true'}).json()
         if verified.get('md5Checksum')!=remote.get('md5Checksum') or verified.get('size')!=remote.get('size'):
@@ -227,12 +306,12 @@ def upload(publication):
             if response.status_code in (404,410):
                 raise Uncertain('Upload session expired; reconcile with YouTube Studio before any new upload')
             if response.status_code!=308:
-                raise ValueError(f'YouTube session query failed ({response.status_code}); retry the existing session')
+                raise upload_error(response,'YouTube session query')
             offset=acknowledged(response)
         else:
             response=youtube.client.post('https://www.googleapis.com/upload/youtube/v3/videos',params={'uploadType':'resumable','part':'snippet,status'},json=body,headers={'X-Upload-Content-Length':str(total),'X-Upload-Content-Type':'video/mp4'})
             if response.status_code not in (200,201):
-                raise ValueError(f'YouTube session creation failed ({response.status_code}); check OAuth scopes, quota and API project status')
+                raise upload_error(response,'YouTube session creation')
             session=response.headers['Location']
             validate_session(session)
             checkpoint(pid,session=session)
@@ -256,7 +335,7 @@ def upload(publication):
                 complete(pid,response.json(),body,youtube,publication['channel'])
                 return
             if response.status_code!=308:
-                raise ValueError(f'YouTube chunk upload failed ({response.status_code}); retry the existing session')
+                raise upload_error(response,'YouTube chunk upload')
             next_offset=acknowledged(response)
             if next_offset<=offset or next_offset>total:
                 raise ValueError('YouTube upload acknowledgment made no valid progress')
@@ -265,6 +344,8 @@ def upload(publication):
         raise Uncertain('All bytes acknowledged without a video ID; reconcile the existing session')
     except Uncertain as error:
         checkpoint(pid,state='UNCERTAIN',error=str(error))
+    except PublicationError as error:
+        checkpoint(pid,state='FAILED',error=str(error))
     except (httpx.HTTPError,ValueError,KeyError,OSError):
         # A retry will query the persisted session first, including after final PUT timeout.
         checkpoint(pid,state='FAILED',error='Upload interrupted or authorization/quota validation failed. Retry resumes the saved session; check channel authorization and Drive access.')
@@ -284,8 +365,13 @@ def complete(pid,response,metadata,youtube,channel):
     remote=youtube.request('GET',YT+'/videos',params={'part':'snippet,status','id':response['id']}).json()['items']
     if not remote or remote[0]['snippet']['channelId']!=channel or remote[0]['status']['privacyStatus']!=metadata['status']['privacyStatus']:
         raise Uncertain('Video ID exists but channel/privacy verification failed; inspect YouTube Studio')
-    if metadata['status'].get('publishAt') and not remote[0]['status'].get('publishAt'):
-        raise Uncertain('Video ID exists but native schedule was not confirmed; inspect YouTube Studio')
+    if remote[0]['status'].get('uploadStatus') not in ('uploaded','processed'):
+        raise Uncertain('Video ID exists but YouTube did not confirm a successful upload status; inspect YouTube Studio')
+    expected=metadata['status'].get('publishAt')
+    if expected:
+        actual=remote[0]['status'].get('publishAt')
+        if not actual or datetime.fromisoformat(actual.replace('Z','+00:00'))!=datetime.fromisoformat(expected.replace('Z','+00:00')):
+            raise Uncertain('Video ID exists but native schedule was not confirmed; inspect YouTube Studio')
     with store.connect() as db:
         total=db.execute('SELECT total FROM publications WHERE id=?',(pid,)).fetchone()['total']
     checkpoint(pid,state='SCHEDULED' if metadata['status'].get('publishAt') else 'PUBLISHED',video_id=response['id'],current=total)
@@ -309,6 +395,7 @@ def auto_queue():
         channel=job['request'].get('publish_channel')
         try:
             for index,output in enumerate(job['result'].get('outputs',[])):
+                if not output.get('approved') and needs_editorial_review(job,index):continue
                 enqueue(job['id'],index,channel,output['title'][:100],job['result'].get('source',{}).get('title',''),automatic=True)
         except ValueError:
             # A revoked policy does not change READY rendering state or publish.

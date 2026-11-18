@@ -134,6 +134,22 @@ def test_corrupted_output_cannot_be_accepted(tmp_path):
     with pytest.raises(Exception):media.validate_output(broken,5)
 
 
+def test_encoded_transient_audio_has_peak_headroom(fixture):
+    import av
+    import numpy as np
+    source,transcript,tmp_path=fixture
+    transient=tmp_path/'transient.mp4'
+    pulses=r'aevalsrc=if(lt(mod(t\,0.1)\,0.005)\,0.99*sin(2*PI*4000*t)\,0):s=48000:d=5'
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-f','lavfi','-i',pulses,'-map','0:v','-map','1:a','-t','5','-c:v','copy','-c:a','pcm_s16le','-f','matroska',str(transient)])
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,mode='longs',captions=False)
+    output=tmp_path/'limited.mp4';media.render(transient,output,transcript,0,5,req)
+    with av.open(str(output)) as container:
+        assert container.streams.audio[0].rate==48000
+        decoded=[frame.to_ndarray() for frame in container.decode(audio=0)]
+    assert decoded and all(np.isfinite(samples).all() for samples in decoded)
+    assert max(float(np.abs(samples).max()) for samples in decoded)<10**(-2.5/20)
+
+
 def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatch):
     from factory import pipeline
     _,transcript,_=fixture
@@ -146,3 +162,90 @@ def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatc
     result=store.get(job['id'])
     assert result['state']=='READY',result['error']
     assert result['result']['outputs'][0]['title']=='Frozen selection'
+
+
+def test_pipeline_renders_synchronized_background_and_music_without_local_library(fixture):
+    import hashlib
+    import httpx
+    from factory import assets,pipeline
+    source,transcript,_=fixture
+    payload=source.read_bytes()
+    digest=hashlib.sha256(payload).hexdigest()
+    manifest=[{'kind':kind,'name':'approved.mp4','size':len(payload),'sha256':digest} for kind in ('backgrounds','music')]
+    with httpx.Client(base_url='http://controller',transport=httpx.MockTransport(lambda _:httpx.Response(200,content=payload))) as client:
+        paths=assets.sync(client,manifest)
+    assert set(paths)=={'backgrounds','music'}
+    assert not (config.DATA/'backgrounds').exists() and not (config.DATA/'music').exists()
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,intervals=[(0,5)],preset='gameplay',audio_mode='music',music_asset='approved.mp4')
+    job=store.create(req.model_dump());root=config.SCRATCH/job['id'];root.mkdir()
+    (root/'transcript.json').write_text(json.dumps(transcript),encoding='utf-8')
+    pipeline.process(store.claim('remote-assets-test'),assets=paths)
+    complete=store.get(job['id'])
+    assert complete['state']=='READY',complete['error']
+    report=complete['result']['outputs'][0]['validation']
+    assert report['audio'] and (report['width'],report['height'])==(1080,1920)
+
+
+def test_bounded_separate_webm_streams_produce_exact_mp4_destination(fixture,monkeypatch):
+    from contextlib import nullcontext
+    from functools import partial
+    from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler
+    import threading
+    import yt_dlp
+    import ssrf_guard
+    from factory import range_download
+    source,_,folder=fixture
+    video=folder/'video.webm';audio=folder/'audio.webm'
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-an','-c:v','libvpx-vp9','-deadline','realtime','-cpu-used','8',str(video)])
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-vn','-c:a','libopus',str(audio)])
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(folder)))
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    base=f'http://127.0.0.1:{server.server_port}'
+    metadata={'id':'fixture','title':'Authorized separate streams','duration':6,'formats':[
+        {'format_id':'v','url':base+'/video.webm','ext':'webm','vcodec':'vp9','acodec':'none','height':360},
+        {'format_id':'a','url':base+'/audio.webm','ext':'webm','vcodec':'none','acodec':'opus'}]}
+    monkeypatch.setattr(yt_dlp.YoutubeDL,'extract_info',lambda *a,**kw:metadata)
+    monkeypatch.setattr(range_download,'validate_url',lambda _:None)
+    monkeypatch.setattr(ssrf_guard,'guarded',nullcontext)
+    monkeypatch.setattr(ssrf_guard,'assert_public_urls',lambda _:None)
+    destination=folder/'bounded.mp4'
+    monkeypatch.setattr(range_download.sys,'argv',['range_download','https://www.youtube.com/watch?v=fixture',str(destination),'0','5','bv*+ba/b',media.ffmpeg()])
+    try:range_download.main()
+    finally:server.shutdown();server.server_close();thread.join(timeout=2)
+    assert destination.is_file() and not destination.with_suffix('.mp4.mkv').exists()
+    media.validate_output(destination,5)
+
+
+def test_worker_handoff_uses_controller_selection_without_old_scratch(fixture,monkeypatch):
+    from factory import pipeline
+    _,transcript,_=fixture
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,preset='crop')
+    job=store.create(req.model_dump());first=store.claim('worker-a')
+    frozen=[{'start_seconds':0,'end_seconds':5,'title':'Controller-frozen interval'}]
+    store.update(job['id'],first['lease'],state='FAILED',result={'analysis':'ollama','candidates':frozen})
+    assert store.retry(job['id'])
+    root=config.SCRATCH/job['id'];root.mkdir()
+    (root/'transcript.json').write_text(json.dumps(transcript),encoding='utf-8')
+    assert not (root/'analysis.json').exists()
+    monkeypatch.setattr(pipeline,'analyze',lambda *_:pytest.fail('Worker handoff must not rerank persisted output identities'))
+    pipeline.process(store.claim('worker-b'))
+    complete=store.get(job['id'])
+    assert complete['state']=='READY',complete['error']
+    assert complete['worker']=='worker-b' and complete['result']['candidates']==frozen
+    media.validate_output(root/'clip-1.mp4',5)
+
+
+def test_silent_short_without_captions_needs_no_speech_model(fixture,monkeypatch):
+    from factory import pipeline
+    original=media.run
+    def checked(args,*a,**kw):
+        assert 'factory.transcribe' not in args,'Silent short sources without captions must not require ASR'
+        return original(args,*a,**kw)
+    monkeypatch.setattr(media,'run',checked)
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,minimum=5,maximum=6,preset='crop',audio_mode='silent',captions=False)
+    job=store.create(req.model_dump());pipeline.process(store.claim('silent-short'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    assert done['result']['outputs'][0]['validation']['audio'] is False

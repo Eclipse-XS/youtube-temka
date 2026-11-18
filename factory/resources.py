@@ -7,7 +7,7 @@ from . import config
 
 def usage():
     config.initialize()
-    used = sum(p.stat().st_size for folder in (config.SCRATCH,config.DATA/'backgrounds',config.DATA/'music') for p in folder.rglob('*') if p.is_file())
+    used = sum(p.stat().st_size for folder in (config.SCRATCH,config.DATA/'backgrounds',config.DATA/'music',config.DATA/'asset-cache') for p in folder.rglob('*') if p.is_file())
     free = shutil.disk_usage(config.SCRATCH).free
     return {'scratch_bytes':used, 'free_bytes':free, 'budget_bytes':config.SCRATCH_BYTES, 'reserve_bytes':config.RESERVE_BYTES}
 
