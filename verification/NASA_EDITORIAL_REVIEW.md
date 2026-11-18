@@ -53,8 +53,35 @@ accuracy and subjective highlight value remain unscored.
 
 Face-detection counts establish that tracking ran, not that framing was
 subjectively correct. RU/UK source quotes can preserve recognition errors.
+Inspected output frames show readable Cyrillic/Latin captions and the expected
+crop/split/blur layouts. One Russian frame had no caption during a real SRT pause;
+another frame at 15 s showed the expected Cyrillic text. These spot checks do not
+establish full audio/subtitle alignment or temporal framing quality.
 Gameplay music was replaced for controlled commentary; Silent explicitly removes
 audio in the limited-speech test. Source licenses and adaptations were credited.
+
+## Audio measurements and repaired overshoot
+
+FFmpeg EBU R128/astats measurements of the decoded benchmark outputs:
+
+| Output | Integrated loudness | True peak |
+|---|---|---|
+| Ukrainian | −16.1 LUFS | −1.9 dBFS |
+| Russian | −13.9 LUFS | −2.1 dBFS |
+| Controlled gameplay commentary | −17.7 LUFS | −0.8 dBFS |
+| Controlled reaction, original run | −16.7 LUFS | **+0.3 dBFS: defect** |
+| Controlled reaction, corrected rerender | −16.7 LUFS | **−4.7 dBFS** |
+
+The original runs contained no NaN/infinite samples. Loudnorm alone did not
+prevent AAC overshoot. The correction formats final output as 48 kHz stereo,
+limits peaks with makeup gain disabled and latency compensated, and encodes AAC
+at 192 kbit/s. A real decoded transient regression verifies headroom. Initial
+Linux tests caught a channel-layout negotiation failure in the first correction;
+the explicit stereo format resolved it and real Linux renders passed.
+The corrected reaction output retains 24.433333 s / 733 frames / audio. This
+objective check does not establish natural speech, absence of all artifacts or
+full subtitle synchronization. The first multi-hour attempt uses the image it
+started on; it is not relabeled as having this later audio correction.
 
 ## Source and license evidence
 
@@ -62,6 +89,7 @@ audio in the limited-speech test. Source licenses and adaptations were credited.
 - Russian: [Amir source and CC BY-SA 4.0 record](https://commons.wikimedia.org/wiki/File:WIKITONGUES-_Amir_speaking_Russian_and_Hebrew.webm), Wikitongues / Bogreudell. Downloaded 38,613,211 bytes; SHA-256 `66ef68c22a0de477173ef44fc24e33ebd85a90530814825491476074583278ff`. A bounded first-90-second MP4 conversion was uploaded for processing.
 - Gameplay: [VoxeLibre source and CC BY 3.0 record](https://commons.wikimedia.org/wiki/File:MineClone2_-_Release_0.84_-_The_Very_Nice_Release.webm). Downloaded 54,174,478 bytes; SHA-256 `0bc335ebea20dacf3deb95cfa17be42281cf6e5ca72a14c6238d55faf8f211b1`. Original music credit identifies Jordach; commentary replaced that soundtrack, and limited-speech output was explicitly silent.
 - NASA: informational testing under [NASA media guidance](https://www.nasa.gov/nasa-brand-center/images-and-media/), with credit, no endorsement claim and no public publication. This is not a blanket license for third-party material shown by NASA.
+- Multi-hour source provenance: the [official Webb launch video](https://www.youtube.com/watch?v=7nT7JGZMbtM) is also documented as a NASA/ESA production by [NASA Goddard's complete-broadcast record](https://svs.gsfc.nasa.gov/14060), which requests credit to NASA's Goddard Space Flight Center. [ESA's media terms](https://www.esa.int/terms-and-conditions/terms-and-conditions-for-images-and-videos) permit credited informational uses of its material and exclude blanket authorization for third-party rights. This acceptance test is private informational use; commercial reuse is not asserted.
 
 No arbitrary stream was treated as authorized. Raw sources, transcripts, Google
 identifiers and private artifact manifests remain ignored locally.

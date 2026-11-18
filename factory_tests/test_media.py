@@ -134,6 +134,22 @@ def test_corrupted_output_cannot_be_accepted(tmp_path):
     with pytest.raises(Exception):media.validate_output(broken,5)
 
 
+def test_encoded_transient_audio_has_peak_headroom(fixture):
+    import av
+    import numpy as np
+    source,transcript,tmp_path=fixture
+    transient=tmp_path/'transient.mp4'
+    pulses=r'aevalsrc=if(lt(mod(t\,0.1)\,0.005)\,0.99*sin(2*PI*4000*t)\,0):s=48000:d=5'
+    media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source),'-f','lavfi','-i',pulses,'-map','0:v','-map','1:a','-t','5','-c:v','copy','-c:a','pcm_s16le','-f','matroska',str(transient)])
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,mode='longs',captions=False)
+    output=tmp_path/'limited.mp4';media.render(transient,output,transcript,0,5,req)
+    with av.open(str(output)) as container:
+        assert container.streams.audio[0].rate==48000
+        decoded=[frame.to_ndarray() for frame in container.decode(audio=0)]
+    assert decoded and all(np.isfinite(samples).all() for samples in decoded)
+    assert max(float(np.abs(samples).max()) for samples in decoded)<10**(-2.5/20)
+
+
 def test_pipeline_reuses_frozen_highlights_after_interruption(fixture,monkeypatch):
     from factory import pipeline
     _,transcript,_=fixture
