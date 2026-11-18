@@ -44,3 +44,4 @@ function Invoke-RestMethod { @(@{state='TRANSCRIBING'}) }
 if ($LASTEXITCODE -ne 1 -or (Get-Content (Join-Path $temporary 'active.log') -Raw) -notmatch 'Active jobs detected') { throw 'Active-job protection failed.' }
 Write-Host '4 launcher checks passed: secure first run, repeat preservation, invalid configuration preservation, active-job protection.'
 # Leave the isolated temporary fixture available for inspection; it contains no real credentials.
+exit 0 # Expected child-script failures must not leak into the CI shell exit code.
