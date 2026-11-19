@@ -3,6 +3,9 @@
 Version 7 operation, memory limits and precise feature boundaries:
 [Factory 7 guide](docs/FACTORY_7.md).
 
+Latest measured release results and limitations:
+[Factory 7 release verification](verification/FACTORY_7_RELEASE_2026-11-19.md).
+
 Self-hosted clipping and editing on the MIT OpenShorts core. Paste a completed
 YouTube/Twitch VOD, choose Shorts or Longs and a style, then Generate. The app
 probes the source, analyzes speech in bounded chunks, ranks highlights, renders,
