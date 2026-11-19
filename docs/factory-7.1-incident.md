@@ -34,3 +34,21 @@ the overlap filter (105.02–139.80 s and 186.08–215.94 s). The legacy series
 stage again kept only 105.02–139.80 s and returned 1/3. The exact source ID
 probed successfully as a 618-second video. The replay and persisted record
 are separate observations.
+
+## Factory 7.1 replay
+
+The final Connected Story planner reused the 29-segment ASR checkpoint and
+60 frame/audio samples from bounded probes. At three parts, 35–60 seconds each
+and 3 seconds of overlap, the acceptable event span was 99–174 seconds.
+Ollama marked four windows insufficient and proposed two event spans outside
+the feasible range. The job reported insufficiency and exported no series.
+This establishes that the available evidence did not support automatic
+continuity for this run.
+
+A separate Independent Highlights plan returned three review candidates:
+554.120–600.260 s from speech, 103.908–148.908 s from frame and audio change,
+and 217.783–262.783 s from frame and audio change. The first model title and
+its mission-failure explanation were not grounded in the selected excerpt.
+The review export replaces that explanation with a transcript-based reason.
+These intervals are editorial candidates. Their visual activity evidence
+does not establish narrative completeness.

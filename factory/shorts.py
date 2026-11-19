@@ -12,7 +12,7 @@ from . import config
 from .highlights import analyze, select
 from .models import Candidate
 
-VERSION = 3
+VERSION = 4
 SCHEMA_VERSION = 2
 PLATFORM_MAXIMUM = 180
 
@@ -224,11 +224,20 @@ def plan(transcript, request, duration, features, progress):
     for clip in result['candidates']:
         speech = [s['text'].strip() for s in transcript['segments']
                   if s['end'] > clip['start_seconds'] and s['start'] < clip['end_seconds']]
-        structured = planned(clip['start_seconds'], clip['end_seconds'], clip['title'], clip['reason'],
+        reason = clip['reason']
+        if clip['selection_method'] == 'ollama':
+            if clip['title_method'] != 'grounded_selection':
+                reason = 'Ollama proposed this transcript interval, but its suggested title could not be verified. Review context and ending.'
+            else:
+                reason = 'Ollama transcript interpretation for review: ' + reason
+        complete_sentence = bool(speech and speech[-1].endswith(('.', '?', '!', '…')))
+        completeness = (int(bool(speech)) + int(len(speech) >= 3) + int(complete_sentence)) / 3
+        structured = planned(clip['start_seconds'], clip['end_seconds'], clip['title'], reason,
                              transcript, 'speech', [text[:200] for text in speech[:3]],
                              score=clip['score'], confidence=clip['confidence'],
                              setup=speech[0][:500] if speech else '', payoff=speech[-1][:500] if speech else '',
                              development=' '.join(speech[1:-1])[:500],
+                             completeness=completeness,
                              context_required=clip['editorial_review_required'] or len(speech)<3)
         candidates.append(clip | structured)
 
