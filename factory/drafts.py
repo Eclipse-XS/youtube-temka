@@ -18,6 +18,7 @@ def contexts_for_job(job):
             revisions=store.metadata_history(job['id'],index)
             if not revisions or not revisions[0]['provenance'].get('input'):break
             ctx=revisions[0]['provenance']['input'];ctx['preferences']=request.metadata_preferences
+            ctx['brief']=metadata.brief(request,ctx.get('source_title',''))
             if request.metadata_language:ctx['metadata_language']=request.metadata_language
             saved.append(ctx)
         if len(saved)==len(job['result'].get('outputs',[])):return saved

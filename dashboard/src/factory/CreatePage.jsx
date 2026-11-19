@@ -119,7 +119,7 @@ export default function CreatePage({
     };
   }, [form.source]);
   const background = form.background ||
-    (form.preset === "gameplay" && form.background_mode !== "none" ? backgrounds[0] : null);
+    null;
   const selectedResolution =
     metadata?.platform === "local"
       ? Math.min(
@@ -175,6 +175,9 @@ export default function CreatePage({
           tts_text,
           hook,
           source_attribution,
+          confirmed_subject,
+          clip_observation,
+          attribution_required,
           publish_automatic,
           ...preferences
         } = request;
@@ -288,12 +291,12 @@ export default function CreatePage({
             probing ||
             !metadata ||
             !form.rights_confirmed ||
-            (form.preset === "gameplay" && !background)
+            (form.preset === "gameplay" && !background && form.background_mode !== "random")
           }
         >
           {submitting ? "Додаю до черги…" : "Generate Videos"}
         </button>
-        {form.preset === "gameplay" && !background && (
+        {form.preset === "gameplay" && !background && form.background_mode !== "random" && (
           <p className="warning">
             Додайте авторизований MP4-фон в Advanced Settings.
           </p>
@@ -549,7 +552,7 @@ export default function CreatePage({
                 min=".2"
                 max=".8"
                 step=".05"
-                value={form.split_ratio || 0.5}
+                value={form.split_ratio || 0.65}
                 onChange={(e) => set("split_ratio", +e.target.value)}
               />
             </label>

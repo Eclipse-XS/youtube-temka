@@ -66,6 +66,7 @@ def connect():
             key TEXT PRIMARY KEY, value TEXT NOT NULL)''')
         db.execute('''CREATE TABLE IF NOT EXISTS render_lineages (
             id TEXT PRIMARY KEY, last_version INTEGER NOT NULL)''')
+        db.execute('CREATE TABLE IF NOT EXISTS job_visibility (job TEXT PRIMARY KEY, status TEXT NOT NULL)')
         yield db
 
 
@@ -76,6 +77,8 @@ def decode(row,db=None):
     for k in ('request', 'result'):
         item[k] = json.loads(item[k])
     item.pop('lease', None)
+    visibility=db.execute('SELECT status FROM job_visibility WHERE job=?',(item['id'],)).fetchone() if db else None
+    item['visibility']=visibility['status'] if visibility else 'recent'
     if db is not None:
         item['stages']=[dict(r) for r in db.execute('SELECT key,status,started,finished,current,total,unit,message FROM job_stages WHERE job=? ORDER BY started',(item['id'],))]
     return item

@@ -256,8 +256,13 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             from jsonfile import write_json_atomic
             write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
+    caption_margin=request.caption_margin
+    if caption_margin is None and request.mode=='shorts' and request.background_position=='bottom' and (
+        request.preset=='gameplay' or (request.preset=='auto' and request.background)
+    ):
+        caption_margin=min(.68,1-request.split_ratio+.07)
     generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700',
-                 **({'margin_v':round(request.caption_margin*288)} if request.caption_margin is not None else {}))
+                 **({'margin_v':round(caption_margin*288)} if caption_margin is not None else {}))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
@@ -290,15 +295,22 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         args+=['-ss',str(request.background_offset),'-threads','2','-i',str(background)]
         main_height=2*round(height*request.split_ratio/2)
         secondary_height=height-main_height
-        def panel(h):
+        def panel(source, name, height):
+            fill=f'scale=1080:{height}:force_original_aspect_ratio=increase,crop=1080:{height},setsar=1'
+            fit=f'scale=1080:{height}:force_original_aspect_ratio=decrease,setsar=1'
             if request.split_crop=='fill':
-                return f'scale=1080:{h}:force_original_aspect_ratio=increase,crop=1080:{h},setsar=1'
-            return f'scale=1080:{h}:force_original_aspect_ratio=decrease,pad=1080:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1'
+                return f'{source}{fill}[{name}]'
+            if request.split_crop=='fit':
+                return f'{source}{fit},pad=1080:{height}:(ow-iw)/2:(oh-ih)/2[{name}]'
+            return (f'{source}split[{name}base][{name}fg];'
+                    f'[{name}base]{fill},boxblur=24:2[{name}bg];'
+                    f'[{name}fg]{fit}[{name}fit];'
+                    f'[{name}bg][{name}fit]overlay=(W-w)/2:(H-h)/2[{name}]')
         order='[main][secondary]' if request.background_position=='bottom' else '[secondary][main]'
         framing.update(secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
-        graph=(f'[0:v]{panel(main_height)}[main];'
-               f'[1:v]setpts=PTS/{request.background_speed},{panel(secondary_height)},'
-               f'tpad=stop_mode=clone:stop_duration={duration}[secondary];{order}vstack=shortest=1[v]')
+        graph=(panel('[0:v]','main',main_height)+';'+
+               f'[1:v]setpts=PTS/{request.background_speed},tpad=stop_mode=clone:stop_duration={duration}[secondary_input];'+
+               panel('[secondary_input]','secondary',secondary_height)+';'+f'{order}vstack=shortest=1[v]')
     elif preset=='smart' and trajectory:
         graph=f"[0:v]sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
     elif preset=='crop':
@@ -311,7 +323,7 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         video='[captioned]'
     else:
         video='[v]'
-    if request.hook:
+    if request.hook and request.hook_mode!='none':
         hookfile=output.with_suffix('.hook.txt')
         fontsize=request.hook_font_size
         while True:
@@ -326,7 +338,15 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/{'sans':'arial.ttf','serif':'times.ttf','mono':'consola.ttf'}[request.hook_font]
             if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
         hook_y={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
-        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='lt(t,{request.hook_duration})'[hooked]"
+        hook_mode=request.hook_mode or ('persistent' if request.text_mode in ('static_hook','hook_subtitles') else 'intro')
+        timing={'persistent':'1','intro':f'lt(t,{request.hook_duration})',
+                'timed':f'gte(t,{request.hook_start})*lt(t,{request.hook_end})'}[hook_mode]
+        if request.mode=='shorts' and preset=='gameplay':
+            offset=0 if request.background_position=='bottom' else secondary_height
+            hook_y={'top':f'{offset}+{main_height}*.09','center':f'{offset}+({main_height}-th)/2',
+                    'bottom':f'{offset}+{main_height}*.72-th'}[request.hook_position]
+        framing.update(hook_mode=hook_mode,hook_enable=timing)
+        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='{timing}'[hooked]"
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1

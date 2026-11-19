@@ -1,4 +1,5 @@
 import asyncio
+from typing import Literal
 from contextlib import asynccontextmanager
 import hmac
 import json
@@ -263,12 +264,13 @@ def starter_library():
 class LibraryPreference(BaseModel):
     favorite: bool | None = None
     removed: bool | None = None
+    label: str | None = Field(default=None,max_length=100)
 
 
 @app.post('/api/library/backgrounds/{name}/preferences')
 def library_preferences(name:str,body:LibraryPreference):
     from .library import preferences
-    try:return preferences(name,body.favorite,body.removed)
+    try:return preferences(name,body.favorite,body.removed,body.label)
     except ValueError as error:raise HTTPException(404,str(error)) from None
 
 
@@ -357,17 +359,20 @@ def create_job(body, seed=None, approved=None):
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
-    if body.background_mode=='random' or (body.background_category and body.background_mode=='auto'):
-        import random
-        from .library import entries
-        choices=[a['name'] for a in entries() if a['kind']=='backgrounds' and a['availability']=='AVAILABLE' and not a.get('removed') and (not body.background_category or a['category']==body.background_category)]
-        if not choices:raise HTTPException(409,'No licensed asset in this category; import authorized media or choose another category')
-        body.background=random.choice(choices) if choices else None
+    if body.background_mode=='random' or (not body.background and body.background_category and body.background_mode=='auto'):
+        from .library import recommend
+        choice=recommend(body.background_category)
+        if not choice:raise HTTPException(409,'No eligible asset in this category; import authorized media or choose another category')
+        body.background=choice
+        body.background_selection_reason='Eligible license, requested category, fewer recent uses, favorites and vertical resolution'
         body.background_mode='specific'
     if body.selection_version==2 and body.preset=='gameplay' and body.background_mode=='auto' and not body.background:
-        available=sorted(backgrounds())
-        if not available:raise HTTPException(409,'Choose or import a secondary video for Split Screen')
-        body.background=available[0]
+        raise HTTPException(422,'Choose a background or select Random with a category for Split Screen')
+    if body.category_override:
+        from .metadata import CATEGORIES
+        if body.category_override not in CATEGORIES:raise HTTPException(422,'Unsupported YouTube category')
+    if body.hook_mode=='timed' and body.mode=='shorts' and body.hook_start>=min(body.maximum,180):
+        raise HTTPException(422,'Timed hook must start within the clip')
     if body.background and body.background_mode!='none' and body.background not in backgrounds():
         raise HTTPException(409,'Selected secondary asset is unavailable')
     if body.publish_automatic:
@@ -455,6 +460,64 @@ def replan(jid:str, body:Replan):
 def jobs(limit:int=50,offset:int=0):
     if not 1<=limit<=200 or offset<0:raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
     return store.list_jobs(limit,offset)
+
+
+class JobVisibility(BaseModel):
+    ids: list[str] = Field(min_length=1,max_length=50)
+    status: Literal['recent','archived','trash']
+
+
+@app.post('/api/jobs/visibility')
+def job_visibility(body:JobVisibility):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        for jid in set(body.ids):
+            row=db.execute('SELECT state,lease FROM jobs WHERE id=?',(jid,)).fetchone()
+            if row is None:raise HTTPException(404,'Job not found')
+            if row['lease'] or row['state'] not in ('READY','FAILED','BLOCKED','CANCELLED'):
+                raise HTTPException(409,'Active jobs cannot be archived or moved to trash')
+            db.execute('INSERT OR REPLACE INTO job_visibility VALUES(?,?)',(jid,body.status))
+    return {'updated':len(set(body.ids))}
+
+
+def job_deletion_dependencies(db,jid):
+    if not re.fullmatch(r'[a-f0-9]{32}',jid):raise HTTPException(404,'Job not found')
+    row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+    if not row:raise HTTPException(404,'Job not found')
+    job=store.decode(row,db)
+    publications=db.execute('SELECT COUNT(*) FROM publications WHERE job=?',(jid,)).fetchone()[0]
+    edits=db.execute("SELECT COUNT(*) FROM jobs WHERE json_extract(request,'$.source') LIKE ?",(f'edit:{jid}:%',)).fetchone()[0]
+    packages=db.execute('SELECT COUNT(*) FROM retention_packages WHERE job=?',(jid,)).fetchone()[0]
+    outputs=len(job['result'].get('outputs',[]))
+    artifacts=len(job['result'].get('artifacts',{}))
+    workspace=os.path.lexists(config.SCRATCH/jid)
+    allowed=(job['visibility']=='trash' and job['state'] in ('FAILED','CANCELLED')
+             and not any((row['lease'],publications,edits,packages,outputs,artifacts,workspace)))
+    return {'job':jid,'permanent_delete_available':allowed,'publications':publications,'dependent_edits':edits,
+            'outputs':outputs,'remote_artifacts':artifacts,'workspace_present':workspace,
+            'retention_packages':packages,'shared_background':job['request'].get('background')}
+
+
+@app.get('/api/jobs/{jid}/deletion-preview')
+def deletion_preview(jid:str):
+    with store.connect() as db:return job_deletion_dependencies(db,jid)
+
+
+class JobDeletion(BaseModel):
+    confirmation: str
+
+
+@app.post('/api/jobs/{jid}/delete-record')
+def delete_job_record(jid:str,body:JobDeletion):
+    if body.confirmation!=jid:raise HTTPException(422,'Type the job ID to confirm')
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if not job_deletion_dependencies(db,jid)['permanent_delete_available']:
+            raise HTTPException(409,'Only trashed failed or cancelled records without artifacts or dependencies can be deleted')
+        for table in ('job_stages','events','metadata_versions','job_visibility'):
+            db.execute(f'DELETE FROM {table} WHERE job=?',(jid,))
+        db.execute('DELETE FROM jobs WHERE id=?',(jid,))
+    return {'removed':jid}
 
 
 @app.get('/api/jobs/{jid}')

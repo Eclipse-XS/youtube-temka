@@ -29,19 +29,60 @@ def register(path,kind,license,source,category='custom',provenance=None):
     return path.name,False
 
 
+def display_name(item):
+    if item.get('display_name'):return item['display_name']
+    if item.get('provider')=='Wikimedia Commons':
+        from urllib.parse import unquote,urlsplit
+        title=unquote(urlsplit(item['source']).path.rsplit('/',1)[-1]).removeprefix('File:')
+        return title.rsplit('.',1)[0].replace('_',' ')
+    if item['name'].startswith('starter-'):
+        return 'Demo · '+item['name'][8:-4].replace('-',' ').title()
+    return 'Operator asset · '+(item.get('category') or 'custom').replace('-',' ')
+
+
 def entries():
+    from collections import Counter
     with store.connect() as db:
-        return [{**json.loads(row['metadata']),'kind':row['kind'],
-                 'availability':'AVAILABLE' if (config.DATA/row['kind']/row['name']).is_file() else 'MISSING'}
-                for row in db.execute('SELECT * FROM media_assets')]
+        usage=Counter((kind,row[field]) for row in db.execute(
+            "SELECT json_extract(request,'$.background') background,json_extract(request,'$.music_asset') music,"
+            "json_extract(request,'$.logo_asset') logo FROM jobs")
+            for kind,field in (('backgrounds','background'),('music','music'),('logos','logo')) if row[field])
+        result=[]
+        for row in db.execute('SELECT * FROM media_assets'):
+            item=json.loads(row['metadata'])
+            key=(row['kind'],row['name'])
+            result.append({**item,'kind':row['kind'],'display_name':display_name(item),
+                           'job_references':usage[key],
+                           'availability':'AVAILABLE' if (config.DATA/row['kind']/row['name']).is_file() else 'MISSING'})
+        return result
 
 
-def preferences(name, favorite=None, removed=None):
+def recommend(category=None):
+    from collections import Counter
+    import random
+
+    assets=[item for item in entries() if item['kind']=='backgrounds' and
+            item['availability']=='AVAILABLE' and not item.get('removed') and
+            (not category or item['category']==category) and
+            (item.get('license')=='CC0-1.0' or item.get('license_status')=='operator_documented')]
+    if not assets:return None
+    with store.connect() as db:
+        recent=Counter(row[0] for row in db.execute(
+            "SELECT json_extract(request,'$.background') FROM jobs ORDER BY created DESC LIMIT 15"))
+    def rank(item):
+        return (item['name'].startswith('starter-'),recent[item['name']],not item.get('favorite'),
+                -min((item['width'] or 0)/720,(item['height'] or 0)/1280))
+    best=min(rank(item) for item in assets)
+    return random.choice([item['name'] for item in assets if rank(item)==best])
+
+
+def preferences(name, favorite=None, removed=None, label=None):
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         row=db.execute("SELECT metadata FROM media_assets WHERE kind='backgrounds' AND name=?",(name,)).fetchone()
         if not row:raise ValueError('Secondary asset is unavailable')
         item=json.loads(row['metadata'])
+        if label is not None:item['display_name']=label.strip() or None
         if favorite is not None:item['favorite']=favorite
         if removed is not None:item['removed']=removed
         db.execute("UPDATE media_assets SET metadata=? WHERE kind='backgrounds' AND name=?",(json.dumps(item),name))

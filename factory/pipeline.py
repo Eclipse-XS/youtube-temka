@@ -214,12 +214,13 @@ def process(claim,assets=None):
             if request.mode=='longs' and i<len(candidates)-1:clip_request.cta_text=''
             if request.mode=='longs' and i>0:clip_request.hook=''
             hook_candidates=None
-            if request.text_mode in ('static_hook','hook_subtitles') and not request.hook and (request.mode!='longs' or i==0):
+            if request.text_mode in ('static_hook','hook_subtitles') and request.hook_mode!='none' and not request.hook and (request.mode!='longs' or i==0):
                 from .hooks import suggest
                 progress.begin('hooks','ANALYZING',message=f'Clip {i+1}/{len(candidates)}')
                 evidence=' '.join(s['text'] for s in transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds'])
-                hook_candidates=suggest(evidence,request.metadata_language or transcript['language'] or 'en',request.llm_model,metadata['title'])
-                clip_request.hook=hook_candidates['candidates'][0]['text']
+                hook_candidates=suggest(evidence,request.metadata_language or transcript['language'] or 'en',request.llm_model,metadata['title'],request.confirmed_subject,request.clip_observation)
+                if hook_candidates['method']!='neutral_fallback':
+                    clip_request.hook=hook_candidates['candidates'][0]['text']
                 progress.done(message=hook_candidates['method'])
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'

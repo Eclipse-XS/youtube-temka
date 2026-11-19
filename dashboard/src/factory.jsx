@@ -20,6 +20,7 @@ import MetadataEditor from "./factory/MetadataEditor.jsx";
 import AnalyticsPanel from "./factory/AnalyticsPanel.jsx";
 import StoragePanel from "./factory/StoragePanel.jsx";
 import SelectionReview from "./factory/SelectionReview.jsx";
+import JobHistory from "./factory/JobHistory.jsx";
 import AssetLibrary from "./factory/AssetLibrary.jsx";
 
 async function api(path, options = {}) {
@@ -48,7 +49,7 @@ async function api(path, options = {}) {
 }
 const post = (path, body = {}) =>
   api(path, { method: "POST", body: JSON.stringify(body) });
-const pages = [["Create", Plus], ["Jobs", ListVideo], ["Editor", Scissors], ["Publish", Upload], ["Settings", Settings]];
+const pages = [["Create", Plus], ["Jobs", ListVideo], ["Editor", Scissors], ["Library", FolderOpen], ["Publish", Upload], ["Settings", Settings]];
 
 function ModelConfiguration({ settings, act }) {
   const [ollama, setOllama] = useState(settings?.ollama_model || "qwen2.5:3b");
@@ -392,10 +393,7 @@ function App() {
           />
         )}
         {page === "Jobs" && (
-          <>
-            {jobs.map(jobRow)}
-            {jobs.length === 0 && <p className="muted">Черга порожня.</p>}
-          </>
+          <JobHistory jobs={jobs} render={jobRow} api={api} post={post} act={act} refresh={refresh}/>
         )}
         {page === "Editor" && (
           <>
@@ -679,6 +677,7 @@ function App() {
         {page === "Publish" && (
           <PublisherPanel outputs={outputs} initialSelection={publishSelection} settings={settings} act={act} api={api} post={post} refreshJobs={refresh} />
         )}
+        {page === "Library" && <AssetLibrary api={api} post={post} act={act}/>}
         {page === "Settings" && (
           <>
             <section>
@@ -759,7 +758,7 @@ function App() {
                 />
               )}
             </section>
-            <AssetLibrary api={api} post={post} act={act}/>
+
             <StoragePanel api={api} post={post} act={act}/>
             <VoiceSettings settings={settings} post={post} act={act} />
             <section>

@@ -11,9 +11,12 @@ class JobRequest(BaseModel):
     bitrate: int = Field(default=8000000,ge=1000000,le=50000000)
     caption_style: Literal['pop','karaoke','clean'] = 'pop'
     caption_margin: float | None = Field(default=None,ge=.07,le=.75,allow_inf_nan=False)
-    split_ratio: float = Field(default=.5,ge=.2,le=.8,allow_inf_nan=False)
+    split_ratio: float = Field(default=.65,ge=.2,le=.8,allow_inf_nan=False)
     hook: str = Field(default='',max_length=120)
     text_mode: Literal['none','subtitles','static_hook','hook_subtitles','custom'] | None = None
+    hook_mode: Literal['persistent','timed','intro','none'] | None = None
+    hook_start: float = Field(default=0,ge=0,le=3600,allow_inf_nan=False)
+    hook_end: float = Field(default=15,gt=0,le=3600,allow_inf_nan=False)
     hook_duration: float = Field(default=3,ge=.5,le=30,allow_inf_nan=False)
     hook_position: Literal['top','center','bottom'] = 'top'
     hook_font_size: int = Field(default=48,ge=18,le=96)
@@ -31,12 +34,13 @@ class JobRequest(BaseModel):
     background_speed: float = Field(default=1,ge=.5,le=2,allow_inf_nan=False)
     background_offset: float = Field(default=0,ge=0,le=3600,allow_inf_nan=False)
     background_loop: bool = True
-    split_crop: Literal['fill','fit'] = 'fit'
+    split_crop: Literal['fill','fit','blurred'] = 'blurred'
     series_overlap: float = Field(default=3,ge=0,le=5,allow_inf_nan=False)
     target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
     logo_asset: str | None = Field(default=None,pattern=r'^[a-zA-Z0-9_-]+\.png$')
     cta_text: str = Field(default='',max_length=120)
     background_mode: Literal['auto','none','specific','random'] = 'auto'
+    background_selection_reason: str | None = Field(default=None,max_length=300)
     background_category: str | None = Field(default=None,max_length=80)
     preserve_fps: bool = False
     asr_model: Literal['tiny','base','small','medium','large-v3','large-v3-turbo'] | None = None
@@ -53,6 +57,11 @@ class JobRequest(BaseModel):
     tts_text: str = Field(default='',max_length=5000)
     tts_speed: float = Field(default=1,ge=.85,le=1.15,allow_inf_nan=False)
     silence_removal: bool = False
+    confirmed_subject: str = Field(default='',max_length=100)
+    clip_observation: str = Field(default='',max_length=500)
+    include_source_link: bool = False
+    attribution_required: bool = False
+    category_override: str | None = Field(default=None,pattern=r'^\d{1,3}$')
     source_attribution: str = Field(default='',max_length=1000)
     source_category: Literal['auto','podcast','stream','gameplay','visual'] = 'auto'
     background: str | None = Field(default=None, pattern=r'^[a-zA-Z0-9_-]+\.mp4$')
@@ -72,6 +81,10 @@ class JobRequest(BaseModel):
         if self.text_mode is not None:
             self.captions=self.text_mode in ('subtitles','hook_subtitles')
             if self.text_mode in ('none','subtitles'):self.hook=''
+        if self.attribution_required and not self.source_attribution.strip():
+            raise ValueError('Documented attribution text is required')
+        if self.hook_mode=='timed' and self.hook_end<=self.hook_start:
+            raise ValueError('Hook end must follow hook start')
         if self.text_mode=='custom' and not self.hook.strip():raise ValueError('Custom Text requires nonempty text')
         if self.series_mode!='independent' and self.mode!='shorts':raise ValueError('Series modes require Shorts')
         if self.plan_only and (self.mode!='shorts' or self.publish_automatic):raise ValueError('Planning requires Shorts with automatic publishing disabled')

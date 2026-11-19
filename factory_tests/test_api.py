@@ -120,3 +120,41 @@ def test_retry_keeps_original_asset_version_and_automatic_choice(client):
     assert second['assets']==first['assets']
     assert second['assets'][0]['name']=='original.mp4'
     assert store.get(job['id'])['result']['asset_manifest']==first['assets']
+
+def test_job_visibility_bulk_restore_and_active_protection(client):
+    from factory import store
+    client.headers['Authorization']='Bearer '+'a'*40
+    requests={'source':'https://www.youtube.com/watch?v=fixture','rights_confirmed':True}
+    first=store.create(requests)
+    second=store.create(requests)
+    first_claim=store.claim('fixture')
+    store.update(first['id'],first_claim['lease'],state='READY')
+    response=client.post('/api/jobs/visibility',json={'ids':[first['id'],second['id']],'status':'archived'})
+    assert response.status_code==409
+    assert client.get('/api/jobs/'+first['id']).json()['visibility']=='recent'
+    second_claim=store.claim('fixture')
+    store.update(second['id'],second_claim['lease'],state='FAILED')
+    for status in ('archived','trash','recent'):
+        assert client.post('/api/jobs/visibility',json={'ids':[first['id'],second['id']],'status':status}).status_code==200
+        assert client.get('/api/jobs/'+first['id']).json()['visibility']==status
+    preview=client.get('/api/jobs/'+first['id']+'/deletion-preview').json()
+    assert preview['permanent_delete_available'] is False
+    assert preview['publications']==preview['dependent_edits']==0
+
+def test_empty_trashed_record_requires_confirmation_and_protects_workspace(client):
+    from factory import store,config
+    client.headers['Authorization']='Bearer '+'a'*40
+    job=store.create({'source':'https://www.youtube.com/watch?v=fixture','rights_confirmed':True})
+    jid=job['id']
+    claim=store.claim('fixture')
+    store.update(jid,claim['lease'],state='FAILED')
+    assert client.post('/api/jobs/visibility',json={'ids':[jid],'status':'trash'}).is_success
+    endpoint='/api/jobs/'+jid
+    assert client.post(endpoint+'/delete-record',json={'confirmation':'no'}).status_code==422
+    workspace=config.SCRATCH/jid
+    workspace.mkdir()
+    assert client.post(endpoint+'/delete-record',json={'confirmation':jid}).status_code==409
+    workspace.rmdir()
+    assert client.get(endpoint+'/deletion-preview').json()['permanent_delete_available']
+    assert client.post(endpoint+'/delete-record',json={'confirmation':jid}).status_code==200
+    assert client.get(endpoint).status_code==404
