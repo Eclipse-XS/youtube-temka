@@ -81,9 +81,9 @@ def decode(row,db=None):
     return item
 
 
-def create(request):
+def create(request, seed=None, approved=None):
     jid = uuid.uuid4().hex
-    result = {}
+    result = {'approved_selection':approved} if approved else {}
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         if request.get('source','').startswith('edit:'):
@@ -102,6 +102,14 @@ def create(request):
                 ON CONFLICT(id) DO UPDATE SET last_version=MAX(render_lineages.last_version+1,excluded.last_version)
                 RETURNING last_version''', (lineage, (parent_output.get('render_version') or 1)+1)).fetchone()[0]
             result['edit_revision'] = {'render_lineage_id': lineage, 'parent_render_id': parent_id, 'render_version': version}
+        if seed:
+            from shutil import copyfile
+            result['local_checkpoint_seed']=True
+            root = config.SCRATCH / jid
+            root.mkdir()
+            copyfile(seed,root/'transcript.json')
+            visual=seed.parent/'visual-v2.json'
+            if visual.is_file():copyfile(visual,root/visual.name)
         db.execute('INSERT INTO jobs(id,state,request,result,created) VALUES(?,?,?,?,?)',
                    (jid, 'QUEUED', json.dumps(request, ensure_ascii=False), json.dumps(result), time.time()))
         db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),'QUEUED','Job queued'))
@@ -128,8 +136,11 @@ def claim(worker, remote=False):
             db.execute("UPDATE job_stages SET status='failed',finished=?,message='Worker lease expired; checkpoints retained' WHERE job=? AND status='running'",(time.time(),item['id']))
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
-        rows = db.execute("SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created")
-        row = next((r for r in rows if not remote or (not json.loads(r['request'])['source'].startswith('upload:') and json.loads(r['request'])['save_drive'])),None)
+        rows = db.execute("SELECT id,request,result FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created")
+        row = next((r for r in rows if not remote or (not json.loads(r['request'])['source'].startswith('upload:')
+                   and json.loads(r['request'])['save_drive']
+                   and not json.loads(r['request']).get('plan_only')
+                   and not json.loads(r['result']).get('local_checkpoint_seed'))),None)
         if not row:
             return None
         lease = uuid.uuid4().hex

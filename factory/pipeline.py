@@ -122,6 +122,8 @@ def process(claim,assets=None):
             background=random.Random(jid).choice(choices) if choices else None
         if assets is not None:background=assets.get('backgrounds')
         if request.background_mode=='none':background=None
+        if request.background and request.background_mode!='none' and (not background or not background.is_file()):
+            raise NeedsReview('Selected secondary asset is unavailable. Choose another asset explicitly.')
         if request.preset=='gameplay' and (not background or not background.is_file()):raise NeedsReview('Add an authorized background asset or select Automatic / Blurred Background')
         transcript=transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
         progress.begin('language','TRANSCRIBING');update(result={'language':transcript['language']});progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
@@ -131,24 +133,39 @@ def process(claim,assets=None):
         (root/'transcript.vtt').write_text('WEBVTT\n\n'+re.sub(r'(\d\d:\d\d:\d\d),(\d{3})',r'\1.\2',srt.lstrip('\ufeff')),encoding='utf-8')
         progress.begin('highlights','ANALYZING')
         analysis_checkpoint=root/'analysis.json'
-        if analysis_checkpoint.is_file():
-            result=json.loads(analysis_checkpoint.read_text(encoding='utf-8'));candidates=result['candidates']
-        elif job['result'].get('candidates'):
+        from .shorts import identity, plan
+        modern = request.mode == 'shorts' and (request.selection_version == 2 or request.series_mode == 'sequential')
+        duration = end-request.start
+        selection_id = identity(request,duration,transcript) if modern else None
+        frozen = json.loads(analysis_checkpoint.read_text(encoding='utf-8')) if analysis_checkpoint.is_file() else {}
+        if frozen and (not modern or frozen.get('selection_id') == selection_id):
+            result=frozen;candidates=result['candidates']
+        elif job['result'].get('candidates') and (not modern or job['result'].get('selection_id') == selection_id):
             # Another worker may own the old scratch volume. The controller's
             # saved selection still fences clip identity across that handoff.
-            result={key:job['result'][key] for key in ('candidates','analysis','model','analysis_outcome','analysis_diagnostics','selection_summary') if key in job['result']}
+            result={key:job['result'][key] for key in ('candidates','analysis','model','analysis_outcome','analysis_diagnostics','selection_summary','selection_id','series_applied') if key in job['result']}
             candidates=result['candidates']
         elif request.intervals:
             if any(b>end for a,b in request.intervals):raise ValueError('Manual interval extends beyond the actual source duration')
-            candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in (request.intervals if request.mode=='longs' else sorted(request.intervals))]
+            candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in (request.intervals if request.mode=='longs' or modern else sorted(request.intervals))]
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
+        elif modern:
+            features = []
+            use_visual = request.series_mode != 'sequential' and (
+                not transcript['segments'] or request.series_mode == 'connected' or
+                request.source_category in ('visual','gameplay','stream','auto')
+            )
+            if use_visual:
+                from .visual_analysis import sample
+                features = sample(source,request.start,end,root,progress.tick)
+            result=plan(transcript,request,duration,features,progress.tick);candidates=result['candidates']
         elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
             candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
             result={'candidates':candidates,'analysis':'whole short visual source; no AI claim'}
         else:
             result=analyze(transcript,request,end-request.start,progress.tick);candidates=result['candidates']
             if request.mode=='longs':candidates.sort(key=lambda c:c['start_seconds'])
-        if request.series_mode=='connected' and not result.get('series_applied'):
+        if not modern and request.series_mode=='connected' and not result.get('series_applied'):
             from .timeline import connected
             candidates,summary=connected(candidates,request,end-request.start)
             result.update(candidates=candidates,selection_summary=summary,series_applied=True)
@@ -162,8 +179,29 @@ def process(claim,assets=None):
                     item['end_seconds']=item['start_seconds']+remaining;item['editorial_review_required']=True
                 selected.append(item);remaining-=min(length,remaining)
             candidates=selected;result['candidates']=candidates
+        if modern:
+            result['selection_id']=selection_id
+            if request.intervals:
+                from .shorts import planned, PLATFORM_MAXIMUM
+                if any(c['end_seconds']-c['start_seconds'] > min(request.maximum,PLATFORM_MAXIMUM) for c in candidates):
+                    raise NeedsReview('A manual Shorts interval exceeds the configured or platform maximum.')
+                candidates=job['result'].get('approved_selection') or [
+                    planned(c['start_seconds'],c['end_seconds'],c['title'],'Operator-selected source interval.',transcript,'source_sequence')
+                    for c in candidates
+                ]
+                result.update(candidates=candidates,selection_summary=f'{len(candidates)} operator-selected source intervals.')
+            if frozen and frozen.get('selection_id') != selection_id:
+                for pattern in ('clip-*', 'selected-*'):
+                    for stale in root.glob(pattern):
+                        if stale.is_file():stale.unlink()
+                result['outputs']=[]
         if candidates:write_json_atomic(analysis_checkpoint,result,ensure_ascii=True)
         update(result=result);progress.done()
+        if modern and not candidates:raise NeedsReview(result.get('selection_summary','No usable source interval was found.'))
+        if request.plan_only:
+            boundaries=[s['end'] for s in transcript['segments'] if s['text'].rstrip().endswith(('.', '?', '!'))]
+            update('READY',result={'planning_only':True,'experiment_boundaries':boundaries})
+            return
         if not candidates:raise NeedsReview('No suitable spoken highlight. '+('Visual/no-speech source: choose Silent Video with a short selected interval or set manual intervals.' if not transcript['segments'] else 'Inspect the suitability explanation or select a manual interval in Editor.'))
         outputs=[];raw_sources={}
         if request.mode=='longs':
@@ -171,6 +209,8 @@ def process(claim,assets=None):
             write_json_atomic(root/'timeline.json',manifest(candidates,request),ensure_ascii=True)
         for i,candidate in enumerate(candidates):
             clip_request=request.model_copy()
+            if modern and (request.series_mode != 'independent' or candidate.get('visual_review_required')):
+                clip_request.silence_removal=False
             if request.mode=='longs' and i<len(candidates)-1:clip_request.cta_text=''
             if request.mode=='longs' and i>0:clip_request.hook=''
             hook_candidates=None
@@ -210,6 +250,20 @@ def process(claim,assets=None):
             import hashlib
             with output.open('rb') as rendered:digest=hashlib.file_digest(rendered,'sha256').hexdigest()
             outputs[-1].update(render_id=f'{jid}:{i+1}',render_version=1,output_hash=digest,hook=clip_request.hook,hook_candidates=hook_candidates,series={'id':jid,'title':candidate.get('series_title',candidate['title']),'part':candidate['part'],'parts':candidate['parts'],'previous_part':candidate['part']-1 if candidate['part']>1 else None,'next_part':candidate['part']+1 if candidate['part']<candidate['parts'] else None} if candidate.get('part') else None)
+            if modern:
+                outputs[-1]['edit_configuration'] = {
+                    'selection_strategy': 'reviewed_source_intervals' if request.intervals else request.series_mode,
+                    'selection_id': selection_id,
+                    'source_start': request.start + candidate['start_seconds'],
+                    'source_end': request.start + candidate['end_seconds'],
+                    'duration': outputs[-1]['duration'], 'layout': validation.get('framing'),
+                    'experiment_parent':request.experiment_parent,
+                    'experiment_variant':next((name for name,low,high in (
+                        ('short',20,30),('standard',35,45),('extended',50,60)
+                    ) if low<=duration<=high),None) if request.experiment_parent else None,
+                    'hook_type': clip_request.text_mode, 'secondary_asset': request.background,
+                    'render_version': 1, 'channel_profile': request.publish_channel,
+                }
             outputs[-1].update(job['result'].get('edit_revision', {}))
             update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
         if request.mode=='longs':
@@ -236,7 +290,9 @@ def process(claim,assets=None):
         progress.begin('metadata','ANALYZING',len(outputs),'clips')
         drafts=publishing_metadata.generate_outputs(contexts,request.llm_model,previous,progress.tick)
         if request.series_mode=='connected' and drafts:
-            for output in outputs:output['series']['title']=drafts[0]['title'].rsplit(' · ',1)[0]
+            for output in outputs:
+                if output.get('series'):
+                    output['series']['title']=drafts[0]['title'].rsplit(' · ',1)[0]
         progress.done();progress.begin('editorial','ANALYZING',len(outputs),'clips')
         assessed=[]
         for i,(output,draft,ctx) in enumerate(zip(outputs,drafts,contexts)):

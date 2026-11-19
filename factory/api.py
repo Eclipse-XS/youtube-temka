@@ -232,7 +232,11 @@ async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), bac
         else:
             metadata=None
             from .library import register
-            name,duplicate=register(target,'logos' if logo else ('music' if music else 'backgrounds'),license[:1000],'Operator upload',category[:80])
+            documented=license!='Operator-confirmed rights; license documentation not supplied'
+            provenance={'license_status':'operator_documented' if documented else 'operator_confirmed_manual_review',
+                        'attribution_required':None}
+            name,duplicate=register(target,'logos' if logo else ('music' if music else 'backgrounds'),license[:1000],
+                                    'Operator upload',category[:80],provenance)
     except Exception:
         target.unlink(missing_ok=True)
         raise HTTPException(400,'Upload failed validation or exceeded available storage') from None
@@ -253,6 +257,42 @@ def starter_library():
     from .heavy import HEAVY_LOCK
     if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current heavy task before creating starter assets')
     try:return bootstrap()
+    finally:HEAVY_LOCK.release()
+
+
+class LibraryPreference(BaseModel):
+    favorite: bool | None = None
+    removed: bool | None = None
+
+
+@app.post('/api/library/backgrounds/{name}/preferences')
+def library_preferences(name:str,body:LibraryPreference):
+    from .library import preferences
+    try:return preferences(name,body.favorite,body.removed)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+
+
+class CommonsImport(BaseModel):
+    page_id: int = Field(gt=0)
+    category: str = Field(default='abstract-motion',max_length=80)
+    license_reviewed: bool
+
+
+@app.get('/api/library/commons')
+def commons_search(query:str):
+    from .commons import search
+    try:return search(query)
+    except (ValueError,RuntimeError) as error:raise HTTPException(400,str(error)) from None
+
+
+@app.post('/api/library/commons')
+def commons_import(body:CommonsImport):
+    from .commons import import_video
+    from .heavy import HEAVY_LOCK
+    if not body.license_reviewed:raise HTTPException(422,'Verify provenance and rights before importing')
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current processing task')
+    try:return import_video(body.page_id,body.category)
+    except (ValueError,RuntimeError) as error:raise HTTPException(400,str(error)) from None
     finally:HEAVY_LOCK.release()
 
 
@@ -285,7 +325,9 @@ def library_frame(kind:str,name:str):
 
 @app.get('/api/backgrounds')
 def backgrounds():
-    return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4')]
+    from .library import entries
+    removed={a['name'] for a in entries() if a['kind']=='backgrounds' and a.get('removed')}
+    return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4') if p.name not in removed]
 
 
 @app.get('/api/source-preview/{name}')
@@ -303,16 +345,31 @@ def music_assets():
 
 @app.post('/api/jobs',status_code=201)
 def create(body:JobRequest):
+    if body.mode == 'shorts':
+        body.selection_version = 2
+        if 'minimum' not in body.model_fields_set:
+            body.minimum=min(35,body.maximum)
+    body.experiment_parent=None
+    return create_job(body)
+
+
+def create_job(body, seed=None, approved=None):
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
     if body.background_mode=='random' or (body.background_category and body.background_mode=='auto'):
         import random
         from .library import entries
-        choices=[a['name'] for a in entries() if a['kind']=='backgrounds' and a['availability']=='AVAILABLE' and (not body.background_category or a['category']==body.background_category)]
+        choices=[a['name'] for a in entries() if a['kind']=='backgrounds' and a['availability']=='AVAILABLE' and not a.get('removed') and (not body.background_category or a['category']==body.background_category)]
         if not choices:raise HTTPException(409,'No licensed asset in this category; import authorized media or choose another category')
         body.background=random.choice(choices) if choices else None
         body.background_mode='specific'
+    if body.selection_version==2 and body.preset=='gameplay' and body.background_mode=='auto' and not body.background:
+        available=sorted(backgrounds())
+        if not available:raise HTTPException(409,'Choose or import a secondary video for Split Screen')
+        body.background=available[0]
+    if body.background and body.background_mode!='none' and body.background not in backgrounds():
+        raise HTTPException(409,'Selected secondary asset is unavailable')
     if body.publish_automatic:
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
@@ -331,8 +388,67 @@ def create(body:JobRequest):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    try:return store.create(body.model_dump())
+    try:return store.create(body.model_dump(), seed=seed, approved=approved)
     except ValueError as error:raise HTTPException(409,str(error)) from None
+
+
+class Replan(BaseModel):
+    mode: str | None = None
+    count: int | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    overlap: float | None = None
+    intervals: list[tuple[float,float]] | None = Field(default=None,min_length=1,max_length=30)
+    experiment: int | None = Field(default=None,ge=0,le=19)
+
+
+@app.post('/api/jobs/{jid}/replan',status_code=201)
+def replan(jid:str, body:Replan):
+    from tempfile import TemporaryDirectory
+    job=get_job(jid)
+    original=job['request']
+    if original['mode']!='shorts' or job['state'] not in ('READY','BLOCKED','FAILED'):
+        raise HTTPException(409,'Wait for Shorts analysis to finish')
+    values={**original,'selection_version':2,'publish_automatic':False,
+            'plan_only':body.intervals is None,'intervals':body.intervals or []}
+    for target, value in (('series_mode',body.mode),('count',body.count),
+                          ('minimum',body.minimum),('maximum',body.maximum),('series_overlap',body.overlap)):
+        if value is not None:values[target]=value
+    if body.experiment is not None:
+        from .shorts import variants
+        candidates=job['result'].get('candidates',[])
+        if body.experiment >= len(candidates) or not job['result'].get('planning_only'):
+            raise HTTPException(422,'Choose a candidate from a completed Shorts plan')
+        candidate=candidates[body.experiment]
+        options=variants(candidate,job['result'].get('experiment_boundaries',[]))
+        if len(options)<2:raise HTTPException(422,'The proposed clip lacks multiple supported variant durations')
+        body.intervals=[(original.get('start',0)+a,original.get('start',0)+b) for _,a,b in options]
+        values.update(plan_only=False,intervals=body.intervals,experiment_parent=f'{jid}:{body.experiment}')
+    approved=None
+    if body.intervals:
+        values.update(series_mode='independent', count=min(20,len(body.intervals)), silence_removal=False)
+        existing=job['result'].get('candidates',[])
+        source_start=original.get('start',0)
+        if body.experiment is None and len(existing)==len(body.intervals) and all(
+            abs(a-source_start-c['start_seconds'])<.001 and abs(b-source_start-c['end_seconds'])<.001
+            for (a,b),c in zip(body.intervals,existing)
+        ):
+            approved=existing
+        maximum=min(180,values['maximum'])
+        if any(not 0 < b-a <= maximum for a,b in body.intervals):
+            raise HTTPException(422,f'Edited clips must be positive and at most {maximum:g}s')
+    try:request=JobRequest.model_validate(values)
+    except ValueError as error:raise HTTPException(422,str(error)) from None
+    root=config.SCRATCH/jid
+    checkpoint=root/'transcript.json'
+    if checkpoint.is_file():
+        return create_job(request,checkpoint,approved)
+    archived=job['result'].get('artifacts',{}).get('transcript.json')
+    if not archived:raise HTTPException(409,'Transcript checkpoint is unavailable')
+    with TemporaryDirectory(dir=config.SCRATCH) as folder:
+        try:checkpoint=media.fetch_drive(archived,Path(folder)/'transcript.json')
+        except (ValueError,RuntimeError,OSError) as error:raise HTTPException(409,'Transcript checkpoint could not be recovered') from error
+        return create_job(request,checkpoint,approved)
 
 
 @app.get('/api/jobs')

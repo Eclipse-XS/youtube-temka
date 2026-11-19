@@ -10,7 +10,7 @@ const initial = {
   start: 0,
   end: 1800,
   count: 1,
-  minimum: 20,
+  minimum: 35,
   maximum: 60,
   language: null,
   captions: true,
@@ -80,7 +80,10 @@ export default function CreatePage({
     [intervals, setIntervals] = useState(""),
     [music, setMusic] = useState([]);
   const submission = useRef(false);
-  const set = (key, value) => setForm((v) => ({ ...v, [key]: value }));
+  const set = (key, value) => setForm(v => ({
+    ...v, [key]: value,
+    ...(key === "mode" && value === "longs" ? {series_mode:"independent",plan_only:false} : {})
+  }));
   useEffect(() => {
     api("/assets/music")
       .then(setMusic)
@@ -115,7 +118,8 @@ export default function CreatePage({
       abort.abort();
     };
   }, [form.source]);
-  const background = form.background || backgrounds[0] || null;
+  const background = form.background ||
+    (form.preset === "gameplay" && form.background_mode !== "none" ? backgrounds[0] : null);
   const selectedResolution =
     metadata?.platform === "local"
       ? Math.min(
@@ -150,7 +154,7 @@ export default function CreatePage({
     setSubmitting(true);
     try {
       await act(async () => {
-        const ranges = intervals.trim()
+        const ranges = form.series_mode !== "sequential" && intervals.trim()
           ? intervals
               .trim()
               .split("\n")
@@ -313,7 +317,8 @@ export default function CreatePage({
             <select
               defaultValue=""
               onChange={(e) =>
-                setForm((v) => ({ ...v, ...presets[e.target.value] }))
+                setForm(v => ({ ...v, ...presets[e.target.value],
+                  ...(presets[e.target.value]?.mode === "longs" ? {series_mode:"independent",plan_only:false} : {}) }))
               }
             >
               <option value="">Власні налаштування</option>
@@ -402,13 +407,13 @@ export default function CreatePage({
               <input
                 type="number"
                 min="5"
-                max="600"
+                max={form.mode === "shorts" ? 180 : 600}
                 value={form.maximum}
                 onChange={(e) => set("maximum", +e.target.value)}
               />
             </label>
           </div>
-          <label>
+          {form.series_mode !== "sequential" && <label>
             Ручні інтервали, за потреби
             <textarea
               value={intervals}
@@ -416,9 +421,9 @@ export default function CreatePage({
               placeholder="0,40&#10;120,180"
             />
             <small>
-              Порожньо = автоматичний відбір; часові межі від початку джерела.
+              Порожнє поле вмикає автоматичний відбір. Відлік від початку джерела.
             </small>
-          </label>
+          </label>}
           <label>
             Audio mode
             <select

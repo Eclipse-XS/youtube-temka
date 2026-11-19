@@ -6,13 +6,8 @@ from . import config,store,media
 from .heavy import HEAVY_LOCK
 
 
-def register(path,kind,license,source,category='custom'):
+def register(path,kind,license,source,category='custom',provenance=None):
     with path.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
-    with store.connect() as db:
-        prior=db.execute('SELECT name FROM media_assets WHERE hash=? AND kind=?',(digest,kind)).fetchone()
-        if prior and (config.DATA/kind/prior['name']).is_file():
-            if path.name!=prior['name']:path.unlink()
-            return prior['name'],True
     import av
     with av.open(str(path)) as container:
         if (kind!='logos' and not container.duration) or (kind in ('backgrounds','logos') and not container.streams.video):raise ValueError('Asset has no valid playable video')
@@ -24,6 +19,12 @@ def register(path,kind,license,source,category='custom'):
                   'source':source,'license':license,'attribution_required':None if category=='custom' else False,
                   'availability':'AVAILABLE','sha256':digest}
     with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        prior=db.execute('SELECT name FROM media_assets WHERE hash=? AND kind=?',(digest,kind)).fetchone()
+        if prior and (config.DATA/kind/prior['name']).is_file():
+            if path.name!=prior['name']:path.unlink()
+            return prior['name'],True
+        metadata.update(provenance or {})
         db.execute('INSERT OR REPLACE INTO media_assets VALUES(?,?,?,?)',(digest,kind,path.name,json.dumps(metadata)))
     return path.name,False
 
@@ -33,6 +34,18 @@ def entries():
         return [{**json.loads(row['metadata']),'kind':row['kind'],
                  'availability':'AVAILABLE' if (config.DATA/row['kind']/row['name']).is_file() else 'MISSING'}
                 for row in db.execute('SELECT * FROM media_assets')]
+
+
+def preferences(name, favorite=None, removed=None):
+    with store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row=db.execute("SELECT metadata FROM media_assets WHERE kind='backgrounds' AND name=?",(name,)).fetchone()
+        if not row:raise ValueError('Secondary asset is unavailable')
+        item=json.loads(row['metadata'])
+        if favorite is not None:item['favorite']=favorite
+        if removed is not None:item['removed']=removed
+        db.execute("UPDATE media_assets SET metadata=? WHERE kind='backgrounds' AND name=?",(json.dumps(item),name))
+    return item
 
 
 def bootstrap():

@@ -78,6 +78,14 @@ export default function AnalyticsPanel({ api, post, act }) {
       </details>
       {current && (
         <>
+          {current.report?.experiments?.map(experiment=><details key={experiment.parent}>
+            <summary>Варіанти монтажу · {experiment.start} – {experiment.end}</summary>
+            <p>Дані за спільний період після публікації обох варіантів.</p>
+            <table><thead><tr><th>Варіант</th><th>Перегляди</th><th>Залучені перегляди</th><th>Сер. час, с</th><th>Сер. %</th><th>Вподобання</th><th>Коментарі</th></tr></thead>
+            <tbody>{experiment.variants.map(item=><tr key={item.video_id}><td>{item.variant} · {item.title}</td>
+              {['views','engagedViews','averageViewDuration','averageViewPercentage','likes','comments'].map(metric=><td key={metric}>{number(item.metrics[metric])}</td>)}
+            </tr>)}</tbody></table>
+          </details>)}
           <label>
             Канал аналітики
             <select

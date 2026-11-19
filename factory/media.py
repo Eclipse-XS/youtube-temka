@@ -214,8 +214,12 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     if stage:stage('captions_audio')
     if request.silence_removal and request.audio_mode!='voiceover':
         from .audio_edit import remove_pauses
-        source,transcript,start,end=remove_pauses(source,output.with_suffix('.trimmed.mp4'),transcript,start,end,has_audio,tick)
-        duration=end-start
+        from .audio_edit import speech_timeline
+        _, _, _, trimmed_duration = speech_timeline(transcript,start,end)
+        floor = min(duration,request.minimum) if request.mode=='shorts' and request.selection_version == 2 else 0
+        if trimmed_duration >= floor:
+            source,transcript,start,end=remove_pauses(source,output.with_suffix('.trimmed.mp4'),transcript,start,end,has_audio,tick)
+            duration=end-start
     narration=None
     caption_start,caption_end=start,end
     if request.audio_mode=='voiceover':
@@ -244,17 +248,22 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             from jsonfile import write_json_atomic
             write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
-    generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
+    generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700',
+                 **({'margin_v':round(request.caption_margin*288)} if request.caption_margin is not None else {}))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
     preset=request.preset
     framing={'strategy':preset}
-    if preset=='auto':preset='gameplay' if background and background.is_file() else 'smart'
+    if preset=='auto':
+        use_background = background and background.is_file() and (request.selection_version != 2 or request.background)
+        preset='gameplay' if use_background else 'smart'
+        framing={'strategy':preset,'reason':'An explicit secondary asset was selected' if use_background else 'Preserve the primary source composition'}
     trajectory=None
     if request.mode=='shorts' and preset=='smart':
         from .framing import trajectory as track,dedupe_sendcmd_lines
-        trajectory,framing=track(source,duration)
+        trajectory,tracking=track(source,duration)
+        framing.update(tracking)
         if trajectory:
             crop_w,crop_h,positions=trajectory
             commands=output.with_suffix('.camera.txt')
@@ -265,10 +274,23 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     elif preset=='gameplay':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
-        args+=['-stream_loop','-1','-threads','2','-i',str(background)]
-        top=2*round(1920*request.split_ratio/2)
-        bottom=1920-top
-        graph=f'[0:v]scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
+        with av.open(str(background)) as secondary:
+            secondary_duration=(secondary.duration or 0)/av.time_base
+        if request.background_offset >= secondary_duration:
+            raise ValueError('Secondary start offset must be inside the selected video')
+        if request.background_loop:args+=['-stream_loop','-1']
+        args+=['-ss',str(request.background_offset),'-threads','2','-i',str(background)]
+        main_height=2*round(height*request.split_ratio/2)
+        secondary_height=height-main_height
+        def panel(h):
+            if request.split_crop=='fill':
+                return f'scale=1080:{h}:force_original_aspect_ratio=increase,crop=1080:{h},setsar=1'
+            return f'scale=1080:{h}:force_original_aspect_ratio=decrease,pad=1080:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1'
+        order='[main][secondary]' if request.background_position=='bottom' else '[secondary][main]'
+        framing.update(secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
+        graph=(f'[0:v]{panel(main_height)}[main];'
+               f'[1:v]setpts=PTS/{request.background_speed},{panel(secondary_height)},'
+               f'tpad=stop_mode=clone:stop_duration={duration}[secondary];{order}vstack=shortest=1[v]')
     elif preset=='smart' and trajectory:
         graph=f"[0:v]sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
     elif preset=='crop':

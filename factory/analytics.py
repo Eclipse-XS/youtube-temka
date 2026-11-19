@@ -96,7 +96,8 @@ def _lineage(video):
         row=db.execute('SELECT p.job,p.output,p.metadata,j.request,j.result FROM publications p JOIN jobs j ON j.id=p.job WHERE p.video_id=?',(video,)).fetchone()
         if not row:return None
         request=json.loads(row['request']);result=json.loads(row['result']);output=result.get('outputs',[])[row['output']]
-        return {'job':row['job'],'output':row['output'],'source':request['source'],'language':output.get('publishing_metadata',{}).get('audio_language') or result.get('language'),'metadata_language':output.get('publishing_metadata',{}).get('metadata_language'),'content_category':request.get('source_category'),'preset':request.get('preset'),'audio_mode':request.get('audio_mode','original'),'duration':output.get('duration'),'metadata_version':json.loads(row['metadata']).get('metadata_version')}
+        return {'job':row['job'],'output':row['output'],'source':request['source'],'language':output.get('publishing_metadata',{}).get('audio_language') or result.get('language'),'metadata_language':output.get('publishing_metadata',{}).get('metadata_language'),'content_category':request.get('source_category'),'preset':request.get('preset'),'audio_mode':request.get('audio_mode','original'),'duration':output.get('duration'),'metadata_version':json.loads(row['metadata']).get('metadata_version'),
+                'edit_configuration':output.get('edit_configuration')}
 
 
 def sync(channel):
@@ -144,7 +145,7 @@ def sync(channel):
                 else:video['video_type']='unknown'
                 videos.append(video)
             _checkpoint(channel,progress=min(offset+len(batch),len(ids)))
-        report={'period':{'start':start.isoformat(),'end':end.isoformat()},'daily':daily,'diagnostics':sorted(set(diagnostics)),'unavailable_metrics':['impressions','ctr','retention_curve'],'recent_video_limit':250,'recommendations':recommendations(videos)}
+        report={'period':{'start':start.isoformat(),'end':end.isoformat()},'daily':daily,'diagnostics':sorted(set(diagnostics)),'unavailable_metrics':['impressions','ctr','retention_curve'],'recent_video_limit':250,'recommendations':recommendations(videos),'experiments':experiment_comparisons(videos)}
         with store.connect() as db:
             db.execute('DELETE FROM analytics_videos WHERE channel=?',(channel,))
             db.executemany('INSERT INTO analytics_videos VALUES(?,?,?,?)',[(channel,v['video_id'],json.dumps(v,ensure_ascii=False),time.time()) for v in videos])
@@ -156,6 +157,27 @@ def sync(channel):
         _checkpoint(channel,state='FAILED',error=safe[:300]);raise ValueError(safe) from None
     finally:
         if client:client.close()
+
+
+def experiment_comparisons(videos):
+    groups=defaultdict(list)
+    for video in videos:
+        edit=(video.get('lineage') or {}).get('edit_configuration') or {}
+        period=video.get('period') or {}
+        published=(video.get('published_at') or '')[:10]
+        parent=edit.get('experiment_parent')
+        variant=edit.get('experiment_variant')
+        if not parent or not variant or not published or published >= (period.get('start') or ''):
+            continue
+        metrics=video.get('metrics') or {}
+        if metrics.get('views') is None:
+            continue
+        key=(parent,video.get('channel'),period['start'],period['end'])
+        groups[key].append({'variant':variant,'title':video['title'],'video_id':video['video_id'],
+                            'duration':video['duration'],'metrics':metrics})
+    return [{'parent':parent,'start':start,'end':end,'variants':items}
+            for (parent,_,start,end),items in groups.items()
+            if len({item['variant'] for item in items})>=2]
 
 
 def recommendations(videos):

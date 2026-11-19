@@ -5,16 +5,21 @@ from . import config
 from .models import Ranking, Candidate
 
 
-def select(candidates, request, duration):
+def select(candidates, request, duration, distinct_text=None):
     valid = []
     for c in candidates:
         length = c.end_seconds-c.start_seconds
         if request.minimum <= length <= request.maximum and c.end_seconds <= duration:
             valid.append(c)
     chosen = []
+    spoken = set()
     for c in sorted(valid, key=lambda c: (-c.score, c.start_seconds, c.end_seconds, c.title)):
+        phrase = distinct_text(c) if distinct_text else ''
+        if phrase and phrase in spoken:
+            continue
         if all(max(0,min(c.end_seconds,p.end_seconds)-max(c.start_seconds,p.start_seconds)) / min(c.end_seconds-c.start_seconds,p.end_seconds-p.start_seconds) < .25 for p in chosen):
             chosen.append(c)
+            if phrase:spoken.add(phrase)
         if len(chosen) == request.count:
             break
     return [c.model_dump() for c in chosen]
@@ -22,6 +27,8 @@ def select(candidates, request, duration):
 
 def heuristics(transcript, request):
     segments = transcript['segments']
+    modern = getattr(request,'selection_version',None)==2
+    preferred = min(request.maximum,max(45,request.minimum))
     out = []
     def complete(text):return text.strip().rstrip('"\u201d\u00bb\u2019)]').endswith(('.','!','?','\u2026','\u3002','\uff01','\uff1f'))
     for i, first in enumerate(segments):
@@ -29,7 +36,10 @@ def heuristics(transcript, request):
             continue
         texts=[];eligible=None
         for j,last in enumerate(segments[i:],start=i):
-            if last['end']-first['start'] > request.maximum:
+            if modern and j>i and last['start']-segments[j-1]['end'] > 12:
+                break
+            length=last['end']-first['start']
+            if length > request.maximum:
                 break
             texts.append(last['text'])
             if last['end']-first['start'] >= request.minimum:
@@ -38,8 +48,12 @@ def heuristics(transcript, request):
                     natural=complete(text)
                     pause=j+1==len(segments) or segments[j+1]['start']-last['end']>=.6
                     if natural or pause:
-                        eligible=Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10+5*natural+3*pause),title=text[:100],language=transcript['language'] or 'und',reason='Heuristic: speech density, sentence endings and pauses; editorial review required',confidence=.35)
-                        break
+                        duration_fit = max(0,5-abs(length-preferred)/4) if modern else 0
+                        proposal=Candidate(start_seconds=first['start'],end_seconds=last['end'],score=min(65,40+len(text.split())/10+5*natural+3*pause+duration_fit),title=text[:100],language=transcript['language'] or 'und',reason='Heuristic: speech density, sentence endings and pauses; editorial review required',confidence=.35)
+                        if not eligible or abs(length-preferred)<abs(eligible.end_seconds-eligible.start_seconds-preferred):
+                            eligible=proposal
+                        if not modern or length>=preferred:
+                            break
         if eligible:out.append(eligible)
     return out
 
@@ -121,9 +135,20 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
     except (httpx.HTTPError,ValueError,KeyError):
         failed = True
         fallback_reason=fallback_reason or 'technical_llm_failure'
-    if failed or not calls:
-        candidates = candidates+[c for c in fallback if not any(d['start']<=c.start_seconds and c.end_seconds<=d['end'] for d in decisions)]
-    selected=select(candidates,request,duration)
+    modern=getattr(request,'selection_version',None)==2
+    def phrase(candidate):
+        text=' '.join(s['text'] for s in transcript['segments']
+                      if s['end']>candidate.start_seconds and s['start']<candidate.end_seconds)
+        return ' '.join(re.findall(r'\w+',text.casefold()))
+    unique=phrase if modern else None
+    selected=select(candidates,request,duration,unique)
+    used_fallback=failed or not calls
+    if used_fallback or (modern and len(selected)<request.count):
+        extra=[c for c in fallback if not any(d['start']<=c.start_seconds and c.end_seconds<=d['end'] for d in decisions)]
+        candidates=candidates+extra
+        selected=select(candidates,request,duration,unique)
+        used_fallback=used_fallback or any(c not in llm_candidates for c in selected)
+
     for candidate in selected:
         used_llm=candidate in llm_candidates
         candidate['selection_method']='ollama' if used_llm else 'heuristic'
@@ -143,5 +168,5 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
         'analysis':'heuristic' if failed or not calls else 'ollama',
         'model':None if failed or not calls else model,
         'analysis_outcome':fallback_reason or (('no_coherent_intervals' if transcript['segments'] else 'insufficient_speech') if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
-        'analysis_diagnostics':{'requests':calls,'rejected_intervals':rejected,'windows':len(windows),'decisions':decisions},
+        'analysis_diagnostics':{'requests':calls,'rejected_intervals':rejected,'windows':len(windows),'decisions':decisions,'used_fallback':used_fallback},
     }

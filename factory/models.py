@@ -10,6 +10,7 @@ class JobRequest(BaseModel):
     output_height: Literal[720,1080] = 720
     bitrate: int = Field(default=8000000,ge=1000000,le=50000000)
     caption_style: Literal['pop','karaoke','clean'] = 'pop'
+    caption_margin: float | None = Field(default=None,ge=.07,le=.75,allow_inf_nan=False)
     split_ratio: float = Field(default=.5,ge=.2,le=.8,allow_inf_nan=False)
     hook: str = Field(default='',max_length=120)
     text_mode: Literal['none','subtitles','static_hook','hook_subtitles','custom'] | None = None
@@ -22,7 +23,15 @@ class JobRequest(BaseModel):
     hook_shadow: bool = True
     hook_box: bool = True
     subtitle_language: str | None = Field(default=None,pattern=r'^(en|es|pt-BR|de|ru|uk)$')
-    series_mode: Literal['independent','connected'] = 'independent'
+    series_mode: Literal['independent','connected','sequential'] = 'independent'
+    selection_version: Literal[2] | None = None
+    plan_only: bool = False
+    experiment_parent: str | None = Field(default=None,pattern=r'^[0-9a-f]{32}:\d{1,2}$')
+    background_position: Literal['top','bottom'] = 'bottom'
+    background_speed: float = Field(default=1,ge=.5,le=2,allow_inf_nan=False)
+    background_offset: float = Field(default=0,ge=0,le=3600,allow_inf_nan=False)
+    background_loop: bool = True
+    split_crop: Literal['fill','fit'] = 'fit'
     series_overlap: float = Field(default=3,ge=0,le=5,allow_inf_nan=False)
     target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
     logo_asset: str | None = Field(default=None,pattern=r'^[a-zA-Z0-9_-]+\.png$')
@@ -64,7 +73,9 @@ class JobRequest(BaseModel):
             self.captions=self.text_mode in ('subtitles','hook_subtitles')
             if self.text_mode in ('none','subtitles'):self.hook=''
         if self.text_mode=='custom' and not self.hook.strip():raise ValueError('Custom Text requires nonempty text')
-        if self.series_mode=='connected' and self.mode!='shorts':raise ValueError('Connected Series requires Shorts')
+        if self.series_mode!='independent' and self.mode!='shorts':raise ValueError('Series modes require Shorts')
+        if self.plan_only and (self.mode!='shorts' or self.publish_automatic):raise ValueError('Planning requires Shorts with automatic publishing disabled')
+        if self.series_mode=='sequential' and self.intervals:raise ValueError('Sequential Source Split uses the selected start and end')
         if self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
         if self.publish_automatic and (not self.save_drive or not self.publish_channel):
             raise ValueError('Automatic publishing requires a selected authorized channel and verified Drive storage')

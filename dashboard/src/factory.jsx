@@ -19,6 +19,7 @@ import PublisherPanel from "./factory/PublisherPanel.jsx";
 import MetadataEditor from "./factory/MetadataEditor.jsx";
 import AnalyticsPanel from "./factory/AnalyticsPanel.jsx";
 import StoragePanel from "./factory/StoragePanel.jsx";
+import SelectionReview from "./factory/SelectionReview.jsx";
 import AssetLibrary from "./factory/AssetLibrary.jsx";
 
 async function api(path, options = {}) {
@@ -423,6 +424,7 @@ function App() {
                 {(chosen.result.candidates || []).some((c) => c.editorial_review_required || c.selection_method === "heuristic" || c.score < 50 || c.confidence < .6) && (
                   <p className="warning">Відбір або назва потребує редакторської перевірки. Перевірте уривок і назву перед схваленням; автоматична публікація таких уривків очікує схвалення.</p>
                 )}
+                {chosen.request.mode==='shorts' && <SelectionReview key={chosen.id+':' +(chosen.result.selection_id||'legacy')} job={chosen} post={post} act={act} onCreated={async j=>{setSelected(j.id);setOutputIndex(0);await refresh();}}/>}
                 {chosen.error && <p className="error">{chosen.error}</p>}
                 <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>
                 <div className="outputs">
@@ -496,8 +498,8 @@ function App() {
                     </section>
                   ))}
                 </div>
-                <h2>Кандидати та повторний монтаж</h2>
-                {(chosen.result.candidates || []).map((c, i) => (
+                {!chosen.result.selection_id && <h2>Кандидати та повторний монтаж</h2>}
+                {!chosen.result.selection_id && (chosen.result.candidates || []).map((c, i) => (
                   <section className="candidate" key={i}>
                     <b>{c.title}</b>
                     <small>
