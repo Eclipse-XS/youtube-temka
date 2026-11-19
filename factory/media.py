@@ -76,6 +76,7 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
             if any(value in diagnostic for value in ('cuda out of memory','cuda_error_out_of_memory')):reason='GPU memory exhausted; use a smaller model or wait for GPU memory to be released'
             elif 'out of memory' in diagnostic or 'cannot allocate memory' in diagnostic:reason='System/container memory exhausted; shorten the chunk or choose a smaller model'
             elif 'no space left on device' in diagnostic:reason='Disk space exhausted; free scratch storage and retry'
+            elif any(value in diagnostic for value in ('downloaded range is empty', 'downloaded range is not decodable', 'downloaded range contains no decodable media')):reason='Source interval returned empty or incomplete media; retry the interval or check VOD availability'
             elif process.returncode in (-9,137):reason='Process killed; inspect container OOM diagnostics and available RAM before retrying'
             else:reason='Check codec support, source accessibility and available disk space'
             raise RuntimeError(f'Media process failed (exit {process.returncode}). {reason}. Checkpoints preserved.')
