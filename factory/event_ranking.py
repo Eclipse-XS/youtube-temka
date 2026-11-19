@@ -1,17 +1,22 @@
 """Cross-modal evidence ranking. Scores are editorial heuristics."""
-from bisect import bisect_right
-
-
-def visual_bounds(time, cuts, minimum, maximum):
-    right = bisect_right(cuts,time)
-    if not 0<right<len(cuts):
+def event_window(time, duration, minimum, maximum, activity, sentence_edges):
+    """Build a review window around nearby activity, allowing shot transitions."""
+    if duration < minimum or maximum < minimum:
         return None
-    left,right = cuts[right-1],cuts[right]
-    if right-left<minimum:
-        return None
-    length=min(right-left,maximum,max(45,minimum))
-    start=max(left,min(right-length,time-length/3))
-    return start,start+length
+    nearby = [value for value in activity if abs(time-value)<=8]
+    setup = min(nearby,default=time)-7
+    payoff = max(nearby,default=time)+9
+    target = min(duration,maximum,max(minimum,payoff-setup+15))
+    start = max(0,min(duration-target,setup-(target-(payoff-setup))/2))
+    end = start+target
+    starts = [edge for edge in sentence_edges if 0<=edge<=time and abs(edge-start)<=2]
+    ends = [edge for edge in sentence_edges if time<=edge<=duration and abs(edge-end)<=2]
+    choices = [(a,b) for a in [start,*starts] for b in [end,*ends]
+               if minimum-1e-7 <= b-a <= maximum+1e-7]
+    return min(choices,key=lambda pair: (
+        -int(pair[0] in starts)-int(pair[1] in ends),
+        abs(pair[0]-start)+abs(pair[1]-end),pair,
+    ),default=None)
 
 
 def rank(features, category):

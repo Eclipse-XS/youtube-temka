@@ -153,19 +153,54 @@ def test_variant_analytics_compares_equal_windows():
     assert len(experiment_comparisons([one,two]))==1
     assert not experiment_comparisons([one,{**two,'published_at':'2026-10-15T14:00:00Z'}])
 
-def test_visual_interval_stays_inside_sampled_scene():
-    from factory.event_ranking import visual_bounds
-    assert visual_bounds(42,[0,40,96,120],35,60)==(40,85)
-    assert visual_bounds(98,[0,40,96,120],35,60) is None
+def test_event_windows_vary_with_activity_and_preserve_anchor():
+    from factory.event_ranking import event_window
+    isolated=event_window(80,150,35,60,[80],[])
+    active=event_window(80,150,35,60,[72,80,88],[])
+    assert isolated[0]<80<isolated[1]
+    assert active[1]-active[0]>isolated[1]-isolated[0]
+    assert event_window(20,30,35,60,[20],[]) is None
 
 
-def test_fine_visual_pass_rejects_short_observed_regions(monkeypatch):
+@pytest.mark.parametrize('speech',[[],[{'start':6,'end':8,'text':'Here it comes.'},
+                                        {'start':34,'end':37,'text':'That worked!'}]])
+def test_fine_inspection_preserves_coherent_multishot_and_late_payoff(monkeypatch,speech):
     from factory import visual_analysis
     monkeypatch.setattr(visual_analysis,'inspect_local_interval',
-                        lambda *args:{'frames':30,'possible_cuts':[120,130]})
-    data={'candidates':[{'start_seconds':0,'end_seconds':50,'content_type':'visual_activity'}],
+                        lambda *args:{'frames':30,'possible_cuts':[8,17,26,35]})
+    data={'candidates':[{'start_seconds':0,'end_seconds':45,'content_type':'visual_activity'}],
           'selection_summary':'coarse'}
-    result=visual_analysis.refine_local_plan('fixture.mp4',100,request(),data)
+    result=visual_analysis.refine_local_plan('fixture.mp4',0,request(),data,{'segments':speech},45)
+    clip,=result['candidates']
+    assert (clip['start_seconds'],clip['end_seconds'])==(0,45)
+    assert clip['editorial_review_required'] and clip['fine_review']['speech_segments']==len(speech)
+    assert result['fine_decisions'][0]['status']=='review_required'
+
+
+def test_fine_inspection_rejects_corroborated_break_but_keeps_manual_recovery(monkeypatch):
+    from factory import visual_analysis
+    observation=[{'time':t,'motion':.002,'audio_rms':.001} for t in (8,10,12,14)]
+    observation.append({'time':15,'motion':.3,'audio_rms':.1})
+    monkeypatch.setattr(visual_analysis,'inspect_local_interval',
+        lambda *args:{'frames':30,'possible_cuts':[15,31],'observations':observation})
+    data={'candidates':[{'start_seconds':0,'end_seconds':45,'content_type':'visual_activity'}],
+          'selection_summary':'coarse'}
+    result=visual_analysis.refine_local_plan('fixture.mp4',0,request(),data,{'segments':[]},45)
     assert result['candidates']==[]
-    assert '0/3 after frame inspection' in result['selection_summary']
     assert len(result['review_alternatives'])==1
+    assert result['fine_decisions'][0]['reason']=='Audiovisual discontinuity'
+
+
+def test_fine_inspection_rejects_invalid_interval_without_opening_media():
+    from factory import visual_analysis
+    data={'candidates':[{'start_seconds':10,'end_seconds':55,'content_type':'visual_activity'}],
+          'selection_summary':'coarse'}
+    result=visual_analysis.refine_local_plan('missing.mp4',0,request(),data,duration=45)
+    assert not result['candidates']
+    assert result['fine_decisions'][0]['reason']=='Invalid timestamps or duration'
+
+
+def test_short_source_explicitly_cannot_satisfy_three_distinct_clips():
+    result=plan(transcript(),request(),45,[{'time':20,'motion':.3,'cut':False}],lambda *_:None)
+    assert len(result['candidates'])==1
+    assert 'needs 105s' in result['selection_summary']

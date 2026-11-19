@@ -12,7 +12,7 @@ from . import config
 from .highlights import analyze, select
 from .models import Candidate
 
-VERSION = 6
+VERSION = 7
 SCHEMA_VERSION = 2
 PLATFORM_MAXIMUM = 180
 
@@ -215,9 +215,28 @@ def plan(transcript, request, duration, features, progress):
         return {'candidates': candidates, 'selection_summary': summary, 'analysis': 'deterministic source split'}
     if mode == 'connected':
         candidates, summary, diagnostics = connected_story(transcript, request, duration, cuts, progress)
+        alternatives=[]
+        if not candidates:
+            from .event_ranking import event_window
+            activity=[item['time'] for item in features if not item['cut'] and
+                      (item['motion']>=.035 or item.get('audio_change',0)>=.04)]
+            for point in sorted(activity):
+                bounds=event_window(point,duration,request.minimum,min(request.maximum,PLATFORM_MAXIMUM),activity,[])
+                if bounds is None or any(bounds[0]<part['end_seconds'] and part['start_seconds']<bounds[1]
+                                         for part in alternatives):
+                    continue
+                alternatives.append(planned(*bounds,'Possible independent clip',
+                    'Activity anchor for manual review. Continuity with other windows is unverified.',
+                    transcript,'visual_activity',[f'Activity anchor at {point:g}s']))
+                if len(alternatives)==request.count:
+                    break
         return {'candidates': candidates, 'selection_summary': summary, 'analysis': 'connected event search',
-                'analysis_diagnostics': diagnostics}
+                'analysis_diagnostics': diagnostics,'review_alternatives':alternatives}
 
+    minimum_coverage=request.count*request.minimum
+    coverage_note=(f' {duration:g}s of source cannot cover {request.count} nonoverlapping clips '
+                   f'of at least {request.minimum:g}s (needs {minimum_coverage:g}s).'
+                   if duration<minimum_coverage else '')
     bounded = request.model_copy(update={'maximum': min(request.maximum, PLATFORM_MAXIMUM)})
     result = analyze(transcript, bounded, duration, progress)
     candidates = []
@@ -241,14 +260,14 @@ def plan(transcript, request, duration, features, progress):
                              context_required=clip['editorial_review_required'] or len(speech)<3)
         candidates.append(clip | structured)
 
-    from .event_ranking import rank, visual_bounds
+    from .event_ranking import rank, event_window
     scene_bounds=sorted({0,duration,*(sample['time'] for sample in features
                                      if sample['cut'] and 0<sample['time']<duration)})
     for clip in candidates:
         start,end=clip['start_seconds'],clip['end_seconds']
         crossings=sum(start<cut<end for cut in scene_bounds)
         factors={'event_signal':min(1,clip['score']/100),
-                 'boundary':1/(1+crossings),'context':clip['narrative_completeness'],
+                 'boundary':.75 if crossings else .85,'context':clip['narrative_completeness'],
                  'duration_fit':max(.4,1-abs(end-start-45)/90)}
         clip.update(score=rank(factors,request.source_category),ranking_features=factors,
                     semantic_verification='transcript_review_required')
@@ -256,20 +275,29 @@ def plan(transcript, request, duration, features, progress):
         d['decision']=='visual_required' for d in result['analysis_diagnostics']['decisions']
     ):
         scores=sorted(features,key=lambda sample: (-(sample['motion']+min(.08,sample.get('audio_change',0))),sample['time']))
+        activity=sorted(s['time'] for s in features if not s['cut'] and
+                        (s['motion']>=.035 or s.get('audio_change',0)>=.04))
+        edges=[s['end'] for s in segments if s['text'].rstrip().endswith(('.', '?', '!'))]
         for sample in scores[:160]:
-            if sample['cut'] or sample['motion']<.035:
+            if sample['cut'] or (sample['motion']<.035 and sample.get('audio_change',0)<.04):
                 continue
-            bounds=visual_bounds(sample['time'],scene_bounds,bounded.minimum,bounded.maximum)
+            bounds=event_window(sample['time'],duration,bounded.minimum,bounded.maximum,activity,edges)
             if not bounds:
                 continue
             start,end=bounds
-            factors={'event_signal':min(.85,.34+2*sample['motion']+min(.1,sample.get('audio_change',0))),
-                     'boundary':.85 if len(scene_bounds)>2 else .6,'context':.35,
+            reactions=[seg for seg in segments if seg['end']>start and seg['start']<end and seg['text'].strip()]
+            changes=sum(s.get('audio_change',0)>=.04 for s in features if start<=s['time']<end)
+            shot_changes=sum(start<cut<end for cut in scene_bounds)
+            factors={'event_signal':min(.85,.30+2*sample['motion']+min(.1,sample.get('audio_change',0))),
+                     'boundary':.85 if start in edges or end in edges else .65,'context':min(.7,.35+.05*len(reactions)+.05*changes),
                      'duration_fit':max(.4,1-abs(end-start-45)/90)}
-            clip=planned(start,end,'Visual activity','Activity within sampled scene boundaries; verify the event and payoff.',
-                         transcript,'visual_activity',[f'Frame change at {sample["time"]:g}s'],
+            clip=planned(start,end,'Gameplay activity' if request.source_category=='gameplay' else 'Visual activity',
+                         'Nearby activity forms a potential event window; inspect setup, action and payoff across shots.',
+                         transcript,'visual_activity',[f'Activity anchor at {sample["time"]:g}s',
+                         f'{shot_changes} sampled cuts, {changes} audio changes and {len(reactions)} transcript segments'],
                          score=rank(factors,request.source_category))
-            candidates.append(clip|{'ranking_features':factors,'semantic_verification':'unverified'})
+            candidates.append(clip|{'ranking_features':factors,'semantic_verification':'unverified',
+                                    'event_anchor':sample['time']})
     by_interval={}
     for clip in candidates:
         key=(clip['start_seconds'],clip['end_seconds'])
@@ -277,10 +305,11 @@ def plan(transcript, request, duration, features, progress):
             by_interval[key]=clip
     ranked=select([Candidate.model_validate(clip) for clip in by_interval.values()],bounded,duration,overlap_limit=.05)
     candidates=[by_interval[c['start_seconds'],c['end_seconds']] for c in ranked]
+    result['discovered_candidates'] = len(by_interval)
     result['candidates'] = candidates
     result['selection_summary'] = (
         f'Planned {len(candidates)}/{request.count} independent highlights in the configured duration range. '
         + ('Available evidence was insufficient for the full request. ' if len(candidates) < request.count else '')
-        + 'Review narrative context and visual claims before publishing.'
+        + 'Review narrative context and visual claims before publishing.' + coverage_note
     )
     return result

@@ -6,3 +6,8 @@
 - Phase 4 TESTED. Server-side job pagination and filters, reference-safe job record deletion, empty category notices. Physical asset deletion, dedicated source catalog, and persistent editor drafts remain open.
 - Phase 5 IN_PROGRESS. Automated suites and build can establish regression status. Human quality gate and full gaming workflow are open.
 - Phase 6 IN_PROGRESS. Compose release candidate disables automatic publishing while preserving channel preferences. Shipping a technical candidate does not pass editorial gates.
+
+## Automatic Shorts acceptance recovery
+Version 7 removes the minimum single-shot requirement in both candidate discovery and local fine inspection. Candidates use nearby activity, audio changes and sentence boundaries, and may cross cuts. Fine inspection records sampled cuts and speech support. Hard rejection is reserved for invalid intervals, undecodable media or a corroborated audiovisual restart after sustained inactivity. Ambiguous events remain review-required. A suspected format break can be added back for manual trimming. Connected Story keeps its own continuity requirements and provides explicitly independent alternatives when it fails.
+
+The 45-second excerpt remains a regression fixture only. Three distinct 35-second clips require at least 105 seconds; three 35-second Connected Story parts with 3-second overlaps require at least 99 seconds of one event. The full-source verification script is verification/check_event_acceptance.py. It uses the authorized 618-second GTA media and saved transcript, with evidence in verification/runtime/event-acceptance. The running production controller is kept on the prior verified build during acceptance.

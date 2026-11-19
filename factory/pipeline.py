@@ -162,7 +162,7 @@ def process(claim,assets=None):
             local_path=media.local_source(source) if request.series_mode=='independent' and use_visual else None
             if local_path:
                 from .visual_analysis import refine_local_plan
-                result=refine_local_plan(local_path,request.start,request,result)
+                result=refine_local_plan(local_path,request.start,request,result,transcript,duration)
             candidates=result['candidates']
         elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
             candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
