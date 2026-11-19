@@ -109,8 +109,9 @@ Real public publication remains an explicit operator action, separate from tests
 The unit is a completed package, including final videos, editable sources,
 metadata, subtitles and previews. Default deletion is OFF, retained limit 50,
 grace period 7 days. Dry-run never changes Drive. Protection and history are in
-Settings. Enabling deletion permits eligible published packages to be moved to
-Drive trash after the grace period. Permanent Drive deletion is not used.
+Settings. Enabling deletion lets Factory move eligible published packages to
+Drive trash after the grace period, starting with the oldest until the package
+limit is reached. Dry-run reports any projected excess after cleanup.
 
 Eligibility requires every output's verified public publication, elapsed grace,
 no pending/uncertain schedules, no active edit references and no protection.
