@@ -52,3 +52,17 @@ its mission-failure explanation were not grounded in the selected excerpt.
 The review export replaces that explanation with a transcript-based reason.
 These intervals are editorial candidates. Their visual activity evidence
 does not establish narrative completeness.
+
+The authenticated controller rendered those three candidates with blurred
+sides, source audio and English captions for local review. The decoded MP4
+durations were 46.167, 45.000 and 45.000 seconds at 1080×1920. The largest
+audio/video end delta was 23 ms. The three clips had 0, 1 and 0 black samples,
+respectively. The two activity windows crossed multiple scenes. All three
+outputs remain in editorial review. No publication was submitted.
+
+During acceptance, the first completed encode was recovered after the storage
+scan frequency was reduced. The transcript and exact approved intervals were
+reused. A third-clip SRT cue had identical start/end times because of an ASR
+timestamp. SRT generation now drops invisible cues. The three corrected SRT
+files and burned ASS tracks have positive cues inside the decoded durations.
+The corrected sidecars preserved the byte-identical burned tracks.
