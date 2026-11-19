@@ -158,3 +158,18 @@ def test_empty_trashed_record_requires_confirmation_and_protects_workspace(clien
     assert client.get(endpoint+'/deletion-preview').json()['permanent_delete_available']
     assert client.post(endpoint+'/delete-record',json={'confirmation':jid}).status_code==200
     assert client.get(endpoint).status_code==404
+
+def test_history_paginates_and_filters_archived_rows(client):
+    from factory import store
+    client.headers['Authorization']='Bearer '+'a'*40
+    source={'source':'https://www.youtube.com/watch?v=history-fixture','rights_confirmed':True}
+    for _ in range(3):
+        job=store.create(source)
+        claim=store.claim('fixture')
+        store.update(job['id'],claim['lease'],state='READY')
+    assert client.post('/api/jobs/visibility',json={'ids':[job['id']],'status':'archived'}).is_success
+    page=client.get('/api/job-history?limit=1&search=HISTORY-FIXTURE').json()
+    assert len(page['items'])==1 and page['has_more']
+    assert page['items'][0]['id']!=job['id']
+    archive=client.get('/api/job-history?scope=archived').json()
+    assert [row['id'] for row in archive['items']]==[job['id']]

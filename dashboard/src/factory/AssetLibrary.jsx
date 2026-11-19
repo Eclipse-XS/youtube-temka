@@ -67,6 +67,7 @@ export default function AssetLibrary({api,post,act}) {
       <label className="check"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Вилучені з вибору</label>
     </div>
     <label>Пошук у бібліотеці<input value={search} onChange={e=>setSearch(e.target.value)}/></label>
+    {visible.length===0&&<p>У цій категорії немає доступних матеріалів. Додайте власний запис або матеріал із перевіреною ліцензією.</p>}
     <div className="outputs">{visible.map(item=>{
       const url=`/api/library/${item.kind}/${item.name}`;
       const poster=item.kind==='backgrounds'?`${url}/frame`:undefined;
