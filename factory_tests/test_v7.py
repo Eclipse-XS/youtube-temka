@@ -87,6 +87,28 @@ def test_retention_reports_when_protection_prevents_reaching_limit(isolated):
     assert result['over_limit']==1
 
 
+def test_render_revisions_preserve_parent_approval_and_number_on_retry(isolated):
+    root=store.create({'source':'local fixture'})['id']
+    parent={'render_id':f'{root}:1','render_version':1,'approved':True,'approved_render_id':f'{root}:1'}
+    with store.connect() as db:
+        db.execute("UPDATE jobs SET state='READY',result=? WHERE id=?",(json.dumps({'outputs':[parent]}),root))
+    first=store.create({'source':f'edit:{root}:0'})
+    sibling=store.create({'source':f'edit:{root}:0'})
+    revision=first['result']['edit_revision']
+    assert revision=={'render_lineage_id':parent['render_id'],'parent_render_id':parent['render_id'],'render_version':2}
+    assert sibling['result']['edit_revision']['render_version']==3
+    with store.connect() as db:
+        db.execute("UPDATE jobs SET state='FAILED' WHERE id=?",(first['id'],))
+    assert store.retry(first['id'])
+    assert store.get(first['id'])['result']['edit_revision']==revision
+    derived_id=f"{first['id']}:1"
+    with store.connect() as db:
+        db.execute("UPDATE jobs SET state='READY',result=? WHERE id=?",(json.dumps({'outputs':[{**revision,'render_id':derived_id}]}),first['id']))
+    child=store.create({'source':f"edit:{first['id']}:0"})['result']['edit_revision']
+    assert child=={'render_lineage_id':parent['render_id'],'parent_render_id':derived_id,'render_version':4}
+    assert store.get(root)['result']['outputs']==[parent]
+
+
 @pytest.mark.parametrize('state',['SCHEDULED','FAILED','UNCERTAIN','PUBLISHING'])
 def test_retention_never_deletes_unverified_packages(isolated,state):
     packages(1)

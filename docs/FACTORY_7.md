@@ -37,7 +37,9 @@ exports preserve their raw editable intervals on disk; Drive exports preserve
 verified editable files on Drive. Older results without those sources need an
 original-source upload. The previous successful video remains intact, and the
 new MP4 is registered only after temporary-output validation. Approval is bound
-to the render identity. Revoking approval also blocks a claimed upload before
+to the render identity. New edits reserve a version number in SQLite when queued.
+Concurrent edits of the same render lineage get distinct numbers and retries
+keep their number. Failed or cancelled edits can leave gaps. Revoking approval also blocks a claimed upload before
 network work begins.
 
 ## Languages and profiles

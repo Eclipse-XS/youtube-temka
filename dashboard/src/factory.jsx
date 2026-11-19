@@ -447,6 +447,7 @@ function App() {
                         </a>
                       )}
                       <h3>{o.title}</h3>
+                      {o.render_version && <small>Версія відео {o.render_version}</small>}
                       <MetadataEditor job={chosen} output={o} index={i} api={api} post={post} act={act} onSaved={refresh}/>
                       <OutputEditor
                         job={chosen}
