@@ -89,7 +89,9 @@ availability. Reimported identical files reuse the existing asset. New custom
 uploads default to an explicit operator-rights statement rather than a fabricated
 license grant. Additional license/category information can be supplied through
 the upload API. Background selection supports none, specific and random category.
-Secondary video is not mapped into the output audio track.
+When the server is busy generating a preview frame, the editor can preview the
+selected background as muted video in the browser. Secondary video is not
+mapped into the output audio track.
 
 ## Publishing
 
