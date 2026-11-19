@@ -16,7 +16,7 @@ def main():
     with TemporaryDirectory(prefix='v7-linux-',dir=scratch) as temporary:
         stage=Path(temporary)
         if not stage.resolve().is_relative_to(scratch.resolve()):raise ValueError('Invalid staging boundary')
-        for name in ('factory','factory_tests','tests','bin','fonts'):
+        for name in ('factory','factory_tests','tests','bin','fonts','cloud'):
             folder=ROOT/name
             if not folder.is_dir():continue
             for source in folder.rglob('*'):
@@ -31,7 +31,9 @@ def main():
         (stage/'deploy').mkdir(exist_ok=True)
         for name in ('download-wheels.py','gpu-wheels.json'):
             shutil.copyfile(ROOT/'deploy'/name,stage/'deploy'/name)
-        command=['docker','run','--rm','--memory','3g','--memory-swap','3g','--cpus','2',
+        command=['docker','run','--rm','--label','com.ai-content-factory.verification=v7-linux',
+                 '--env','OLLAMA_URL=http://127.0.0.1:9',
+                 '--memory','3g','--memory-swap','3g','--cpus','2',
                  '--mount',f'type=bind,source={stage.resolve()},target=/verify,readonly',
                  '--workdir','/verify','--entrypoint','python','youtube-temka-controller',
                  '-m','pytest','factory_tests','tests/test_jsonfile.py','tests/test_ffmpeg_utils.py',

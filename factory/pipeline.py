@@ -209,7 +209,7 @@ def process(claim,assets=None):
             outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name,**thumbnail_report},'validation':validation})
             import hashlib
             with output.open('rb') as rendered:digest=hashlib.file_digest(rendered,'sha256').hexdigest()
-            outputs[-1].update(render_id=f'{jid}:{i+1}',render_version=1,output_hash=digest,hook=clip_request.hook,hook_candidates=hook_candidates,series={'id':jid,'part':candidate['part'],'parts':candidate['parts']} if candidate.get('part') else None)
+            outputs[-1].update(render_id=f'{jid}:{i+1}',render_version=1,output_hash=digest,hook=clip_request.hook,hook_candidates=hook_candidates,series={'id':jid,'title':candidate.get('series_title',candidate['title']),'part':candidate['part'],'parts':candidate['parts'],'previous_part':candidate['part']-1 if candidate['part']>1 else None,'next_part':candidate['part']+1 if candidate['part']<candidate['parts'] else None} if candidate.get('part') else None)
             update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
         if request.mode=='longs':
             timeline=manifest(candidates,request);position=0
@@ -233,6 +233,8 @@ def process(claim,assets=None):
         previous=[o.get('publishing_metadata') for o in job['result'].get('outputs',[])]
         progress.begin('metadata','ANALYZING',len(outputs),'clips')
         drafts=publishing_metadata.generate_outputs(contexts,request.llm_model,previous,progress.tick)
+        if request.series_mode=='connected' and drafts:
+            for output in outputs:output['series']['title']=drafts[0]['title'].rsplit(' · ',1)[0]
         progress.done();progress.begin('editorial','ANALYZING',len(outputs),'clips')
         assessed=[]
         for i,(output,draft,ctx) in enumerate(zip(outputs,drafts,contexts)):

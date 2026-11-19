@@ -272,7 +272,7 @@ export default function PublisherPanel({
                 </select>
               </label>
               <label>
-                Публічний реліз · час браузера
+                Публічний реліз · {timezone}
                 <input
                   type="datetime-local"
                   disabled={!policy.public_allowed}
@@ -281,6 +281,7 @@ export default function PublisherPanel({
                 />
               </label>
             </div>
+            {!policy.public_allowed&&<p className="warning">Публічні публікації та розклад вимкнені для цього каналу. У «Правилах каналу» можна окремо дозволити ручний Public; автоматична публікація залишається незалежною.</p>}
             <button
               className="primary"
               disabled={

@@ -92,7 +92,7 @@ def context(transcript,request,source,candidates,output,source_url=None,preferen
         from .tts import VOICES
         actual=request.tts_text or actual;language=VOICES[request.tts_voice]
     preferences=preferences or getattr(request,'metadata_preferences',{})
-    return {'transcript':actual,'source_title':source.get('title',''),'source_url':source_url if source_url and source_url.startswith('https://') else None,'intervals':[[request.start+c['start_seconds'],request.start+c['end_seconds']] for c in candidates],'highlight_explanations':[{'title':c.get('title',''),'reason':c.get('reason','')} for c in candidates],'audio_language':None if request.audio_mode=='silent' or not output.get('validation',{}).get('audio',True) else language,'metadata_language':getattr(request,'metadata_language',None) or preferences.get('metadata_language') or language,'content_category':request.source_category,'duration':output['duration'],'mode':request.mode,'source_attribution':request.source_attribution,'preferences':preferences}
+    return {'transcript':actual,'source_title':source.get('title',''),'source_url':source_url if source_url and source_url.startswith('https://') else None,'intervals':[[request.start+c['start_seconds'],request.start+c['end_seconds']] for c in candidates],'highlight_explanations':[{'title':c.get('title',''),'reason':c.get('reason','')} for c in candidates],'audio_language':None if request.audio_mode=='silent' or not output.get('validation',{}).get('audio',True) else language,'metadata_language':getattr(request,'metadata_language',None) or preferences.get('metadata_language') or language,'content_category':request.source_category,'duration':output['duration'],'mode':request.mode,'source_attribution':request.source_attribution,'preferences':preferences,'series':output.get('series')}
 
 
 def fingerprint(ctx):return hashlib.sha256(json.dumps(ctx,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -255,6 +255,14 @@ class Generator:
         result['title_candidates']=[value['text'] for value in ranked]
         result['hashtag_candidates']=list(dict.fromkeys([*draft.hashtags,*['#'+word for word,_ in Counter(w for w in words(ctx['transcript']) if w not in STOP and len(w)>3).most_common(30)]]))[:30]
         if len(ranked)<5:result['validation_issues'].append('fewer_than_five_supported_distinct_titles_available')
+        if ctx.get('series'):
+            series=ctx['series'];part=int(series['part']);parts=int(series['parts'])
+            label={'en':'Part','es':'Parte','pt':'Parte','de':'Teil','ru':'Часть','uk':'Частина'}.get((ctx['metadata_language'] or 'en').split('-')[0],'Part')
+            suffix=f' · {label} {part}/{parts}'
+            result['title']=result['title'][:100-len(suffix)]+suffix
+            note=f'\n\n{label} {part}/{parts}'
+            if len((result['description']+note).encode('utf-8'))<=5000:result['description']+=note
+            else:result['validation_issues'].append('series_annotation_exceeds_description_budget')
         result.update(version=uuid.uuid4().hex,generated_at=datetime.now(timezone.utc).isoformat(),provenance={'method':method,'model':model,'input_sha256':digest,'attempts':attempts,'validation':'review_required' if draft.review_required else 'passed'},_provenance={'input':ctx,'attempts':attempts,'title_ranking':ranked,'ranking_weights':{'relevance':.3,'factual_support':.25,'clarity':.2,'curiosity':.15,'novelty':.1}})
         return result
 

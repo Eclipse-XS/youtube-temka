@@ -438,7 +438,11 @@ def complete(pid,response,metadata,youtube,channel):
 
 
 def loop(stop):
+    last_schedule_check=0
     while not stop.is_set():
+        if time.monotonic()-last_schedule_check>=60:
+            refresh_scheduled()
+            last_schedule_check=time.monotonic()
         from .youtube_thumbnails import pending
         pending()
         auto_queue()
@@ -447,6 +451,33 @@ def loop(stop):
             upload(publication)
         else:
             stop.wait(5)
+
+
+def refresh_scheduled(now=None):
+    """Observe native schedule completion with GET only; never reupload a video."""
+    now=now or datetime.now(timezone.utc)
+    with store.connect() as db:
+        rows=[dict(r) for r in db.execute("SELECT p.*,c.alias FROM publications p JOIN channels c ON c.id=p.channel WHERE p.state IN ('SCHEDULED','UNCERTAIN') AND p.video_id IS NOT NULL AND json_extract(p.metadata,'$.status.publishAt') IS NOT NULL ORDER BY json_extract(p.metadata,'$.status.publishAt') LIMIT 50")]
+    for item in rows:
+        metadata=json.loads(item['metadata']);scheduled=metadata['status']['publishAt']
+        if datetime.fromisoformat(scheduled.replace('Z','+00:00'))>now:continue
+        youtube=None
+        try:
+            youtube=Drive(token_file(item['alias']))
+            videos=youtube.request('GET',YT+'/videos',params={'part':'snippet,status','id':item['video_id']}).json().get('items',[])
+            if not videos or videos[0]['snippet'].get('channelId')!=item['channel']:raise ValueError('Scheduled channel/video identity is not confirmed')
+            status=videos[0]['status']
+            if status.get('privacyStatus')=='public' and status.get('uploadStatus')=='processed':
+                metadata['scheduled_for']=metadata['status'].pop('publishAt')
+                metadata['status']['privacyStatus']='public'
+                with store.connect() as db:
+                    db.execute("UPDATE publications SET state='PUBLISHED',metadata=?,error=NULL,seen=? WHERE id=? AND state IN ('SCHEDULED','UNCERTAIN')",(json.dumps(metadata,ensure_ascii=False),time.time(),item['id']))
+            elif now-datetime.fromisoformat(scheduled.replace('Z','+00:00'))>timedelta(minutes=10):
+                checkpoint(item['id'],state='UNCERTAIN',error='Scheduled time passed but public/processed status was not confirmed. Check YouTube Studio, channel permissions and API project restrictions; no new upload was created.')
+        except (ValueError,KeyError,OSError,httpx.HTTPError):
+            checkpoint(item['id'],state='UNCERTAIN',error='Scheduled publication verification unavailable; existing video identity preserved for the next read-only check')
+        finally:
+            if youtube:youtube.close()
 
 
 def auto_queue():

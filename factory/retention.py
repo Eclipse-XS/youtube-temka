@@ -49,7 +49,7 @@ def candidates(now=None):
     now=time.time() if now is None else now
     policy=settings();rows=[]
     with store.connect() as db:
-        active=[json.loads(r['request']).get('source','') for r in db.execute("SELECT request FROM jobs WHERE lease IS NOT NULL OR state='QUEUED'")]
+        active=[json.loads(r['request']).get('source','') for r in db.execute("SELECT request FROM jobs WHERE state<>'READY'")]
         for row in db.execute("SELECT * FROM retention_packages WHERE state!='DELETED' ORDER BY created,job"):
             value=dict(row);value.pop('files')
             pubs=db.execute('SELECT * FROM publications WHERE job=?',(row['job'],)).fetchall()
@@ -107,7 +107,7 @@ def cleanup(dry_run=True):
                     with store.connect() as db:
                         db.execute('BEGIN IMMEDIATE')
                         protected=db.execute('SELECT protected FROM retention_packages WHERE job=?',(jid,)).fetchone()['protected']
-                        active=db.execute("SELECT request FROM jobs WHERE lease IS NOT NULL OR state='QUEUED'").fetchall()
+                        active=db.execute("SELECT request FROM jobs WHERE state<>'READY'").fetchall()
                         if protected or any(json.loads(r['request']).get('source','').startswith('edit:'+jid+':') for r in active):raise ValueError('Package acquired a protected/active reference')
                         db.execute("UPDATE retention_packages SET state='DELETION_PENDING',error=NULL WHERE job=?",(jid,))
                     for file in files:

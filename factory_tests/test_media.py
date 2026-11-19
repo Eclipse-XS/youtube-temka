@@ -65,7 +65,8 @@ def test_opening_text_hook_is_really_rendered(fixture):
     output=tmp_path/'with-hook.mp4'
     media.render(source,output,transcript,0,5,req)
     media.validate_output(output,5)
-    assert output.with_suffix('.hook.txt').read_text(encoding='utf-8')=='A clear opening hook'
+    # Safe line wrapping changes layout, never the hook's words or order.
+    assert ' '.join(output.with_suffix('.hook.txt').read_text(encoding='utf-8').split())=='A clear opening hook'
 
 
 def test_pipeline_local_manual_clip_is_playable_without_drive(fixture,monkeypatch):

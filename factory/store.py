@@ -244,4 +244,4 @@ def preferences(channel):
 def source_in_use(source,exclude):
     # Never use the paginated UI list to decide whether an original may go away.
     with connect() as db:
-        return db.execute("SELECT 1 FROM jobs WHERE id<>? AND json_extract(request,'$.source')=? AND state NOT IN ('READY','CANCELLED') LIMIT 1",(exclude,source)).fetchone() is not None
+        return db.execute("SELECT 1 FROM jobs WHERE id<>? AND json_extract(request,'$.source')=? AND state<>'READY' LIMIT 1",(exclude,source)).fetchone() is not None

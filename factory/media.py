@@ -195,6 +195,12 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
 
 
 def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+    from .heavy import HEAVY_LOCK
+    with HEAVY_LOCK:
+        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path)
+
+
+def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
@@ -276,15 +282,20 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
         video='[v]'
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
-        hookfile.write_text('\n'.join(textwrap.wrap(request.hook,width=26)),encoding='utf-8')
+        fontsize=request.hook_font_size
+        while True:
+            hooklines=textwrap.wrap(request.hook,width=max(1,min(26,int(width*.84/(fontsize*1.1)))))
+            if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=18:break
+            fontsize-=2
+        hookfile.write_text('\n'.join(hooklines),encoding='utf-8')
         # Windows FFmpeg builds may have no fontconfig configuration. An explicit
         # installed font avoids drawtext terminating the entire render process.
-        font=''
+        font="font='"+{'sans':'Noto Sans','serif':'Noto Serif','mono':'DejaVu Sans Mono'}[request.hook_font]+"':"
         if os.name=='nt':
-            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
+            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/{'sans':'arial.ttf','serif':'times.ttf','mono':'consola.ttf'}[request.hook_font]
             if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
         hook_y={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
-        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={request.hook_font_size}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='lt(t,{request.hook_duration})'[hooked]"
+        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='lt(t,{request.hook_duration})'[hooked]"
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
@@ -292,10 +303,10 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
         logo=logo_path or config.DATA/'logos'/request.logo_asset
         if not logo.is_file():raise ValueError('Selected logo is unavailable')
         args+=['-threads','1','-i',str(logo)]
-        graph+=f';[{next_input}:v]scale={max(32,width//8)}:-1[logo];{video}[logo]overlay=W-w-32:32[branded]'
+        graph+=f';[{next_input}:v]scale={max(32,width//8)}:{max(32,height//8)}:force_original_aspect_ratio=decrease[logo];{video}[logo]overlay=W-w-32:32[branded]'
         video='[branded]';next_input+=1
     if request.cta_text:
-        ctafile=output.with_suffix('.cta.txt');ctafile.write_text('\n'.join(textwrap.wrap(request.cta_text,width=35)),encoding='utf-8')
+        ctafile=output.with_suffix('.cta.txt');ctafile.write_text('\n'.join(textwrap.wrap(request.cta_text,width=max(1,int(width*.84/(32*1.1))))),encoding='utf-8')
         ctafont=''
         if os.name=='nt':
             ctafontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'

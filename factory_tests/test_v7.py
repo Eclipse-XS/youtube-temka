@@ -194,3 +194,38 @@ def test_old_source_reference_is_not_lost_behind_ui_pagination(isolated):
     assert older['id'] not in [job['id'] for job in store.list_jobs()]
     assert store.source_in_use('upload:shared.mp4','another-job')
     assert not store.source_in_use('upload:shared.mp4',older['id'])
+    store.cancel(older['id'])
+    assert store.source_in_use('upload:shared.mp4','another-job'),'Cancelled jobs can still be retried'
+
+
+def test_native_schedule_becomes_verified_public_without_new_upload(isolated,monkeypatch):
+    from datetime import datetime,timezone,timedelta
+    from factory import publisher
+    packages(1);now=datetime.now(timezone.utc);when=(now-timedelta(minutes=1)).isoformat()
+    with store.connect() as db:db.execute("UPDATE publications SET state='SCHEDULED',metadata=?",(json.dumps({'status':{'privacyStatus':'private','publishAt':when}}),))
+    monkeypatch.setattr(publisher,'token_file',lambda _:None)
+    class Client:
+        def __init__(self,*_):pass
+        def close(self):pass
+        def request(self,method,url,**kwargs):
+            assert method=='GET' and url.endswith('/videos')
+            class Response:
+                def json(self):return {'items':[{'snippet':{'channelId':'channel'},'status':{'privacyStatus':'public','uploadStatus':'processed'}}]}
+            return Response()
+    monkeypatch.setattr(publisher,'Drive',Client)
+    publisher.refresh_scheduled(now)
+    record=publisher.history()[0]
+    assert record['state']=='PUBLISHED' and record['video_id']=='video'
+    assert record['metadata']['status']=={'privacyStatus':'public'}
+    assert record['metadata']['scheduled_for']==when
+    assert retention.candidates(now=time.time()+8*86400)[0]['eligible']
+
+
+def test_series_metadata_numbers_parts_in_channel_language():
+    from factory.metadata import Generator
+    from factory_tests.test_metadata import context
+    ctx=context();ctx.update(transcript='',metadata_language='es',series={'id':'series','part':2,'parts':3})
+    result=Generator(None,None,'unused').create(ctx)
+    assert result['title'].endswith(' · Parte 2/3') and len(result['title'])<=100
+    assert result['description'].endswith('Parte 2/3')
+    assert result['metadata_language']=='es' and result['review_required']

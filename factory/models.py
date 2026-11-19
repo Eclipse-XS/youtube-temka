@@ -16,6 +16,7 @@ class JobRequest(BaseModel):
     hook_duration: float = Field(default=3,ge=.5,le=30,allow_inf_nan=False)
     hook_position: Literal['top','center','bottom'] = 'top'
     hook_font_size: int = Field(default=48,ge=18,le=96)
+    hook_font: Literal['sans','serif','mono'] = 'sans'
     hook_color: str = Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
     hook_outline: int = Field(default=2,ge=0,le=8)
     hook_shadow: bool = True
@@ -62,6 +63,7 @@ class JobRequest(BaseModel):
         if self.text_mode is not None:
             self.captions=self.text_mode in ('subtitles','hook_subtitles')
             if self.text_mode in ('none','subtitles'):self.hook=''
+        if self.text_mode=='custom' and not self.hook.strip():raise ValueError('Custom Text requires nonempty text')
         if self.series_mode=='connected' and self.mode!='shorts':raise ValueError('Connected Series requires Shorts')
         if self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
         if self.publish_automatic and (not self.save_drive or not self.publish_channel):
