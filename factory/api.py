@@ -1,5 +1,6 @@
 import asyncio
 from typing import Literal
+from .composition import GeometryRequest, geometry
 from contextlib import asynccontextmanager
 import hmac
 import json
@@ -325,6 +326,11 @@ def library_frame(kind:str,name:str):
     return FileResponse(target)
 
 
+@app.post('/api/composition/geometry')
+def composition_geometry(body:GeometryRequest):
+    return geometry(body)
+
+
 @app.get('/api/backgrounds')
 def backgrounds():
     from .library import entries
@@ -460,6 +466,33 @@ def replan(jid:str, body:Replan):
 def jobs(limit:int=50,offset:int=0):
     if not 1<=limit<=200 or offset<0:raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
     return store.list_jobs(limit,offset)
+
+
+@app.get('/api/job-history')
+def job_history(scope:Literal['recent','all','archived','trash']='recent',
+                state:Literal['','active','READY','FAILED','BLOCKED','CANCELLED']='',
+                search:str='',after:float=0,sort:Literal['newest','oldest']='newest',
+                limit:int=10,offset:int=0):
+    if not 1<=limit<=50 or not 0<=offset or len(search)>150:
+        raise HTTPException(422,'Invalid history filter or page size')
+    terminal=('READY','FAILED','BLOCKED','CANCELLED')
+    where=['j.created>=?'];params=[after]
+    if scope!='all':
+        where.append("coalesce(v.status,'recent')=?");params.append(scope)
+    if state=='active':
+        where.append('j.state NOT IN (?,?,?,?)');params.extend(terminal)
+    elif state:
+        where.append('j.state=?');params.append(state)
+    if search:
+        where.append("instr(fold(coalesce(json_extract(j.result,'$.source.title'),json_extract(j.request,'$.source'),j.id)),?)>0")
+        params.append(search.casefold())
+    order='DESC' if sort=='newest' else 'ASC'
+    with store.connect() as db:
+        db.create_function('fold',1,str.casefold,deterministic=True)
+        rows=db.execute('SELECT j.* FROM jobs j LEFT JOIN job_visibility v ON v.job=j.id WHERE '+
+                        ' AND '.join(where)+f' ORDER BY j.created {order},j.id {order} LIMIT ? OFFSET ?',
+                        (*params,limit+1,offset)).fetchall()
+        return {'items':[store.decode(row,db) for row in rows[:limit]],'has_more':len(rows)>limit}
 
 
 class JobVisibility(BaseModel):

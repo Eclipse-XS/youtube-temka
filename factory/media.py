@@ -256,11 +256,13 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             from jsonfile import write_json_atomic
             write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
-    caption_margin=request.caption_margin
-    if caption_margin is None and request.mode=='shorts' and request.background_position=='bottom' and (
-        request.preset=='gameplay' or (request.preset=='auto' and request.background)
-    ):
-        caption_margin=min(.68,1-request.split_ratio+.07)
+    from .composition import GeometryRequest,geometry
+    split=request.mode=='shorts' and (request.preset=='gameplay' or
+          (request.preset=='auto' and background and background.is_file() and
+           (request.selection_version!=2 or request.background)))
+    scene=geometry(GeometryRequest(ratio=request.split_ratio,secondary_position=request.background_position,
+                                   split=bool(split),hook_position=request.hook_position,caption_margin=request.caption_margin))
+    caption_margin=scene['caption_margin'] if split else request.caption_margin
     generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700',
                  **({'margin_v':round(caption_margin*288)} if caption_margin is not None else {}))
     # Source is already a precisely extracted selected interval.
@@ -293,8 +295,8 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             raise ValueError('Secondary start offset must be inside the selected video')
         if request.background_loop:args+=['-stream_loop','-1']
         args+=['-ss',str(request.background_offset),'-threads','2','-i',str(background)]
-        main_height=2*round(height*request.split_ratio/2)
-        secondary_height=height-main_height
+        main_height=scene['primary']['height']
+        secondary_height=scene['secondary']['height']
         def panel(source, name, height):
             fill=f'scale=1080:{height}:force_original_aspect_ratio=increase,crop=1080:{height},setsar=1'
             fit=f'scale=1080:{height}:force_original_aspect_ratio=decrease,setsar=1'
@@ -307,7 +309,7 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
                     f'[{name}fg]{fit}[{name}fit];'
                     f'[{name}bg][{name}fit]overlay=(W-w)/2:(H-h)/2[{name}]')
         order='[main][secondary]' if request.background_position=='bottom' else '[secondary][main]'
-        framing.update(secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
+        framing.update(geometry=scene,secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
         graph=(panel('[0:v]','main',main_height)+';'+
                f'[1:v]setpts=PTS/{request.background_speed},tpad=stop_mode=clone:stop_duration={duration}[secondary_input];'+
                panel('[secondary_input]','secondary',secondary_height)+';'+f'{order}vstack=shortest=1[v]')
@@ -342,9 +344,9 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         timing={'persistent':'1','intro':f'lt(t,{request.hook_duration})',
                 'timed':f'gte(t,{request.hook_start})*lt(t,{request.hook_end})'}[hook_mode]
         if request.mode=='shorts' and preset=='gameplay':
-            offset=0 if request.background_position=='bottom' else secondary_height
-            hook_y={'top':f'{offset}+{main_height}*.09','center':f'{offset}+({main_height}-th)/2',
-                    'bottom':f'{offset}+{main_height}*.72-th'}[request.hook_position]
+            anchor=scene['hook_anchor_y']
+            correction={'top':'','center':'-th/2','bottom':'-th'}[request.hook_position]
+            hook_y=f'{anchor}{correction}'
         framing.update(hook_mode=hook_mode,hook_enable=timing)
         graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='{timing}'[hooked]"
         video='[hooked]'

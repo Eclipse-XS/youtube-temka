@@ -37,3 +37,12 @@ def test_unverified_source_title_can_route_to_gaming_without_claiming_an_edition
     data=Generator(None,None,None).create(ctx)
     assert data['category_id']=='20' and 'GTA' not in data['title']
     assert 'game_identity_unconfirmed' in data['validation_issues']
+
+def test_shared_geometry_preserves_panel_order_and_safe_caption_margin():
+    from factory.composition import GeometryRequest, geometry
+    top=geometry(GeometryRequest(split=True))
+    bottom=geometry(GeometryRequest(split=True,secondary_position='top',hook_position='center'))
+    assert top['primary']=={'y':0,'height':1248}
+    assert bottom['primary']=={'y':672,'height':1248}
+    assert bottom['hook_anchor_y']==1296
+    assert top['caption_margin']==.42
