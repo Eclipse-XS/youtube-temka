@@ -30,7 +30,7 @@ A working legacy split Drive client/token integration has been reused and verifi
 - FastAPI + React, persistent SQLite queue, fenced local/remote workers.
 - Authenticated, checksummed background/music synchronization with a bounded worker cache.
 - Automatic source probing, collapsible advanced controls, reusable preferences.
-- Multi-hour audio-first analysis in 15-minute checkpointed chunks; selected video
+- Multi-hour audio-first analysis in 5-minute checkpointed chunks; selected video
   retrieval only. No full-VOD download fallback.
 - Ollama structured ranking, explained unsuitable/visual decisions, visible
   heuristic fallback on malformed/empty responses or technical failures.

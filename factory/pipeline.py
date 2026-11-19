@@ -27,9 +27,19 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
     segments=[];language=request.language
     silent_short=request.audio_mode=='silent' and not request.captions and request.minimum<=duration<=request.maximum
     if metadata.get('has_audio',True) and not (request.intervals and not request.captions) and not silent_short:
-        chunks=math.ceil(duration/900)
+        # Keep the original chunk size on retry: changing it would reuse partial
+        # transcripts for different intervals. Pre-manifest checkpoints used 900s.
+        plan=root/'asr-chunks.json'
+        if plan.is_file():
+            chunk_seconds=int(json.loads(plan.read_text(encoding='utf-8'))['seconds'])
+            if not 60<=chunk_seconds<=900:raise ValueError('Invalid ASR chunk checkpoint')
+        else:
+            legacy=any(p.stem.removeprefix('transcript-').isdigit() for p in root.glob('transcript-*.json'))
+            chunk_seconds=900 if legacy else config.AUDIO_CHUNK_SECONDS
+            write_json_atomic(plan,{'seconds':chunk_seconds})
+        chunks=math.ceil(duration/chunk_seconds)
         for index in range(chunks):
-            offset=index*900;chunk_end=min(offset+900,duration)
+            offset=index*chunk_seconds;chunk_end=min(offset+chunk_seconds,duration)
             partial=root/f'transcript-{offset}.json'
             if not partial.is_file():
                 progress.begin('extraction','DOWNLOADING',message=f'Audio chunk {index+1}/{chunks}')

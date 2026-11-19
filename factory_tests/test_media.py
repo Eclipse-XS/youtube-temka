@@ -119,6 +119,28 @@ def test_pause_removal_really_trims_video_audio_and_captions(fixture):
     assert 'last' in srt and '00:00:04' not in srt
 
 
+@pytest.mark.parametrize('has_audio',[True,False])
+def test_many_pause_intervals_preserve_duration_order_and_cleanup(fixture,has_audio):
+    from factory.audio_edit import remove_pauses,speech_timeline
+    _,_,tmp_path=fixture
+    source=tmp_path/'many-pauses.mp4'
+    args=[media.ffmpeg(),'-hide_banner','-loglevel','error','-y',
+          '-f','lavfi','-i','testsrc2=size=160x90:rate=30']
+    if has_audio:args+=['-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-c:a','aac']
+    media.run(args+['-t','40','-c:v','libx264','-preset','ultrafast','-threads','2',str(source)])
+    transcript={'segments':[{'start':0,'end':40,'text':' speech',
+                            'words':[{'word':f' word{i}','start':i*2+.3,'end':i*2+.6}
+                                     for i in range(20)]}]}
+    _,_,_,expected=speech_timeline(transcript,0,40)
+    output=tmp_path/'speech.mp4'
+    _,timed,start,duration=remove_pauses(source,output,transcript,0,40,has_audio,lambda *_:None)
+    report=media.validate_output(output,expected,expected_audio=has_audio)
+    assert abs(report['duration']-expected)<.15
+    assert start==0 and duration==expected
+    assert [s['words'][0]['word'] for s in timed['segments']]==[f' word{i}' for i in range(20)]
+    assert not list(tmp_path.glob('pause-*'))
+
+
 def test_smart_camera_path_is_accepted_by_real_ffmpeg(fixture,monkeypatch):
     from factory import framing
     source,transcript,tmp_path=fixture

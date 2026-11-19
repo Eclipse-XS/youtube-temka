@@ -50,6 +50,37 @@ authorized-user file exclusively, and never replaces existing credentials or
 uploads a video. Mount `secrets/youtube` read-only and use Publisher Discover to
 verify the intended channel. A Drive-only token cannot satisfy this consent.
 
+## RAM budget on a 16 GiB host
+
+The controller (including its local worker) and Ollama each have a 4 GiB Docker
+memory limit. Container swap is disabled to avoid long disk-thrashing stalls.
+`FACTORY_MEMORY_LIMIT` changes the controller/worker limit; raising it leaves
+less memory for Windows and other applications. A limit is a ceiling, not a
+reservation or a guarantee that every model will fit. Oversized models can be
+terminated by Docker; use the default Whisper small/int8 and Qwen 3B first.
+Run the controller profile on PC A and the worker profile on PC B, rather than
+starting both profiles on one 16 GiB PC.
+
+Audio processing defaults to 300-second chunks. Video decoding uses two threads
+per input for local extraction/rendering, render validation, face tracking and
+thumbnail sampling. Subprocess
+logs use a bounded queue, including output without newlines. Pause removal writes
+one interval at a time instead of buffering many trim branches in RAM; temporary
+video/PCM files use scratch disk and are removed on success or failure. This
+trades some processing time and temporary disk space for lower peak RAM.
+
+For Docker Desktop with WSL2, its VM can retain Linux filesystem cache after a
+job ends. Set an overall VM memory ceiling in Docker Desktop/WSL settings as
+appropriate for your other applications (8 GiB is a starting point on 16 GiB),
+and enable WSL automatic memory reclamation if available. Applying WSL settings
+may require restarting WSL and interrupts running containers; project settings
+do not change the host's global WSL configuration.
+
+After rebuilding, inspect live container memory with `docker stats --no-stream`.
+Use Windows Task Manager as well: container limits exclude Windows, Docker image
+builds, other containers and some VM overhead. Actual Whisper/Ollama peaks must
+be measured with the selected models and a representative source.
+
 ## PC B
 
 Clone the repository without `.env`, runtime data or credentials. Run setup with
@@ -146,7 +177,10 @@ Longs ranks global candidates and assembles selected intervals chronologically.
 Silent/no-speech short footage can use Silent Video; longer visual sources require
 manual intervals. The application does not invent narrated content for them.
 
-Audio-first chunks are at most 15 minutes with independent JSON checkpoints.
+Audio-first chunks default to 5 minutes with independent JSON checkpoints.
+`ASR_CHUNK_SECONDS` accepts 60-900 seconds. The chunk size is saved per job so
+retries preserve their timestamps; jobs with older partial checkpoints keep
+their original 15-minute size.
 Full-VOD analysis accepts known source duration up to 24 hours. Failed downloads
 never fall back to downloading a full remote VOD. Default scratch budget 8 GiB,
 free reserve 4 GiB; model cache and Docker images require additional disk space.

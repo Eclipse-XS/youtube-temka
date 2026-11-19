@@ -26,15 +26,26 @@ def ffmpeg():
 def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
     group={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {'start_new_session':True}
     process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',env=env,**group)
-    lines=queue.Queue()
+    # Backpressure bounds logs even if a child is noisy or progress persistence
+    # is slow. readline's size also bounds a child that never writes a newline.
+    lines=queue.Queue(maxsize=128)
+    stopped=threading.Event()
+    def enqueue(line):
+        while not stopped.is_set():
+            try:
+                lines.put(line,timeout=.1)
+                return True
+            except queue.Full:pass
+        return False
     def read():
-        for line in process.stdout:
-            lines.put(line)
-        lines.put(None)
+        try:
+            while not stopped.is_set():
+                line=process.stdout.readline(4096)
+                if not line or not enqueue(line):break
+        finally:enqueue(None)
     thread=threading.Thread(target=read,daemon=True)
     thread.start()
     started=time.monotonic()
-    tail=[]
     try:
         while True:
             preflight()
@@ -47,7 +58,6 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
                 continue
             if line is None:
                 break
-            tail=(tail+[line])[-12:]
             if line.startswith('out_time_us='):
                 try:
                     tick(float(line.split('=')[1])/1e6,duration)
@@ -61,13 +71,20 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
             # Do not return raw downloader logs: URLs may carry credentials.
             raise RuntimeError('Media process failed. Check codec support, source accessibility and available disk space.')
     finally:
+        stopped.set()
         if process.poll() is None:
             if os.name=='nt':
-                subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True)
+                try:
+                    subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,timeout=10)
+                except subprocess.TimeoutExpired:pass
+                # Restricted Windows sessions may reject taskkill. Still reap
+                # the direct child rather than waiting forever after cancellation.
+                if process.poll() is None:process.kill()
             else:
                 os.killpg(process.pid,signal.SIGKILL)
         process.wait()
         thread.join(timeout=2)
+        if not thread.is_alive():process.stdout.close()
 
 
 def local_source(source):
@@ -151,7 +168,7 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     preflight()
     local=local_source(source)
     if local:
-        args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-ss',str(start),'-i',str(local),'-t',str(end-start)]
+        args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-ss',str(start),'-i',str(local),'-t',str(end-start),'-threads','2','-filter_threads','1']
         if audio:
             args+=['-vn','-ac','1','-ar','16000','-c:a','pcm_s16le']
         else:
@@ -205,7 +222,7 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     generate_srt(transcript,caption_start,caption_end,str(srt))
     generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
     # Source is already a precisely extracted selected interval.
-    args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source)]
+    args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
     preset=request.preset
     framing={'strategy':preset}
@@ -224,7 +241,7 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     elif preset=='gameplay':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
-        args+=['-stream_loop','-1','-i',str(background)]
+        args+=['-stream_loop','-1','-threads','2','-i',str(background)]
         top=2*round(1920*request.split_ratio/2)
         bottom=1920-top
         graph=f'[0:v]scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
@@ -288,6 +305,7 @@ def validate_output(path,duration,request=None,expected_audio=None):
         if not container.streams.video or not container.duration or abs(container.duration/av.time_base-duration)>1:
             raise RuntimeError('Rendered video validation failed (stream/duration)')
         stream=container.streams.video[0]
+        stream.thread_count=2
         if request:
             expected=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
             if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')

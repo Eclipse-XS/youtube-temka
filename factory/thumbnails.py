@@ -8,7 +8,7 @@ def create(video,target,text='',tick=lambda *_:None):
     import cv2
     from .media import run,ffmpeg
     from ffmpeg_utils import escape_filter_value
-    capture=cv2.VideoCapture(str(video));fps=capture.get(cv2.CAP_PROP_FPS) or 30
+    capture=cv2.VideoCapture(str(video),cv2.CAP_FFMPEG,[cv2.CAP_PROP_N_THREADS,2]);fps=capture.get(cv2.CAP_PROP_FPS) or 30
     duration=(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 1)/fps
     detector=cv2.CascadeClassifier(cv2.data.haarcascades+'haarcascade_frontalface_default.xml')
     best=None
