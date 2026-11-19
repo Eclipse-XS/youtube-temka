@@ -96,7 +96,8 @@ def test_retention_protects_active_edit_sources_and_enforces_grace(isolated):
     assert not retention.candidates()[0]['eligible']
 
 
-def test_cleanup_failure_remains_retryable_and_blocks_new_edits(isolated,monkeypatch):
+@pytest.mark.parametrize('protect_during_verification',[False,True])
+def test_cleanup_failure_remains_retryable(isolated,monkeypatch,protect_during_verification):
     packages(1);jid=f'{1:032x}'
     retention.configure({'enabled':True,'maximum_packages':50,'grace_days':7})
     monkeypatch.setattr(retention,'token_file',lambda _:None)
@@ -109,13 +110,22 @@ def test_cleanup_failure_remains_retryable_and_blocks_new_edits(isolated,monkeyp
         def request(self,method,url,**kwargs):
             if url.endswith('/channels'):return Response({'items':[{'id':'channel'}]})
             if url.endswith('/videos'):return Response({'items':[{'snippet':{'channelId':'channel'},'status':{'privacyStatus':'public','uploadStatus':'processed'}}]})
-            if method=='PATCH':raise OSError('offline')
+            if method=='PATCH':
+                assert not protect_during_verification
+                with pytest.raises(ValueError,match='active package'):retention.protect(jid,True)
+                raise OSError('offline')
+            if protect_during_verification:retention.protect(jid,True)
             return Response({'size':'1','md5Checksum':'hash','appProperties':{'factoryKey':jid+'-clip.mp4'}})
     monkeypatch.setattr(retention,'Drive',Client)
     result=retention.cleanup(False)
     assert not result['deleted'] and len(result['errors'])==1
-    assert retention.candidates()[0]['state']=='DELETION_PENDING'
-    with pytest.raises(ValueError,match='expired'):store.create({'source':'edit:'+jid+':0'})
+    if protect_during_verification:
+        assert retention.candidates()[0]['state']=='ACTIVE'
+        assert retention.candidates()[0]['protected']
+        store.create({'source':'edit:'+jid+':0'})
+    else:
+        assert retention.candidates()[0]['state']=='DELETION_PENDING'
+        with pytest.raises(ValueError,match='expired'):store.create({'source':'edit:'+jid+':0'})
 
 
 @pytest.mark.parametrize('language',['en','es','pt-BR','de','ru','uk'])
