@@ -5,7 +5,7 @@ from . import config
 from .models import Ranking, Candidate
 
 
-def select(candidates, request, duration, distinct_text=None):
+def select(candidates, request, duration, distinct_text=None, overlap_limit=.25):
     valid = []
     for c in candidates:
         length = c.end_seconds-c.start_seconds
@@ -17,7 +17,7 @@ def select(candidates, request, duration, distinct_text=None):
         phrase = distinct_text(c) if distinct_text else ''
         if phrase and phrase in spoken:
             continue
-        if all(max(0,min(c.end_seconds,p.end_seconds)-max(c.start_seconds,p.start_seconds)) / min(c.end_seconds-c.start_seconds,p.end_seconds-p.start_seconds) < .25 for p in chosen):
+        if all(max(0,min(c.end_seconds,p.end_seconds)-max(c.start_seconds,p.start_seconds)) / min(c.end_seconds-c.start_seconds,p.end_seconds-p.start_seconds) < overlap_limit for p in chosen):
             chosen.append(c)
             if phrase:spoken.add(phrase)
         if len(chosen) == request.count:

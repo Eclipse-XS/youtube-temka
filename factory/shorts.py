@@ -12,7 +12,7 @@ from . import config
 from .highlights import analyze, select
 from .models import Candidate
 
-VERSION = 4
+VERSION = 5
 SCHEMA_VERSION = 2
 PLATFORM_MAXIMUM = 180
 
@@ -241,31 +241,42 @@ def plan(transcript, request, duration, features, progress):
                              context_required=clip['editorial_review_required'] or len(speech)<3)
         candidates.append(clip | structured)
 
-    if not transcript['segments'] or request.source_category in ('visual', 'gameplay', 'stream') or (request.source_category == 'auto' and len(candidates) < request.count and features) or any(
-        d['decision'] == 'visual_required' for d in result['analysis_diagnostics']['decisions']
+    from .event_ranking import rank, visual_bounds
+    scene_bounds=sorted({0,duration,*(sample['time'] for sample in features
+                                     if sample['cut'] and 0<sample['time']<duration)})
+    for clip in candidates:
+        start,end=clip['start_seconds'],clip['end_seconds']
+        crossings=sum(start<cut<end for cut in scene_bounds)
+        factors={'event_signal':min(1,clip['score']/100),
+                 'boundary':1/(1+crossings),'context':clip['narrative_completeness'],
+                 'duration_fit':max(.4,1-abs(end-start-45)/90)}
+        clip.update(score=rank(factors,request.source_category),ranking_features=factors,
+                    semantic_verification='transcript_review_required')
+    if not segments or request.source_category in ('visual','gameplay','stream','auto') or any(
+        d['decision']=='visual_required' for d in result['analysis_diagnostics']['decisions']
     ):
-        length = min(bounded.maximum, max(bounded.minimum, 45), duration)
-        if length >= bounded.minimum:
-            pool = [Candidate.model_validate(clip) for clip in candidates]
-            visual = []
-            scores = sorted(features, key=lambda sample: (
-                -(sample['motion'] + min(.08, sample.get('audio_change', 0))), sample['time']))
-            for sample in scores[:160]:
-                if sample['motion'] < .035:
-                    continue
-                start = min(duration - length, max(0, sample['time'] - length / 3))
-                if candidates and any(min(start + length, c['end_seconds']) - max(start, c['start_seconds'])
-                                      >= .25 * min(length, c['end_seconds'] - c['start_seconds']) for c in candidates):
-                    continue
-                visual.append(planned(start, start + length, 'Visual activity',
-                                      'Sampled frame change suggests activity. Review context and ending.',
-                                      transcript, 'visual_activity',
-                                      [f'Frame change at {sample["time"]:g}s'] + (
-                                          ['Audio energy change in the same probe'] if sample.get('audio_change',0) >= .04 else []),
-                                      score=min(39, 25 + 25 * sample['motion'])))
-            by_interval = {(c['start_seconds'], c['end_seconds']): c for c in visual + candidates}
-            selected = select(pool + [Candidate.model_validate(c) for c in visual], bounded, duration)
-            candidates = [by_interval[c['start_seconds'], c['end_seconds']] for c in selected]
+        scores=sorted(features,key=lambda sample: (-(sample['motion']+min(.08,sample.get('audio_change',0))),sample['time']))
+        for sample in scores[:160]:
+            if sample['cut'] or sample['motion']<.035:
+                continue
+            bounds=visual_bounds(sample['time'],scene_bounds,bounded.minimum,bounded.maximum)
+            if not bounds:
+                continue
+            start,end=bounds
+            factors={'event_signal':min(.85,.34+2*sample['motion']+min(.1,sample.get('audio_change',0))),
+                     'boundary':.85 if len(scene_bounds)>2 else .6,'context':.35,
+                     'duration_fit':max(.4,1-abs(end-start-45)/90)}
+            clip=planned(start,end,'Visual activity','Activity within sampled scene boundaries; verify the event and payoff.',
+                         transcript,'visual_activity',[f'Frame change at {sample["time"]:g}s'],
+                         score=rank(factors,request.source_category))
+            candidates.append(clip|{'ranking_features':factors,'semantic_verification':'unverified'})
+    by_interval={}
+    for clip in candidates:
+        key=(clip['start_seconds'],clip['end_seconds'])
+        if key not in by_interval or by_interval[key]['score']<clip['score']:
+            by_interval[key]=clip
+    ranked=select([Candidate.model_validate(clip) for clip in by_interval.values()],bounded,duration,overlap_limit=.05)
+    candidates=[by_interval[c['start_seconds'],c['end_seconds']] for c in ranked]
     result['candidates'] = candidates
     result['selection_summary'] = (
         f'Planned {len(candidates)}/{request.count} independent highlights in the configured duration range. '

@@ -152,3 +152,8 @@ def test_variant_analytics_compares_equal_windows():
     two={**item,'video_id':'two','lineage':{'edit_configuration':{'experiment_parent':'job:0','experiment_variant':'extended'}}}
     assert len(experiment_comparisons([one,two]))==1
     assert not experiment_comparisons([one,{**two,'published_at':'2026-10-15T14:00:00Z'}])
+
+def test_visual_interval_stays_inside_sampled_scene():
+    from factory.event_ranking import visual_bounds
+    assert visual_bounds(42,[0,40,96,120],35,60)==(40,85)
+    assert visual_bounds(98,[0,40,96,120],35,60) is None
