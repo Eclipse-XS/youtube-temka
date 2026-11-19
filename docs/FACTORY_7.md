@@ -149,6 +149,24 @@ known RAM/VRAM/disk errors without exposing raw signed URLs or secrets.
 
 ## Repeating verification
 
+### Twitch VOD range downloads
+
+Twitch completed VODs can use fragmented MP4 HLS. Seeking directly across the
+full remote playlist can return an empty container even when FFmpeg exits zero.
+Twitch ingestion therefore builds a temporary VOD playlist containing only
+segments intersecting the requested interval and its initialization segment.
+FFmpeg trims the small boundary offset locally; it never falls back to fetching
+the whole VOD. Both audio chunks and selected video intervals use this path.
+Live, encrypted and unsupported byte-range playlists fail explicitly. Empty or
+undecodable media is rejected before Whisper, and an existing valid output is
+replaced only after successful validation.
+
+The regression suite serves real fragmented MP4 with timestamps around the
+third hour and asserts that unrelated segments are never requested. A real
+10-second audio interval at 03:00:00 from the reported Twitch VOD was verified
+as 10 seconds of PCM audio. This fixes ingestion; it is not a claim that every
+VOD or generated highlight has been editorially verified.
+
 - `python -m pytest factory_tests tests/test_file_locks.py -q` runs Factory checks.
 - `npm run build -- --config vite.factory.config.js` runs the production UI build
   from `dashboard`.

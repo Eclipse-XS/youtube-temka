@@ -28,11 +28,17 @@ def main():
         with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
             info=ydl.extract_info(source,download=False)
             ssrf_guard.assert_public_urls(info)
+            if info.get('extractor_key') == 'TwitchVod' and info.get('protocol') in ('m3u8', 'm3u8_native'):
+                from .hls_range import download
+                download(ydl, info, destination, float(start), float(end), binary)
+                return
             ydl.process_ie_result(info,download=True)
     finally:
         FFmpegPostProcessor._ffmpeg_location.reset(location)
     if not Path(destination).is_file():
         raise RuntimeError('Ranged downloader did not produce the expected artifact')
+    from .hls_range import validate_download
+    validate_download(destination, float(end)-float(start), audio=Path(destination).suffix.lower()=='.mka')
 
 
 if __name__=='__main__':
