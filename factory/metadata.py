@@ -137,7 +137,7 @@ def _description(body,ctx,hashtags):
 
 def contextual_draft(ctx):
     value = ContentBrief.model_validate(ctx['brief'])
-    subject = clean_text(value.confirmed_subject) or 'Gaming'
+    subject = ' '.join(clean_text(value.confirmed_subject).split()) or 'Gaming'
     observation = clean_text(value.operator_observation)
     lang = (ctx['metadata_language'] or 'en').split('-')[0]
     if lang == 'uk':
@@ -156,7 +156,9 @@ def contextual_draft(ctx):
                       (['Короткий фрагмент','Уривок','Момент із відео'] if lang=='uk' else
                        ['Video Excerpt','Selected Moment','Short Clip','Source Highlight','Video Segment'])))
         neutral = subject
-    tags = clean_tags([subject] + ([f'{subject} gameplay','gaming clips'] if is_gaming else []))
+    subject_terms=set(words(subject))
+    gameplay_tag=f'{subject} gameplay' if not subject_terms.intersection({'gaming','gameplay'}) else subject
+    tags = clean_tags([subject] + ([gameplay_tag,'gaming clips'] if is_gaming else []))
     hashtag = re.sub(r'[^\w]','',subject)[:60]
     hashtags = list(dict.fromkeys(([f'#{hashtag}'] if hashtag else []) +
                                (['#Gaming'] if is_gaming else ['#Video']) +

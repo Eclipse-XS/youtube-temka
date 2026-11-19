@@ -8,3 +8,4 @@
 - Benchmark command: py verification/evaluate_quality.py docs/quality-rebuild/synthetic-annotations.json docs/quality-rebuild/synthetic-results.json
 - Full Linux regression command: py verification/check_v7_linux.py
 - Frontend build command from dashboard: npx --no-install vite build --config vite.factory.config.js
+- Browser smoke used the production image with a disposable dataset. Create, filtered Jobs, Editor including metadata fields, Library, Publish and Settings opened successfully. No production credentials were entered into that browser test.

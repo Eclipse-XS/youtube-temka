@@ -36,6 +36,7 @@ def test_unverified_source_title_can_route_to_gaming_without_claiming_an_edition
                 [{'start_seconds':0,'end_seconds':45}],{'duration':45},request.source)
     data=Generator(None,None,None).create(ctx)
     assert data['category_id']=='20' and 'GTA' not in data['title']
+    assert data['tags']==['Gaming','gaming clips']
     assert 'game_identity_unconfirmed' in data['validation_issues']
 
 def test_shared_geometry_preserves_panel_order_and_safe_caption_margin():
