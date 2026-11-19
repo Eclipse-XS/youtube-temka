@@ -47,13 +47,19 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
     thread=threading.Thread(target=read,daemon=True)
     thread.start()
     started=time.monotonic()
+    next_check=started
     tail=deque(maxlen=12)
     try:
         while True:
-            preflight()
-            tick(None,duration)
-            if time.monotonic()-started > timeout:
+            now=time.monotonic()
+            if now-started > timeout:
                 raise TimeoutError('Media operation timed out; shorten the interval and retry')
+            # FFmpeg writes many lines per progress report. Scan the storage
+            # budget on a time cadence rather than once per buffered line.
+            if now>=next_check:
+                preflight()
+                tick(None,duration)
+                next_check=time.monotonic()+1
             try:
                 line=lines.get(timeout=.25)
             except queue.Empty:
@@ -80,6 +86,8 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
             elif process.returncode in (-9,137):reason='Process killed; inspect container OOM diagnostics and available RAM before retrying'
             else:reason='Check codec support, source accessibility and available disk space'
             raise RuntimeError(f'Media process failed (exit {process.returncode}). {reason}. Checkpoints preserved.')
+        preflight()
+        tick(None,duration)
     finally:
         stopped.set()
         if process.poll() is None:
