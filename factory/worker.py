@@ -17,6 +17,9 @@ def local_loop(stop):
             sweep()
             last_sweep=time.monotonic()
         store.heartbeat(worker,hardware())
+        from .resources import memory_ready
+        if not memory_ready():
+            stop.wait(5);continue
         if not HEAVY_LOCK.acquire(False):
             stop.wait(1);continue
         try:
@@ -26,8 +29,8 @@ def local_loop(stop):
                 except Exception:
                     try:store.update(claimed['job']['id'],claimed['lease'],state='FAILED',error='Unexpected worker failure; checkpoints preserved. Retry after checking configuration.')
                     except InterruptedError:pass
-            else:stop.wait(3)
         finally:HEAVY_LOCK.release()
+        if not claimed:stop.wait(3)
 
 
 class RemoteStore:
@@ -62,6 +65,10 @@ def main():
     with httpx.Client(base_url=url,headers={'Authorization':'Bearer '+TOKEN},timeout=30,trust_env=False) as client:
         pipeline.store=RemoteStore(client)
         while True:
+            from .heavy import HEAVY_LOCK
+            from .resources import memory_ready
+            if not memory_ready() or not HEAVY_LOCK.acquire(False):
+                time.sleep(3);continue
             try:
                 response=client.post('/api/workers/claim',json={'worker':worker,'resources':hardware()})
                 response.raise_for_status()
@@ -79,6 +86,7 @@ def main():
                     time.sleep(3)
             except (httpx.HTTPError,ValueError):
                 time.sleep(10)
+            finally:HEAVY_LOCK.release()
 
 
 if __name__=='__main__':

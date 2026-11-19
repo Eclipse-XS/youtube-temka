@@ -1,5 +1,8 @@
 # Звіт про завершення автоматизації — 18 листопада 2026
 
+Актуальний реліз: [Factory 7 — перевірка 19 листопада](FACTORY_7_RELEASE_2026-11-19.md).
+Нижче збережено історичні результати попереднього релізу.
+
 Поточна оцінка готовності: **85/100**. Це оцінка інженерної готовності за
 перевіреними функціями, а не гарантія якості кожного відео чи охоплення YouTube.
 Роботу продовжено від `4b169dabd7426673ff60e148c0e290288f4680ed` із збереженням
@@ -139,3 +142,20 @@ ASR/монтажні завдання могли використати пере
 [попередня 4 GB перевірка](RELEASE_2026-11-18.md).
 Сирі результати, OAuth та приватні відео/Drive ID залишаються локальними й не
 публікуються в Git. Публічні агрегати: [RESULTS_PUBLIC.json](RESULTS_PUBLIC.json).
+
+## One-command deployment — 2026-11-19
+
+The current deployment implementation and physical CPU/GPU acceptance are recorded
+in [ONE_COMMAND_DEPLOYMENT.md](ONE_COMMAND_DEPLOYMENT.md). The controller command is
+`./scripts/start-factory.ps1`. Final service readiness is READY: Drive, YouTube and
+Analytics were verified after operator consent. GPU/CPU video generation to Drive
+and controlled container recovery passed.
+Historical evidence above is retained and is not substituted for these new checks.
+
+## Final integration and maintenance pass — 2026-11-19
+
+See [FINAL_DEPLOYMENT_2026-11-19.md](FINAL_DEPLOYMENT_2026-11-19.md) for the latest
+execution and Windows compatibility results: 295 Linux tests passed; four genuine
+native defects fixed, seven POSIX-only native failures remain documented. Local
+services are READY. PR #2 merge was rejected by upstream permissions and is not
+claimed as completed.

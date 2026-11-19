@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import CompositionControls from './CompositionControls.jsx';
 
 const initial = {
   source: "",
@@ -8,7 +9,7 @@ const initial = {
   resolution: 720,
   start: 0,
   end: 1800,
-  count: 5,
+  count: 1,
   minimum: 20,
   maximum: 60,
   language: null,
@@ -160,7 +161,7 @@ export default function CreatePage({
                 return pair;
               })
           : [];
-        const request = { ...form, background, intervals: ranges };
+        const request = { ...form, background:form.background_mode==='none'?null:background, intervals: ranges };
         const {
           source,
           rights_confirmed,
@@ -207,6 +208,17 @@ export default function CreatePage({
             autoComplete="off"
           />
         </label>
+          <label>
+            Або додайте локальне відео
+            <input
+              type="file"
+              accept=".mp4,.mkv,.mov"
+              onChange={(e) =>
+                e.target.files[0] &&
+                act(() => upload(e.target.files[0], "source"))
+              }
+            />
+          </label>
         {probing && (
           <div role="status" className="source-skeleton">
             Перевіряю назву, тривалість і доступні формати…
@@ -253,19 +265,10 @@ export default function CreatePage({
               <option value="longs">Longs · 16:9</option>
             </select>
           </label>
-          <label>
-            Editing style
-            <select
-              value={form.preset}
-              onChange={(e) => set("preset", e.target.value)}
-            >
-              <option value="auto">Automatic</option>
-              <option value="gameplay">Gameplay Split</option>
-              <option value="smart">Smart Crop</option>
-              <option value="blur">Blurred Background</option>
-            </select>
-          </label>
+
         </div>
+        <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
+        <div className="grid"><label>Кількість кліпів<input type="number" min="1" max="20" value={form.count} onChange={e=>set('count',+e.target.value)}/></label>{form.mode==='longs'&&<label>Цільова тривалість, сек<input type="number" min="10" max="3600" value={form.target_duration||''} onChange={e=>set('target_duration',e.target.value?+e.target.value:null)}/></label>}</div>
         <label className="check">
           <input
             type="checkbox"
@@ -316,7 +319,7 @@ export default function CreatePage({
               <option value="">Власні налаштування</option>
               <option value="podcast">Podcast Shorts</option>
               <option value="stream">Stream Highlights</option>
-              <option value="gameplay">Gameplay Split</option>
+              <option value="gameplay">Split Screen</option>
               <option value="silent">Silent Satisfying Clips</option>
               <option value="longs">Long-Form Highlights</option>
               <option value="narrated">Optional Narrated Video</option>
@@ -384,16 +387,7 @@ export default function CreatePage({
             >
               Аналізувати увесь VOD
             </button>
-            <label>
-              Кількість кліпів
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={form.count}
-                onChange={(e) => set("count", +e.target.value)}
-              />
-            </label>
+
             <label>
               Мінімальна тривалість
               <input
@@ -508,23 +502,7 @@ export default function CreatePage({
               </label>
             </>
           )}
-          <label>
-            Фон
-            <select
-              value={background || ""}
-              onChange={(e) => set("background", e.target.value || null)}
-            >
-              <option value="">Automatic approved asset</option>
-              {[
-                ...new Set([
-                  ...backgrounds,
-                  ...(form.background ? [form.background] : []),
-                ]),
-              ].map((v) => (
-                <option key={v}>{v}</option>
-              ))}
-            </select>
-          </label>
+
           <label>
             Додати MP4-фон
             <input
@@ -536,17 +514,7 @@ export default function CreatePage({
               }
             />
           </label>
-          <label>
-            Або локальне джерело
-            <input
-              type="file"
-              accept=".mp4,.mkv,.mov"
-              onChange={(e) =>
-                e.target.files[0] &&
-                act(() => upload(e.target.files[0], "source"))
-              }
-            />
-          </label>
+
           <div className="grid">
             <label>
               Стиль субтитрів
@@ -591,14 +559,7 @@ export default function CreatePage({
               </select>
             </label>
           </div>
-          <label>
-            Opening hook
-            <input
-              maxLength="120"
-              value={form.hook || ""}
-              onChange={(e) => set("hook", e.target.value)}
-            />
-          </label>
+
           <label>
             Авторство / ліцензія
             <input
@@ -608,7 +569,6 @@ export default function CreatePage({
             />
           </label>
           {[
-            ["captions", "Субтитри для мовлення"],
             ["preserve_fps", "Зберегти FPS"],
             ["silence_removal", "Видаляти довгі паузи"],
             ["save_drive", "Зберігати в Google Drive"],
@@ -622,25 +582,7 @@ export default function CreatePage({
               {label}
             </label>
           ))}
-          <label>
-            Канал
-            <select
-              value={form.publish_channel || ""}
-              onChange={(e) => {
-                set("publish_channel", e.target.value || null);
-                set("publish_automatic", false);
-              }}
-            >
-              <option value="">Review first</option>
-              {settings?.channels
-                ?.filter((c) => c.automatic && c.public_allowed)
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-            </select>
-          </label>
+
           <label className="check">
             <input
               type="checkbox"

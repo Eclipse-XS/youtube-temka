@@ -9,6 +9,7 @@ import threading
 import time
 import signal
 import textwrap
+from collections import deque
 from urllib.parse import urlsplit
 from . import config
 from .resources import preflight
@@ -26,15 +27,27 @@ def ffmpeg():
 def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
     group={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {'start_new_session':True}
     process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',env=env,**group)
-    lines=queue.Queue()
+    # Backpressure bounds logs even if a child is noisy or progress persistence
+    # is slow. readline's size also bounds a child that never writes a newline.
+    lines=queue.Queue(maxsize=128)
+    stopped=threading.Event()
+    def enqueue(line):
+        while not stopped.is_set():
+            try:
+                lines.put(line,timeout=.1)
+                return True
+            except queue.Full:pass
+        return False
     def read():
-        for line in process.stdout:
-            lines.put(line)
-        lines.put(None)
+        try:
+            while not stopped.is_set():
+                line=process.stdout.readline(4096)
+                if not line or not enqueue(line):break
+        finally:enqueue(None)
     thread=threading.Thread(target=read,daemon=True)
     thread.start()
     started=time.monotonic()
-    tail=[]
+    tail=deque(maxlen=12)
     try:
         while True:
             preflight()
@@ -47,7 +60,7 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
                 continue
             if line is None:
                 break
-            tail=(tail+[line])[-12:]
+            tail.append(line)
             if line.startswith('out_time_us='):
                 try:
                     tick(float(line.split('=')[1])/1e6,duration)
@@ -59,15 +72,28 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
                 if measured:tick(min(100,int(measured[1]))/100*duration,duration)
         if process.wait() != 0:
             # Do not return raw downloader logs: URLs may carry credentials.
-            raise RuntimeError('Media process failed. Check codec support, source accessibility and available disk space.')
+            diagnostic=' '.join(tail).casefold()
+            if any(value in diagnostic for value in ('cuda out of memory','cuda_error_out_of_memory')):reason='GPU memory exhausted; use a smaller model or wait for GPU memory to be released'
+            elif 'out of memory' in diagnostic or 'cannot allocate memory' in diagnostic:reason='System/container memory exhausted; shorten the chunk or choose a smaller model'
+            elif 'no space left on device' in diagnostic:reason='Disk space exhausted; free scratch storage and retry'
+            elif process.returncode in (-9,137):reason='Process killed; inspect container OOM diagnostics and available RAM before retrying'
+            else:reason='Check codec support, source accessibility and available disk space'
+            raise RuntimeError(f'Media process failed (exit {process.returncode}). {reason}. Checkpoints preserved.')
     finally:
+        stopped.set()
         if process.poll() is None:
             if os.name=='nt':
-                subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True)
+                try:
+                    subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,timeout=10)
+                except subprocess.TimeoutExpired:pass
+                # Restricted Windows sessions may reject taskkill. Still reap
+                # the direct child rather than waiting forever after cancellation.
+                if process.poll() is None:process.kill()
             else:
                 os.killpg(process.pid,signal.SIGKILL)
         process.wait()
         thread.join(timeout=2)
+        if not thread.is_alive():process.stdout.close()
 
 
 def local_source(source):
@@ -151,7 +177,7 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     preflight()
     local=local_source(source)
     if local:
-        args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-ss',str(start),'-i',str(local),'-t',str(end-start)]
+        args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-ss',str(start),'-i',str(local),'-t',str(end-start),'-threads','2','-filter_threads','1']
         if audio:
             args+=['-vn','-ac','1','-ar','16000','-c:a','pcm_s16le']
         else:
@@ -168,7 +194,13 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+    from .heavy import HEAVY_LOCK
+    with HEAVY_LOCK:
+        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path)
+
+
+def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
@@ -202,10 +234,18 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
             caption_start,caption_end=0,duration
     ass=output.with_suffix('.ass')
     srt=output.with_suffix('.srt')
+    if request.captions and request.subtitle_language and transcript.get('language')!=request.subtitle_language:
+        from .captions import translate
+        translated=output.with_suffix('.translated.json')
+        if translated.is_file():transcript=json.loads(translated.read_text(encoding='utf-8'))
+        else:
+            transcript=translate(transcript,request.subtitle_language,request.llm_model)
+            from jsonfile import write_json_atomic
+            write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
     generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
     # Source is already a precisely extracted selected interval.
-    args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-i',str(source)]
+    args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
     preset=request.preset
     framing={'strategy':preset}
@@ -224,7 +264,7 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     elif preset=='gameplay':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
-        args+=['-stream_loop','-1','-i',str(background)]
+        args+=['-stream_loop','-1','-threads','2','-i',str(background)]
         top=2*round(1920*request.split_ratio/2)
         bottom=1920-top
         graph=f'[0:v]scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
@@ -242,17 +282,37 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
         video='[v]'
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
-        hookfile.write_text('\n'.join(textwrap.wrap(request.hook,width=26)),encoding='utf-8')
+        fontsize=request.hook_font_size
+        while True:
+            hooklines=textwrap.wrap(request.hook,width=max(1,min(26,int(width*.84/(fontsize*1.1)))))
+            if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=18:break
+            fontsize-=2
+        hookfile.write_text('\n'.join(hooklines),encoding='utf-8')
         # Windows FFmpeg builds may have no fontconfig configuration. An explicit
         # installed font avoids drawtext terminating the entire render process.
-        font=''
+        font="font='"+{'sans':'Noto Sans','serif':'Noto Serif','mono':'DejaVu Sans Mono'}[request.hook_font]+"':"
         if os.name=='nt':
-            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
+            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/{'sans':'arial.ttf','serif':'times.ttf','mono':'consola.ttf'}[request.hook_font]
             if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
-        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor=white:fontsize=48:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y=h*0.12:enable='lt(t,3)'[hooked]"
+        hook_y={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
+        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='lt(t,{request.hook_duration})'[hooked]"
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
+    if request.logo_asset:
+        logo=logo_path or config.DATA/'logos'/request.logo_asset
+        if not logo.is_file():raise ValueError('Selected logo is unavailable')
+        args+=['-threads','1','-i',str(logo)]
+        graph+=f';[{next_input}:v]scale={max(32,width//8)}:{max(32,height//8)}:force_original_aspect_ratio=decrease[logo];{video}[logo]overlay=W-w-32:32[branded]'
+        video='[branded]';next_input+=1
+    if request.cta_text:
+        ctafile=output.with_suffix('.cta.txt');ctafile.write_text('\n'.join(textwrap.wrap(request.cta_text,width=max(1,int(width*.84/(32*1.1))))),encoding='utf-8')
+        ctafont=''
+        if os.name=='nt':
+            ctafontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
+            if ctafontpath.is_file():ctafont=f"fontfile='{escape_filter_value(str(ctafontpath.resolve()))}':"
+        graph+=f";{video}drawtext={ctafont}textfile='{escape_filter_value(str(ctafile.resolve()))}':expansion=none:fontcolor=white:fontsize=32:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-tw)/2:y=h*0.8-th:enable='gte(t,{max(0,duration-4)})'[cta]"
+        video='[cta]'
     music=music_path or (config.DATA/'music'/request.music_asset if request.music_asset else None)
     if request.audio_mode=='music' and music and not music.is_file():raise ValueError('Selected music asset is missing; choose an available authorized asset')
     if request.audio_mode=='voiceover':
@@ -273,11 +333,15 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
     args+=[*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
     if not request.preserve_fps:
         args+=['-r','30']
-    args+=['-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(output)]
+    temporary=output.with_suffix('.rendering.mp4')
+    args+=['-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(temporary)]
     if stage:stage('rendering')
-    run(args,tick,duration)
-    if stage:stage('validation')
-    report=validate_output(output,duration,request=request,expected_audio=audio_map is not None)
+    try:
+        run(args,tick,duration)
+        if stage:stage('validation')
+        report=validate_output(temporary,duration,request=request,expected_audio=audio_map is not None)
+        temporary.replace(output)
+    finally:temporary.unlink(missing_ok=True)
     output.with_suffix('.validation.json').write_text(json.dumps({**report,'framing':framing}),encoding='utf-8')
     return output
 
@@ -288,14 +352,16 @@ def validate_output(path,duration,request=None,expected_audio=None):
         if not container.streams.video or not container.duration or abs(container.duration/av.time_base-duration)>1:
             raise RuntimeError('Rendered video validation failed (stream/duration)')
         stream=container.streams.video[0]
+        stream.thread_count=2
         if request:
             expected=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
             if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')
         if expected_audio is not None and bool(container.streams.audio)!=expected_audio:
             raise RuntimeError('Rendered audio track does not match the selected audio mode')
-        frames=0;black_samples=0;sampled_frames=0
+        frames=0;black_samples=0;sampled_frames=0;video_end=None
         try:
             for frame in container.decode(video=0):
+                if frame.pts is not None:video_end=float(frame.pts*frame.time_base)+1/float(stream.average_rate or 30)
                 if frames % max(1,round(float(stream.average_rate or 30)))==0:
                     pixels=frame.reformat(width=64,height=64,format='gray').to_ndarray()
                     sampled_frames+=1;black_samples+=int((pixels<16).mean()>.95)
@@ -304,13 +370,14 @@ def validate_output(path,duration,request=None,expected_audio=None):
             raise RuntimeError('Rendered container has a corrupted video packet') from None
         if not frames:
             raise RuntimeError('Rendered video has no decodable frame')
-        report={'duration':container.duration/av.time_base,'width':stream.width,'height':stream.height,'frames_decoded':frames,'audio':bool(container.streams.audio),'validated':True,'black_frame_fraction':black_samples/sampled_frames,'black_frames_sampled':sampled_frames}
+        report={'duration':container.duration/av.time_base,'width':stream.width,'height':stream.height,'frames_decoded':frames,'audio':bool(container.streams.audio),'validated':True,'black_frame_fraction':black_samples/sampled_frames,'black_frames_sampled':sampled_frames,'video_end_seconds':video_end}
     if report['audio']:
         import numpy as np
-        peak=0.;samples=clipped=silent=0
+        peak=0.;samples=clipped=silent=0;audio_end=None
         with av.open(str(path)) as container:
             try:
                 for frame in container.decode(audio=0):
+                    if frame.pts is not None:audio_end=float(frame.pts*frame.time_base)+frame.samples/frame.sample_rate
                     values=frame.to_ndarray()
                     scale=max(abs(np.iinfo(values.dtype).min),np.iinfo(values.dtype).max) if np.issubdtype(values.dtype,np.integer) else 1
                     values=values.astype(np.float32)/scale
@@ -321,6 +388,9 @@ def validate_output(path,duration,request=None,expected_audio=None):
                 raise RuntimeError('Rendered container has a corrupted audio packet') from None
         if not samples:raise RuntimeError('Rendered audio has no decodable samples')
         report.update(audio_peak=peak,audio_clipped_fraction=clipped/samples,audio_silence_fraction=silent/samples,audio_samples_decoded=samples,audio_silence_threshold_db=-60)
+        if video_end is not None and audio_end is not None:
+            delta=abs(video_end-audio_end);report['audio_video_end_delta_seconds']=delta
+            if delta>.25:raise RuntimeError('Rendered audio/video duration differs by more than 250 ms; inspect synchronization')
     return report
 
 

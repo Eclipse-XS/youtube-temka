@@ -2,10 +2,8 @@
 import os
 import subprocess
 import httpx
-import threading
 from contextlib import contextmanager
-
-HEAVY_LOCK=threading.RLock()
+from .heavy import HEAVY_LOCK
 
 
 def gpu_layers(model=None):
@@ -24,12 +22,13 @@ def gpu_layers(model=None):
 @contextmanager
 def model_session(client,url,model):
     """Reuse one bounded model through ranking; unload before the next stage."""
-    state={'layers':gpu_layers(model),'used':False}
-    try:yield state
-    finally:
-        if state['used']:
-            try:client.post(url,json={'model':model,'keep_alive':0},timeout=10)
-            except httpx.HTTPError:pass  # A 60-second TTL also bounds crash retention.
+    with HEAVY_LOCK:
+        state={'layers':gpu_layers(model),'used':False}
+        try:yield state
+        finally:
+            if state['used']:
+                try:client.post(url,json={'model':model,'keep_alive':0},timeout=10)
+                except httpx.HTTPError:pass  # A 60-second TTL also bounds crash retention.
 
 
 def generate(client,url,payload,session=None):

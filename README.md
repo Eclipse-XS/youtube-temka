@@ -1,5 +1,11 @@
 # AI Content Factory
 
+Version 7 operation, memory limits and precise feature boundaries:
+[Factory 7 guide](docs/FACTORY_7.md).
+
+Latest measured release results and limitations:
+[Factory 7 release verification](verification/FACTORY_7_RELEASE_2026-11-19.md).
+
 Self-hosted clipping and editing on the MIT OpenShorts core. Paste a completed
 YouTube/Twitch VOD, choose Shorts or Longs and a style, then Generate. The app
 probes the source, analyzes speech in bounded chunks, ranks highlights, renders,
@@ -30,7 +36,7 @@ A working legacy split Drive client/token integration has been reused and verifi
 - FastAPI + React, persistent SQLite queue, fenced local/remote workers.
 - Authenticated, checksummed background/music synchronization with a bounded worker cache.
 - Automatic source probing, collapsible advanced controls, reusable preferences.
-- Multi-hour audio-first analysis in 15-minute checkpointed chunks; selected video
+- Multi-hour audio-first analysis in 5-minute checkpointed chunks; selected video
   retrieval only. No full-VOD download fallback.
 - Ollama structured ranking, explained unsuitable/visual decisions, visible
   heuristic fallback on malformed/empty responses or technical failures.
@@ -76,3 +82,26 @@ venv. Run `python -m pytest factory_tests -q`. Build the actual UI with
 CI also exercises retained MIT modules on Linux, validates Compose and scans for
 credential patterns. HTTP protocol fixtures are never described as real Google
 acceptance tests. No public uploads occur without explicit channel authorization.
+
+## One-command Windows deployment
+
+From this checkout, run:
+
+```powershell
+.\scripts\start-factory.ps1
+```
+
+The default controller starts Ollama, FastAPI with its supervised local worker,
+publisher and analytics loops, and the production web UI at
+http://localhost:5175/factory.html. Missing local authentication is generated only
+when `.env` is absent. Existing configuration and OAuth files are preserved.
+A short Whisper inference initializes the persistent cache and verifies the selected
+runtime. NVIDIA container access is probed before selecting the GPU overlay;
+failed CUDA inference receives an explicitly reported CPU fallback.
+
+Options: `-Role Worker`, `-CpuOnly`, `-Rebuild`, `-Status`, `-WithTTS`,
+`-TestInference`. Worker mode requires initial private controller configuration.
+Use `scripts/stop-factory.ps1`, `restart-factory.ps1`, `logs-factory.ps1`, and
+`update-factory.ps1` for maintenance. Updates require a clean fast-forwardable
+checkout and a successful SQLite online backup before pulling changes.
+See [deployment details](docs/FACTORY_DEPLOYMENT.md).

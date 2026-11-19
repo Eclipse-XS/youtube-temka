@@ -93,3 +93,20 @@ effects. After inspection, Retry preserves the controller's selected intervals
 even when a different worker lacks the previous scratch directory. Verified Drive
 files are never overwritten with mismatched content. A checksum or uncertain
 external outcome requires review; it is not silently declared successful.
+
+## Worker launcher
+
+After configuring `.env` with PC A's private `CONTROLLER_URL`, its existing
+`FACTORY_TOKEN`, and a unique `WORKER_ID`, run:
+
+```powershell
+.\scripts\start-factory.ps1 -Role Worker
+```
+
+This starts only local Ollama and the remote worker. The worker keeps its own
+`worker_data` / `worker_models` volumes and authenticates to PC A. No credentials
+are copied from PC A. Configure authorized Drive files under the read-only secrets
+mount. The launcher verifies registration using PC A's reported heartbeat.
+Use `-CpuOnly` to force CPU processing. The worker role starts no controller,
+web UI, publisher or independent controller queue consumer.
+Physical two-machine acceptance remains UNVERIFIED without access to PC B.

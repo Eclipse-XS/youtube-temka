@@ -109,7 +109,7 @@ export default function MetadataEditor({
         Варіанти назви
         <select value="" onChange={(e) => setTitle(e.target.value)}>
           <option value="">Обрати варіант</option>
-          {[metadata.title, ...metadata.alternative_titles].map((v, i) => (
+          {[...new Set([metadata.title, ...metadata.alternative_titles,...(metadata.title_candidates||[])])].map((v, i) => (
             <option key={i} value={v}>
               {v}
             </option>

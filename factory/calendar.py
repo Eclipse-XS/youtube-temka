@@ -4,6 +4,18 @@ from zoneinfo import ZoneInfo
 import json
 
 
+def local_time(value,timezone_name='Europe/Kyiv'):
+    """Reject nonexistent/ambiguous wall times rather than silently picking DST."""
+    wall=datetime.fromisoformat(value)
+    if wall.tzinfo is not None:return wall.astimezone(timezone.utc).isoformat()
+    zone=ZoneInfo(timezone_name);matches=set()
+    for fold in (0,1):
+        candidate=wall.replace(tzinfo=zone,fold=fold).astimezone(timezone.utc)
+        if candidate.astimezone(zone).replace(tzinfo=None)==wall:matches.add(candidate)
+    if len(matches)!=1:raise ValueError('This local time is ambiguous or nonexistent due to daylight saving. Select another time or provide an explicit UTC offset')
+    return matches.pop().isoformat()
+
+
 def planned_times(db,channel,exclude=None):
     result=[]
     for row in db.execute("SELECT id,metadata,seen,state FROM publications WHERE channel=? AND state NOT IN ('DRAFT','CANCELLED')",(channel,)):

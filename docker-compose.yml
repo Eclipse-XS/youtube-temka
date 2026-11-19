@@ -8,6 +8,12 @@ x-worker-environment: &worker-environment
   WHISPER_MODEL: ${WHISPER_MODEL:-small}
   WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
   WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
+  ASR_CHUNK_SECONDS: ${ASR_CHUNK_SECONDS:-300}
+  OMP_NUM_THREADS: '2'
+  OPENBLAS_NUM_THREADS: '2'
+  MKL_NUM_THREADS: '2'
+  MALLOC_ARENA_MAX: '2'
+  FACTORY_HOST_LOCK_DIR: /host-locks
   ASR_HOST_SLOTS: '1'
   OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
   OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
@@ -31,6 +37,7 @@ services:
       - ollama_models:/root/.ollama
     restart: unless-stopped
     mem_limit: 4g
+    memswap_limit: 4g
     cpus: 4
     healthcheck:
       test: [CMD, ollama, list]
@@ -54,9 +61,11 @@ services:
       - ${SECRETS_DIR:-./secrets}:/run/secrets:ro
       - ${LEGACY_DRIVE_SECRETS_DIR:-./secrets/legacy-drive}:/run/legacy-drive:ro
       - controller_models:/home/factory/.cache
+      - host_locks:/host-locks
     restart: unless-stopped
     stop_grace_period: 30s
-    mem_limit: 6g
+    mem_limit: ${FACTORY_MEMORY_LIMIT:-4g}
+    memswap_limit: ${FACTORY_MEMORY_LIMIT:-4g}
     cpus: 4
   web:
     profiles: [controller]
@@ -89,10 +98,12 @@ services:
       - worker_data:/data
       - ${WORKER_SCRATCH_DIR:-./scratch/worker}:/scratch
       - worker_models:/home/factory/.cache
+      - host_locks:/host-locks
       - ${SECRETS_DIR:-./secrets}:/run/secrets:ro
       - ${LEGACY_DRIVE_SECRETS_DIR:-./secrets/legacy-drive}:/run/legacy-drive:ro
     restart: unless-stopped
-    mem_limit: 6g
+    mem_limit: ${FACTORY_MEMORY_LIMIT:-4g}
+    memswap_limit: ${FACTORY_MEMORY_LIMIT:-4g}
     cpus: 4
     healthcheck:
       disable: true
@@ -102,3 +113,5 @@ volumes:
   worker_data:
   worker_models:
   ollama_models:
+  host_locks:
+    name: ai-content-factory-host-locks

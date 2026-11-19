@@ -37,3 +37,5 @@ def sweep(now=None):
         for path in (config.SCRATCH/'uploads').glob('*'):
             if path.is_file() and not path.is_symlink() and 'upload:'+path.name not in referenced and path.stat().st_mtime<now-retention:
                 path.unlink()
+    from .retention import settings,cleanup
+    if settings()['enabled']:cleanup(dry_run=False)
