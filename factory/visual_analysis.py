@@ -110,3 +110,69 @@ def sample(source, start, end, root, tick):
     if samples:
         write_json_atomic(path, {'start': start, 'end': end, 'samples': samples})
     return samples
+
+
+def inspect_local_interval(path, start, end):
+    """Bounded follow-up seeks; histogram change is not semantic evidence."""
+    import av
+    import numpy as np
+
+    probes = min(32,max(3,math.ceil((end-start)/1.5)))
+    boundaries = []
+    previous = None
+    count = 0
+    with av.open(str(path)) as container:
+        stream=container.streams.video[0]
+        stream.thread_count=2
+        origin=float((stream.start_time or 0)*stream.time_base)
+        for index in range(probes):
+            target=start+index*(end-start)/probes
+            timestamp=origin+target
+            container.seek(int(timestamp/stream.time_base),stream=stream)
+            frame=next((item for item in container.decode(stream)
+                        if item.time is not None and item.time>=timestamp-.08),None)
+            if frame is None:continue
+            pixels=frame.reformat(48,28,format='rgb24').to_ndarray()
+            histogram=np.concatenate([np.bincount(ch.reshape(-1)//16,minlength=16)
+                                      for ch in pixels.transpose((2,0,1))])/pixels.size
+            if previous is not None and float(np.abs(histogram-previous).sum())>.8:
+                boundaries.append(round(target,3))
+            previous=histogram
+            count+=1
+    return {'schema_version':1,'frames':count,'possible_cuts':boundaries,'semantic_verification':'unverified'}
+
+
+def refine_local_plan(path, start, request, result):
+    """Reject visual candidates that cannot fit within an observed shot region."""
+    candidates=[]
+    alternatives=[]
+    attempts=0
+    for clip in result['candidates']:
+        if clip.get('content_type')!='visual_activity':
+            candidates.append(clip)
+            continue
+        if attempts>=6:
+            candidates.append(clip|{'fine_review':'budget_exhausted'})
+            continue
+        attempts+=1
+        a,b=clip['start_seconds'],clip['end_seconds']
+        try:
+            inspected=inspect_local_interval(path,start+a,start+b)
+        except (OSError,ValueError,RuntimeError):
+            candidates.append(clip|{'fine_review':'unavailable'})
+            continue
+        cuts=[a]+[cut-start for cut in inspected['possible_cuts'] if a<cut-start<b]+[b]
+        valid=[(left,right) for left,right in zip(cuts,cuts[1:]) if right-left>=request.minimum]
+        if not valid:
+            alternatives.append(clip|{'fine_review':inspected,
+                                      'reason':'Possible shot changes leave no region that meets the requested minimum. Review and trim manually.'})
+            continue
+        left,right=max(valid,key=lambda pair:pair[1]-pair[0])
+        candidates.append(clip|{'start_seconds':left,'end_seconds':right,'hook_start_seconds':left,
+                                'fine_review':inspected,
+                                'reason':'Bounded frame inspection identified a possible shot region; verify its event and payoff.'})
+    rejected=len(result['candidates'])-len(candidates)
+    summary=result['selection_summary']
+    if rejected:
+        summary=f'Planned {len(candidates)}/{request.count} after frame inspection; {rejected} visual windows did not fit the duration inside a sampled shot region.'
+    return result|{'candidates':candidates,'review_alternatives':alternatives,'selection_summary':summary}

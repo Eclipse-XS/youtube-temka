@@ -38,6 +38,16 @@ export default function SelectionReview({job,post,act,onCreated}) {
       <button type="button" onClick={()=>setEdited(parts.filter((_,i)=>i!==index))}>Відхилити</button>
       {job.result.planning_only&&!part.context_required&&part.payoff&&<button type="button" onClick={()=>submit({experiment:part.id})}>Рендерувати варіанти монтажу</button>}
     </article>)}
+    {available&&job.result.review_alternatives?.map((item,index)=>{
+      const id=`alternative-${index}`;
+      return <article key={id}>
+        <b>{item.title} · на перевірку</b><p>{item.reason}</p>
+        <p>{(sourceStart+item.start_seconds).toFixed(2)}–{(sourceStart+item.end_seconds).toFixed(2)} с</p>
+        <button type="button" disabled={parts.length>=20||parts.some(part=>part.id===id)} onClick={()=>setEdited([...parts,{
+          ...item,id,start:sourceStart+item.start_seconds,end:sourceStart+item.end_seconds
+        }])}>Додати для ручного монтажу</button>
+      </article>;
+    })}
     {available&&<>
       <button type="button" onClick={()=>setEdited(null)}>Відновити план</button>
       <button type="button" disabled={parts.length>=20||(job.result.processing_end??sourceStart)<=sourceStart} onClick={()=>setEdited([...parts,{

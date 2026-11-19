@@ -157,3 +157,15 @@ def test_visual_interval_stays_inside_sampled_scene():
     from factory.event_ranking import visual_bounds
     assert visual_bounds(42,[0,40,96,120],35,60)==(40,85)
     assert visual_bounds(98,[0,40,96,120],35,60) is None
+
+
+def test_fine_visual_pass_rejects_short_observed_regions(monkeypatch):
+    from factory import visual_analysis
+    monkeypatch.setattr(visual_analysis,'inspect_local_interval',
+                        lambda *args:{'frames':30,'possible_cuts':[120,130]})
+    data={'candidates':[{'start_seconds':0,'end_seconds':50,'content_type':'visual_activity'}],
+          'selection_summary':'coarse'}
+    result=visual_analysis.refine_local_plan('fixture.mp4',100,request(),data)
+    assert result['candidates']==[]
+    assert '0/3 after frame inspection' in result['selection_summary']
+    assert len(result['review_alternatives'])==1

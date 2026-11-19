@@ -158,7 +158,12 @@ def process(claim,assets=None):
             if use_visual:
                 from .visual_analysis import sample
                 features = sample(source,request.start,end,root,progress.tick)
-            result=plan(transcript,request,duration,features,progress.tick);candidates=result['candidates']
+            result=plan(transcript,request,duration,features,progress.tick)
+            local_path=media.local_source(source) if request.series_mode=='independent' and use_visual else None
+            if local_path:
+                from .visual_analysis import refine_local_plan
+                result=refine_local_plan(local_path,request.start,request,result)
+            candidates=result['candidates']
         elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
             candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
             result={'candidates':candidates,'analysis':'whole short visual source; no AI claim'}

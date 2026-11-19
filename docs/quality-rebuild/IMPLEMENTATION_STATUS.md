@@ -1,10 +1,8 @@
 # Implementation status
-- Phase 0 TESTED. Architecture and baseline recorded. Offline temporal harness has synthetic annotations.
-- Phase 1 IN_PROGRESS. Replace speech/visual score imbalance and reject known cut crossings before adding optional semantics.
-- Phases 2–4 NOT_STARTED on this branch. Existing 7.2 portions remain deployed and serve as baseline.
-- Phases 5–6 NOT_STARTED.
-- Phase 1 TESTED. Shared score factors, 5% independent overlap limit and cut-bounded visual candidates. Real cached GTA replay produced review intervals in the pre-limit probe; they remain semantically unverified. Fine visual inspection and the full three-clip quality gate remain open.
-- Next: carry source title hints safely through contextual publishing, then unify geometry and validate actual media on the final master branch.
-- Phase 2 TESTED. Auto category uses provisional gaming topic hints from provenance. An unconfirmed source-title claim routes to a Gaming review draft without repeating the game or edition as fact. Operator-confirmed subjects remain explicit; prior 7.2 actual GTA export is the benchmark.
-- Phase 3 TESTED. Shared versioned geometry resolves primary/secondary pixel heights, hook anchor and caption margin for FFmpeg and React. Existing 7.2 persistent-hook 45 s GTA evidence applies to the same geometry. Final master-branch frame verification is pending.
-- Phase 4 TESTED. Jobs use server-side search, filter, order and pagination. Empty asset categories disclose lack of footage. The 7.2 archive/trash and dependency-safe record-only deletion tests carry forward. Physical library deletion, source tab and editor persistence remain open.
+- Phase 0 TESTED. Architecture, prior 7.2 quality baseline and synthetic temporal benchmark committed.
+- Phase 1 TESTED with real-media diagnostic. Unified evidence ranking, stricter overlap and bounded local fine pass reject visual windows that cross sampled cuts. Rejected windows are visible for manual trim. On the available 45-second GTA excerpt, 23 coarse samples and the fine pass yielded 0/3 under the requested 35-second minimum. This is not a full-source editorial benchmark. Semantic providers and dense remote fine analysis remain open.
+- Phase 2 TESTED. Source-title topic hints yield provisional review drafts, without asserting unconfirmed game identity. Confirmed GTA contextual draft has a 7.2 real artifact.
+- Phase 3 VERIFIED for one manual GTA render. Shared server geometry and renderer use the same panel and text anchors. CSS preview still approximates filtering, and the full edit manifest is not implemented.
+- Phase 4 TESTED. Server-side job pagination and filters, reference-safe job record deletion, empty category notices. Physical asset deletion, dedicated source catalog, and persistent editor drafts remain open.
+- Phase 5 IN_PROGRESS. Automated suites and build can establish regression status. Human quality gate and full gaming workflow are open.
+- Phase 6 IN_PROGRESS. Compose release candidate disables automatic publishing while preserving channel preferences. Shipping a technical candidate does not pass editorial gates.

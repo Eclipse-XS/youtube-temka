@@ -1,6 +1,11 @@
 # Acceptance matrix
-- Temporal validity, recall, IoU, duplicate rate: synthetic harness TESTED. Real editorial benchmark BLOCKED by missing human labels.
-- Scene-aware visual selection, rescoring, mode retention: IN_PROGRESS.
-- Contextual metadata, composition, hook persistence: prior 7.2 real fixture evidence. Master branch integration NOT_STARTED.
-- Library reference tracking, job archival, protected deletion: baseline 7.2 targeted checks. Expanded asset deletion NOT_STARTED.
-- Real gaming three-clip gate, resource peaks, final CI/PR/deployment: NOT_STARTED.
+| Scope | Status | Evidence or blocker |
+| --- | --- | --- |
+| Baseline and temporal harness | TESTED | Synthetic schema 1, IoU/recall/duplicates/invalid intervals. Real editorial annotations unavailable. |
+| Highlight ranking | TESTED | Shared evidence factors, fewer overlapping clips, shot-bounded visual candidates and bounded local inspection. No semantic verification. |
+| Real gaming automatic selection | BLOCKED | Available local excerpt produced 0/3, because qualifying shot regions were shorter than 35 s. Human-labeled full-source comparison is unavailable. |
+| Grounded metadata | TESTED | Confirmed GTA and unconfirmed edition tests. Contextual draft is always marked for review. |
+| Shared geometry and persistent hooks | VERIFIED | 45-second authorized GTA manual rerender. 1248/672 px. Four representative frames inspected, no opaque gaps, visible hook. |
+| Library and job safety | TESTED | Empty category disclosure, safe job filters/archive/delete tests. Physical asset deletion remains incomplete. |
+| Public publication | TESTED | Compose disables automatic mode. Existing exact-output human approval guards remain. |
+| Editorial quality | BLOCKED | Human editorial review and annotated event corpus needed. |

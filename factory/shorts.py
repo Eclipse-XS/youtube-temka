@@ -12,7 +12,7 @@ from . import config
 from .highlights import analyze, select
 from .models import Candidate
 
-VERSION = 5
+VERSION = 6
 SCHEMA_VERSION = 2
 PLATFORM_MAXIMUM = 180
 
