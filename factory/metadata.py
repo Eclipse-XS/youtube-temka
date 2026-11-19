@@ -86,15 +86,18 @@ class ContentBrief(BaseModel):
     confirmed_subject: str = Field(default='',max_length=100)
     operator_observation: str = Field(default='',max_length=500)
     category: str
+    gaming_hint: bool = False
     include_source_link: bool
     attribution_required: bool
 
 
 def brief(request, source_title):
-    return ContentBrief(source_title_claim=source_title[:500],
+    gaming_hint=(request.source_category=='gameplay' or
+                 (request.source_category=='auto' and bool(re.search(r'\b(gta|grand theft auto|gameplay|minecraft)\b',source_title,re.I))))
+    return ContentBrief(gaming_hint=gaming_hint, source_title_claim=source_title[:500],
                         confirmed_subject=request.confirmed_subject.strip(),
                         operator_observation=request.clip_observation.strip(),
-                        category=request.category_override or ('20' if request.source_category=='gameplay' else ''),
+                        category=request.category_override or ('20' if gaming_hint else ''),
                         include_source_link=request.include_source_link,
                         attribution_required=request.attribution_required).model_dump()
 
@@ -146,7 +149,7 @@ def contextual_draft(ctx):
     if observation:
         labels.insert(0, observation.splitlines()[0])
     titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in labels))
-    is_gaming = ctx['content_category']=='gameplay'
+    is_gaming = value.gaming_hint or ctx['content_category']=='gameplay'
     if not is_gaming:
         titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in
                       ([observation.splitlines()[0]] if observation else []) +
@@ -271,7 +274,7 @@ class Generator:
         digest=fingerprint(ctx)
         if previous and previous.get('provenance',{}).get('input_sha256')==digest:return previous
         brief_data=ctx.get('brief',{})
-        if brief_data.get('confirmed_subject') or ctx['content_category']=='gameplay':
+        if brief_data.get('confirmed_subject') or brief_data.get('gaming_hint') or ctx['content_category']=='gameplay':
             draft=contextual_draft(ctx)
             result=draft.model_dump()
             result.update(version=uuid.uuid4().hex,generated_at=datetime.now(timezone.utc).isoformat(),

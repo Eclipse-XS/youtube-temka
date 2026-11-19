@@ -29,3 +29,11 @@ def test_gameplay_override_and_attribution_are_respected():
     assert 'category_override_conflicts_with_gameplay' in draft['validation_issues']
     assert draft['category_id']=='26' and 'Credit: Example' in draft['description']
     assert request.source in draft['description']
+
+def test_unverified_source_title_can_route_to_gaming_without_claiming_an_edition():
+    request=JobRequest(source='https://www.youtube.com/watch?v=fixture',rights_confirmed=True)
+    ctx=context({'language':'en','segments':[]},request,{'title':'GTA 6 alleged gameplay'},
+                [{'start_seconds':0,'end_seconds':45}],{'duration':45},request.source)
+    data=Generator(None,None,None).create(ctx)
+    assert data['category_id']=='20' and 'GTA' not in data['title']
+    assert 'game_identity_unconfirmed' in data['validation_issues']
