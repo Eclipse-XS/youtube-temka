@@ -382,6 +382,7 @@ def create_job(body, seed=None, approved=None):
     if body.background and body.background_mode!='none' and body.background not in backgrounds():
         raise HTTPException(409,'Selected secondary asset is unavailable')
     if body.publish_automatic:
+        if not config.AUTOMATIC_PUBLISHING:raise HTTPException(422,'Automatic publishing is disabled')
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
         if not policy or not policy['public_allowed'] or not policy['automatic']:

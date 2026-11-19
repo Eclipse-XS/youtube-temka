@@ -19,6 +19,7 @@ GIB = 1024 ** 3
 SCRATCH_BYTES = int(float(os.environ.get('SCRATCH_GB', '8')) * GIB)
 RESERVE_BYTES = int(float(os.environ.get('FREE_RESERVE_GB', '4')) * GIB)
 TOKEN = os.environ.get('FACTORY_TOKEN', '')
+AUTOMATIC_PUBLISHING = os.environ.get('FACTORY_AUTOMATIC_PUBLISHING', '1') == '1'
 OLLAMA = os.environ.get('OLLAMA_URL', 'http://host.docker.internal:11434').rstrip('/')
 MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
 ASR_MODEL = os.environ.get('WHISPER_MODEL','small')
