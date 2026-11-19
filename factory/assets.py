@@ -8,8 +8,8 @@ from .resources import preflight
 
 
 def asset_path(kind, name):
-    suffixes={'backgrounds':('.mp4',), 'music':('.mp3','.wav','.mp4')}
-    if kind not in suffixes or not re.fullmatch(r'[A-Za-z0-9_-]+\.(mp3|wav|mp4)', name):
+    suffixes={'backgrounds':('.mp4',), 'music':('.mp3','.wav','.mp4'), 'logos':('.png',)}
+    if kind not in suffixes or not re.fullmatch(r'[A-Za-z0-9_-]+\.(mp3|wav|mp4|png)', name):
         raise ValueError('Invalid library asset')
     path=config.DATA/kind/name
     if path.suffix not in suffixes[kind] or path.is_symlink() or not path.is_file():
@@ -20,7 +20,8 @@ def asset_path(kind, name):
 def manifest(request):
     """Only assets needed by this job; automatic layout uses the controller library."""
     wanted=[]
-    if request.get('preset','auto') in ('auto','gameplay') or request.get('background'):
+    if request.get('logo_asset'):wanted.append(('logos',request['logo_asset']))
+    if request.get('background_mode')!='none' and (request.get('preset','auto') in ('auto','gameplay') or request.get('background')):
         name=request.get('background')
         if not name:
             name=next((p.name for p in sorted((config.DATA/'backgrounds').glob('*.mp4')) if not p.is_symlink()),None)
@@ -43,11 +44,12 @@ def sync(client, items, tick=lambda:None):
     expected={}
     for item in items:
         kind,name,digest=item['kind'],item['name'],item['sha256']
-        if kind not in ('backgrounds','music') or not re.fullmatch(r'[A-Za-z0-9_-]+\.(mp3|wav|mp4)',name) or not re.fullmatch('[a-f0-9]{64}',digest):
+        if kind not in ('backgrounds','music','logos') or not re.fullmatch(r'[A-Za-z0-9_-]+\.(mp3|wav|mp4|png)',name) or not re.fullmatch('[a-f0-9]{64}',digest):
             raise ValueError('Invalid asset manifest')
         size=int(item['size'])
         if size<=0 or size>limit:raise ValueError('Required asset exceeds worker cache budget')
         if kind=='backgrounds' and Path(name).suffix!='.mp4':raise ValueError('Invalid background manifest')
+        if kind=='logos' and Path(name).suffix!='.png':raise ValueError('Invalid logo manifest')
         expected[kind+'-'+digest+Path(name).suffix]=(item,size)
     if sum(size for _,size in expected.values())>limit:raise ValueError('Required assets exceed worker cache budget')
     for path in root.iterdir():

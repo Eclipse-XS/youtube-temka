@@ -161,7 +161,12 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     """
     flat_words = []
     for segment in transcript.get('segments', []):
-        flat_words.extend(segment.get('words', []))
+        timed=segment.get('words', [])
+        if timed:flat_words.extend(timed)
+        elif segment.get('text','').strip():
+            # Translated captions retain phrase boundaries, not fabricated
+            # per-word synchronization. Render the complete phrase as one event.
+            flat_words.append({'word':' '+segment['text'].strip(),'start':segment['start'],'end':segment['end']})
     flat_words = merge_continuation_words(flat_words)
 
     words = []
@@ -173,7 +178,7 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
             words.append({
                 'word': cleaned_word,
                 'start': max(0, word_info['start'] - clip_start),
-                'end': max(0, word_info['end'] - clip_start),
+                'end': max(0, min(clip_end,word_info['end']) - clip_start),
             })
 
     blocks = []

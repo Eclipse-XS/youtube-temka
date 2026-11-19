@@ -14,10 +14,16 @@ def backup():
         folder.mkdir(exist_ok=True)
         with sqlite3.connect(config.DB) as source, sqlite3.connect(folder/('jobs-'+time.strftime('%Y%m%d-%H%M%S')+'.sqlite3')) as target:
             source.backup(target)
+            if target.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise RuntimeError('SQLite backup validation failed; original database preserved')
         print('Consistent SQLite backup saved in /data/backups')
 
 
 def whisper():
+    from .heavy import HEAVY_LOCK
+    with HEAVY_LOCK:return _whisper()
+
+
+def _whisper():
     import numpy as np
     import ctranslate2
     from faster_whisper import WhisperModel

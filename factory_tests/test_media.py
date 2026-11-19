@@ -272,3 +272,15 @@ def test_silent_short_without_captions_needs_no_speech_model(fixture,monkeypatch
     done=store.get(job['id'])
     assert done['state']=='READY',done['error']
     assert done['result']['outputs'][0]['validation']['audio'] is False
+
+
+@pytest.mark.parametrize('mode',['none','subtitles','static_hook','hook_subtitles','custom'])
+def test_v7_text_modes_render_real_unicode_video(fixture,mode):
+    source,transcript,folder=fixture
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,
+                   text_mode=mode,hook='Україна · español',hook_position='bottom',hook_duration=2,preset='crop')
+    path=folder/(mode+'.mp4')
+    media.render(source,path,transcript,0,5,req)
+    assert media.validate_output(path,5,expected_audio=True)['validated']
+    assert path.with_suffix('.hook.txt').exists()==(mode in ('static_hook','hook_subtitles','custom'))
+    assert not path.with_suffix('.rendering.mp4').exists()

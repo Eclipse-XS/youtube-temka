@@ -25,8 +25,8 @@ try {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Install Docker Desktop with WSL2 support.' }
     $engineReady=Test-DockerEngine
     if (-not $engineReady -and -not $Status) {
-        $desktop=Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-        if (-not (Test-Path -LiteralPath $desktop)) { throw 'Docker engine unavailable; install/start Docker Desktop.' }
+        $desktop=@((Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $desktop) { throw 'Docker engine unavailable; install/start Docker Desktop.' }
         Start-Process -FilePath $desktop -WindowStyle Hidden
         $deadline=(Get-Date).AddSeconds($TimeoutSeconds)
         do { Start-Sleep 3; $engineReady=Test-DockerEngine } while (-not $engineReady -and (Get-Date) -lt $deadline)
@@ -129,9 +129,11 @@ try {
         $images=if ($Role -eq 'Controller') { @(($resolved.name+'-controller'),($resolved.name+'-web')) } else { @($resolved.name+'-worker') }
         & docker image inspect @images *> $null
         if ($Rebuild -or $LASTEXITCODE -ne 0 -or -not $previous -or $previous.signature -ne $signature -or $previous.role -ne $Role) {
-            DockerRun ($compose+@('build')+$(if ($Rebuild) { @('--pull') } else { @() })+@($service)+$(if ($Role -eq 'Controller') { @('web') } else { @() }))
+            DockerRun ($compose+@('build')+$(if ($Rebuild) { @('--pull') } else { @() })+@($service))
+            if ($Role -eq 'Controller') { DockerRun ($compose+@('build')+$(if ($Rebuild) { @('--pull') } else { @() })+@('web')) }
         } else { Write-Host 'Unchanged images: reused without rebuilding.' }
         if ($Role -eq 'Controller') { DockerRun ($compose+@('run','--rm','--no-deps',$service,'python','-m','factory.deployment','backup')) }
+        if ($Role -eq 'Controller') { DockerRun ($compose+@('run','--rm','--no-deps',$service,'python','-m','factory.library')) }
         DockerRun ($compose+@('up','-d','--wait','--wait-timeout',"$TimeoutSeconds",'ollama'))
         $model=& docker @compose run --rm --no-deps $service python -c 'from factory import config; print(config.MODEL)'
         if ($LASTEXITCODE -ne 0 -or -not $model) { throw 'Configured model could not be resolved.' }
@@ -194,7 +196,7 @@ try {
     $report=& docker @compose exec -T $service python -m factory.deployment readiness
     if ($LASTEXITCODE -ne 0) { throw 'Storage/integration readiness check failed.' }
     $report | Write-Host
-    Write-Host 'AI CONTENT FACTORY 6.0; Repository: denusbtw/youtube-temka; Docker Engine: READY'
+    Write-Host 'AI CONTENT FACTORY 7.0; Repository: denusbtw/youtube-temka; Docker Engine: READY'
     Write-Host ('Commit: '+(& git rev-parse HEAD))
     Write-Host "GPU runtime: $gpu (see actual CUDA Whisper probe above; full video acceptance separate)"
     if ($Status) { Write-Host 'Whisper inference: not repeated in read-only status mode.' } else { Write-Host 'Whisper: READY (model loaded and inference completed in an exited process)' }

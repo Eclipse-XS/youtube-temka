@@ -157,6 +157,8 @@ def enqueue(jid,index,channel,title=None,description=None,privacy='private',publ
     if output.get('editorial',{}).get('technical_valid') is False or output.get('editorial',{}).get('status')=='REJECTED':raise ValueError('Output failed hard technical or duplicate checks; create a corrected version')
     if not output.get('approved') and not automatic:
         raise ValueError('Approve the output in Editor before publication')
+    if output.get('approved') and output.get('render_id') and output.get('approved_render_id')!=output['render_id']:
+        raise ValueError('Approval belongs to a different render version; review and approve this render')
     if automatic and not output.get('approved') and needs_editorial_review(job,index):
         raise ValueError('Weak or ungrounded selection requires editorial approval before automatic publication')
     status=publication_status(privacy,publish_at)
@@ -295,6 +297,15 @@ def upload(publication):
     youtube=None
     drive=None
     try:
+        job=store.get(publication['job'])
+        if not job or job['state']!='READY':raise ValueError('Publication source is no longer ready')
+        current=job['result']['outputs'][publication['output']]
+        queued=json.loads(publication['metadata'])
+        if not current.get('approved'):
+            if not queued.get('automatic') or needs_editorial_review(job,publication['output']) or not store.preferences(publication['channel']).get('auto_approve'):
+                raise ValueError('Editorial approval was withdrawn; nothing uploaded')
+        if current.get('render_id') and current.get('approved') and current.get('approved_render_id')!=current['render_id']:raise ValueError('Render approval changed; nothing uploaded')
+        if queued.get('metadata_version') and current.get('publishing_metadata',{}).get('version')!=queued['metadata_version']:raise ValueError('Metadata version changed; nothing uploaded')
         youtube=Drive(token_file(publication['alias']))
         authorized=youtube.request('GET',YT+'/channels',params={'part':'id','mine':'true'}).json()['items']
         if publication['channel'] not in [c['id'] for c in authorized]:

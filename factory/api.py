@@ -140,9 +140,12 @@ def voice_preview(body:VoicePreview):
     text='A clear, friendly voice for your next video.' if language=='en' else 'Una voz clara y agradable para tu próximo vídeo.'
     folder=config.DATA/'voice-previews';folder.mkdir(parents=True,exist_ok=True)
     path=folder/(body.voice+'.wav')
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Processing slot busy; try the voice preview after the current task')
     try:
         if not path.is_file():synthesize(text,body.voice,1,language,path)
     except (ValueError,RuntimeError) as error:raise HTTPException(409,str(error)) from None
+    finally:HEAVY_LOCK.release()
     return {'url':'/api/tts/previews/'+body.voice+'.wav'}
 
 
@@ -206,13 +209,14 @@ def probe(body:Source):
 
 
 @app.post('/api/uploads')
-async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False),music:bool=Form(False)):
+async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False),music:bool=Form(False),logo:bool=Form(False),license:str=Form('Operator-confirmed rights; license documentation not supplied'),category:str=Form('custom')):
     if not rights_confirmed:
         raise HTTPException(422,'Source/background rights confirmation is required')
     suffix=Path(file.filename or '').suffix.lower()
-    if suffix not in (('.mp3','.wav','.mp4') if music else ('.mp4','.mkv','.mov')) or (background and suffix!='.mp4'):
+    if sum((background,music,logo))>1:raise HTTPException(422,'Choose only one asset type')
+    if suffix not in (('.png',) if logo else (('.mp3','.wav','.mp4') if music else ('.mp4','.mkv','.mov'))) or (background and suffix!='.mp4'):
         raise HTTPException(422,'Upload MP4/MKV/MOV; backgrounds must be MP4')
-    folder=config.DATA/'music' if music else ((config.DATA/'backgrounds') if background else config.SCRATCH/'uploads')
+    folder=config.DATA/'logos' if logo else (config.DATA/'music' if music else ((config.DATA/'backgrounds') if background else config.SCRATCH/'uploads'))
     folder.mkdir(parents=True,exist_ok=True)
     name=uuid.uuid4().hex+suffix
     target=folder/name
@@ -223,21 +227,73 @@ async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), bac
                 if target.stat().st_size+len(chunk)>2*1024**3:
                     raise ValueError('Upload exceeds 2 GB; use a bounded source URL or a smaller file')
                 output.write(chunk)
-        if not background and not music:
+        if not background and not music and not logo:
             metadata=media.probe('upload:'+name)
         else:
             metadata=None
+            from .library import register
+            name,duplicate=register(target,'logos' if logo else ('music' if music else 'backgrounds'),license[:1000],'Operator upload',category[:80])
     except Exception:
         target.unlink(missing_ok=True)
         raise HTTPException(400,'Upload failed validation or exceeded available storage') from None
     finally:
         await file.close()
-    return {'source':'upload:'+name,'name':name,'metadata':metadata}
+    return {'source':'upload:'+name,'name':name,'metadata':metadata,'duplicate':duplicate if background or music or logo else False}
+
+
+@app.get('/api/library')
+def library():
+    from .library import entries
+    return entries()
+
+
+@app.post('/api/library/bootstrap')
+def starter_library():
+    from .library import bootstrap
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current heavy task before creating starter assets')
+    try:return bootstrap()
+    finally:HEAVY_LOCK.release()
+
+
+@app.get('/api/library/{kind}/{name}')
+def library_file(kind:str,name:str):
+    from .assets import asset_path
+    try:return FileResponse(asset_path(kind,name))
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+
+
+@app.get('/api/library/{kind}/{name}/frame')
+def library_frame(kind:str,name:str):
+    from .assets import asset_path
+    from .heavy import HEAVY_LOCK
+    try:source=asset_path(kind,name)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+    folder=config.DATA/'asset-previews';folder.mkdir(parents=True,exist_ok=True)
+    target=folder/(kind+'-'+name+'.jpg')
+    if not target.is_file():
+        if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Preview waits for the active processing task')
+        try:
+            temporary=target.with_suffix('.part.jpg')
+            try:
+                media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','1','-i',str(source),'-vf','scale=270:-2','-frames:v','1','-threads','1',str(temporary)],timeout=30)
+                temporary.replace(target)
+            finally:temporary.unlink(missing_ok=True)
+        finally:HEAVY_LOCK.release()
+    return FileResponse(target)
 
 
 @app.get('/api/backgrounds')
 def backgrounds():
     return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4')]
+
+
+@app.get('/api/source-preview/{name}')
+def source_preview(name:str):
+    try:
+        path=media.local_source('upload:'+name)
+        return FileResponse(path)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
 
 
 @app.get('/api/assets/music')
@@ -250,6 +306,13 @@ def create(body:JobRequest):
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
+    if body.background_mode=='random' or (body.background_category and body.background_mode=='auto'):
+        import random
+        from .library import entries
+        choices=[a['name'] for a in entries() if a['kind']=='backgrounds' and a['availability']=='AVAILABLE' and (not body.background_category or a['category']==body.background_category)]
+        if not choices:raise HTTPException(409,'No licensed asset in this category; import authorized media or choose another category')
+        body.background=random.choice(choices) if choices else None
+        body.background_mode='specific'
     if body.publish_automatic:
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
@@ -268,12 +331,14 @@ def create(body:JobRequest):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    return store.create(body.model_dump())
+    try:return store.create(body.model_dump())
+    except ValueError as error:raise HTTPException(409,str(error)) from None
 
 
 @app.get('/api/jobs')
-def jobs():
-    return store.list_jobs()
+def jobs(limit:int=50,offset:int=0):
+    if not 1<=limit<=200 or offset<0:raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
+    return store.list_jobs(limit,offset)
 
 
 @app.get('/api/jobs/{jid}')
@@ -328,6 +393,21 @@ def generate_metadata(jid:str):
     finally:HEAVY_LOCK.release()
 
 
+@app.post('/api/jobs/{jid}/outputs/{index}/hooks')
+def suggest_hooks(jid:str,index:int):
+    from .drafts import contexts_for_job
+    from .hooks import suggest
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current processing stage')
+    try:
+        job=get_job(jid)
+        if index<0:raise ValueError('Invalid output')
+        ctx=contexts_for_job(job)[index]
+        return suggest(ctx['transcript'],ctx['metadata_language'],job['request'].get('llm_model'),ctx['source_title'])
+    except (ValueError,IndexError,KeyError) as error:raise HTTPException(409,str(error)) from None
+    finally:HEAVY_LOCK.release()
+
+
 class MetadataEdit(BaseModel):
     title:str|None=Field(default=None,min_length=1,max_length=100)
     alternative_titles:list[str]|None=None
@@ -360,7 +440,7 @@ def output(jid:str,name:str,request:Request):
         if item.get('thumbnail'):
             manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
     manifests.update(job['result'].get('artifacts',{}))
-    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt'}
+    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
     if name not in allowed:
         raise HTTPException(404,'Artifact not found')
     root=config.SCRATCH/jid
@@ -466,6 +546,9 @@ def checkpoint(jid:str,body:Checkpoint):
         store.update(jid,**body.model_dump())
     except InterruptedError:
         raise HTTPException(409,'Worker lease lost or job cancelled') from None
+    if body.state=='READY':
+        from .retention import register
+        register(store.get(jid))
     return {'ok':True}
 
 
@@ -501,6 +584,10 @@ def sync_analytics(channel:str):
 
 
 class ChannelPreferences(BaseModel):
+    profile_name:str=Field(default='',max_length=100)
+    target_region:str=Field(default='',max_length=20)
+    content_category:str=Field(default='auto',max_length=40)
+    editing_preset:str=Field(default='auto',pattern=r'^(auto|smart|crop|blur|gameplay)$')
     metadata_language:str|None=Field(default=None,pattern=r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$')
     category_id:str|None=Field(default=None,pattern=r'^\d{1,3}$')
     description_footer:str=Field(default='',max_length=500)
@@ -508,6 +595,39 @@ class ChannelPreferences(BaseModel):
     auto_approve:bool=False
     max_silence_fraction:float=Field(default=.65,ge=.1,le=.8)
     timezone:str=Field(default='Europe/Kyiv',max_length=80)
+
+
+class RetentionPolicy(BaseModel):
+    enabled:bool=False
+    maximum_packages:int=Field(default=50,ge=1,le=10000)
+    grace_days:int=Field(default=7,ge=1,le=365)
+
+
+@app.get('/api/storage/retention')
+def retention_status():
+    from .retention import snapshot
+    return snapshot()
+
+
+@app.post('/api/storage/retention/settings')
+def retention_settings(body:RetentionPolicy):
+    from .retention import configure
+    return configure(body.model_dump())
+
+
+@app.post('/api/storage/retention/run')
+def retention_run(dry_run:bool=True):
+    from .retention import cleanup
+    try:return cleanup(dry_run)
+    except ValueError as error:raise HTTPException(409,str(error)) from None
+
+
+@app.post('/api/storage/retention/{jid}/protect')
+def retention_protect(jid:str,body:Approval):
+    from .retention import protect
+    try:protect(jid,body.approved)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+    return {'protected':body.approved}
 
 
 class Policy(BaseModel):
@@ -542,15 +662,21 @@ class Publication(BaseModel):
     description:str|None=Field(default=None,max_length=5000)
     privacy:str='private'
     publish_at:str|None=None
+    publish_at_local:str|None=None
 
 
 @app.post('/api/publisher/queue')
 def queue_publication(body:Publication):
     from .publisher import enqueue
     values=body.model_dump()
+    local=values.pop('publish_at_local')
     values['jid']=values.pop('job')
     values['index']=values.pop('output')
     try:
+        if local:
+            if values['publish_at']:raise ValueError('Choose either UTC or channel-local time')
+            from .calendar import local_time
+            values['publish_at']=local_time(local,store.preferences(body.channel).get('timezone','Europe/Kyiv'))
         return {'id':enqueue(**values)}
     except ValueError as error:
         raise HTTPException(409,str(error)) from None

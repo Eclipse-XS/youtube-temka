@@ -1,5 +1,7 @@
 # Deployment and recovery
 
+For version 7 workflows and memory/retention behavior see [Factory 7](FACTORY_7.md).
+
 See `verification/REPORT.md` for actual acceptance evidence and remaining blockers.
 Existing Drive OAuth was found in the earlier Factory worktree and reused through
 `factory/legacy_drive_oauth.py`. Original client/token files remain unchanged.

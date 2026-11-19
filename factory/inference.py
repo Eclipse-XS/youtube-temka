@@ -2,10 +2,8 @@
 import os
 import subprocess
 import httpx
-import threading
 from contextlib import contextmanager
-
-HEAVY_LOCK=threading.RLock()
+from .heavy import HEAVY_LOCK
 
 
 def gpu_layers(model=None):

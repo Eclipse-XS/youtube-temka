@@ -18,7 +18,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/u
 COPY factory ./factory
 COPY docs/licenses ./docs/licenses
 COPY subtitles.py transcribe_backends.py file_locks.py ffmpeg_utils.py gpu_decode.py jsonfile.py security_utils.py ssrf_guard.py LICENSE NOTICE ./
-RUN useradd --uid 10001 --create-home factory && mkdir -p /data /scratch /home/factory/.cache && chown factory /data /scratch /home/factory/.cache
+RUN useradd --uid 10001 --create-home factory && mkdir -p /data /scratch /host-locks /home/factory/.cache && chown factory /data /scratch /host-locks /home/factory/.cache
 USER factory
 ENV FACTORY_DATA=/data PYTHONUNBUFFERED=1 WHISPER_DEVICE=cpu WHISPER_COMPUTE=int8 ASR_HOST_SLOTS=1 FFMPEG_THREADS=2
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health',timeout=2)"

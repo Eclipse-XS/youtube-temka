@@ -55,6 +55,15 @@ def connect():
             channel TEXT PRIMARY KEY, report TEXT NOT NULL, seen REAL NOT NULL)''')
         db.execute('''CREATE TABLE IF NOT EXISTS publication_artifacts (
             publication TEXT PRIMARY KEY, state TEXT NOT NULL, error TEXT, seen REAL NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS media_assets (
+            hash TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, metadata TEXT NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS retention_packages (
+            job TEXT PRIMARY KEY, files TEXT NOT NULL, created REAL NOT NULL,
+            protected INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ACTIVE', error TEXT)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS retention_history (
+            job TEXT NOT NULL, at REAL NOT NULL, state TEXT NOT NULL, detail TEXT)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS factory_settings (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL)''')
         yield db
 
 
@@ -73,6 +82,11 @@ def decode(row,db=None):
 def create(request):
     jid = uuid.uuid4().hex
     with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        if request.get('source','').startswith('edit:'):
+            origin=request['source'].split(':')[1]
+            package=db.execute('SELECT state FROM retention_packages WHERE job=?',(origin,)).fetchone()
+            if package and package['state'] in ('DELETION_PENDING','DELETED'):raise ValueError('Source package is being removed or has expired; restore it before editing')
         db.execute('INSERT INTO jobs(id,state,request,created) VALUES(?,?,?,?)',
                    (jid, 'QUEUED', json.dumps(request, ensure_ascii=False), time.time()))
         db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),'QUEUED','Job queued'))
@@ -84,9 +98,9 @@ def get(jid):
         return decode(db.execute('SELECT * FROM jobs WHERE id=?', (jid,)).fetchone(),db)
 
 
-def list_jobs():
+def list_jobs(limit=200,offset=0):
     with connect() as db:
-        return [decode(r,db) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 200').fetchall()]
+        return [decode(r,db) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT ? OFFSET ?',(min(200,max(1,limit)),max(0,offset))).fetchall()]
 
 
 def claim(worker, remote=False):
@@ -99,7 +113,7 @@ def claim(worker, remote=False):
             db.execute("UPDATE job_stages SET status='failed',finished=?,message='Worker lease expired; checkpoints retained' WHERE job=? AND status='running'",(time.time(),item['id']))
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
-        rows = db.execute("SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created").fetchall()
+        rows = db.execute("SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created")
         row = next((r for r in rows if not remote or (not json.loads(r['request'])['source'].startswith('upload:') and json.loads(r['request'])['save_drive'])),None)
         if not row:
             return None
@@ -189,6 +203,7 @@ def approve(jid,index,value):
         if value and editorial.get('technical_valid') is False:raise ValueError('Hard technical validations failed; re-render before approval')
         if value and editorial.get('status')=='REJECTED':raise ValueError('Rejected or duplicate output cannot be approved; create a corrected version')
         result['outputs'][index]['approved']=value
+        result['outputs'][index]['approved_render_id']=result['outputs'][index].get('render_id') if value else None
         if editorial:
             editorial['human_reviewed']=bool(value)
             editorial['status']='READY_FOR_PUBLISHING' if value and result.get('cloud_verified') else 'APPROVED' if value else 'NEEDS_REVIEW' if editorial.get('issues') else 'READY_FOR_REVIEW'
@@ -224,3 +239,9 @@ def preferences(channel):
     with connect() as db:
         row=db.execute('SELECT preferences FROM channel_preferences WHERE channel=?',(channel,)).fetchone()
         return json.loads(row['preferences']) if row else {}
+
+
+def source_in_use(source,exclude):
+    # Never use the paginated UI list to decide whether an original may go away.
+    with connect() as db:
+        return db.execute("SELECT 1 FROM jobs WHERE id<>? AND json_extract(request,'$.source')=? AND state NOT IN ('READY','CANCELLED') LIMIT 1",(exclude,source)).fetchone() is not None
