@@ -93,6 +93,8 @@ Secondary video is not mapped into the output audio track.
 
 ## Publishing
 
+In Editor, use **До публікації** to open publishing controls for the approved,
+Drive-verified output. Visibility starts at Private and queueing requires confirmation.
 Manual Public requires the exact approved render, an authenticated matching
 channel, per-channel public permission and a final channel/visibility confirmation.
 It is independent of automatic publishing, which remains off by default.
