@@ -37,7 +37,7 @@ never frees, a clock that jumped: the request goes ahead as it always did.
 """
 import atexit
 import contextlib
-import fcntl
+import file_locks as fcntl
 import json
 import os
 import tempfile

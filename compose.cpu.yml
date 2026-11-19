@@ -1,0 +1,12 @@
+# Explicit CPU selection overrides existing GPU preferences in .env.
+services:
+  controller:
+    environment:
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE: int8
+      OLLAMA_GPU_LAYERS: '0'
+  worker:
+    environment:
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE: int8
+      OLLAMA_GPU_LAYERS: '0'

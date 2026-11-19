@@ -28,12 +28,17 @@ async def lifespan(app):
         app.state.local_worker=thread
     if os.environ.get('FACTORY_PUBLISHER','1')=='1':
         from .publisher import loop
-        threading.Thread(target=loop,args=(stop,),daemon=True).start()
+        app.state.publisher=threading.Thread(target=loop,args=(stop,),daemon=True)
+        app.state.publisher.start()
     if os.environ.get('FACTORY_ANALYTICS','1')=='1':
         from .analytics import loop as analytics_loop
-        threading.Thread(target=analytics_loop,args=(stop,),daemon=True).start()
+        app.state.analytics=threading.Thread(target=analytics_loop,args=(stop,),daemon=True)
+        app.state.analytics.start()
     yield
     stop.set()
+    for name in ('local_worker','publisher','analytics'):
+        thread=getattr(app.state,name,None)
+        if thread:thread.join(timeout=5)
 
 
 app=FastAPI(title='AI Content Factory',lifespan=lifespan)
@@ -66,6 +71,17 @@ def health():
 
 class Login(BaseModel):
     token: str = Field(max_length=256)
+
+
+@app.get('/api/readiness')
+def deployment_readiness():
+    from .deployment import readiness
+    result=readiness()
+    result['services']={}
+    for name in ('local_worker','publisher','analytics'):
+        thread=getattr(app.state,name,None)
+        result['services'][name]='RUNNING' if thread and thread.is_alive() else 'DISABLED_OR_STOPPED'
+    return result
 
 
 @app.post('/api/session')

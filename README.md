@@ -76,3 +76,26 @@ venv. Run `python -m pytest factory_tests -q`. Build the actual UI with
 CI also exercises retained MIT modules on Linux, validates Compose and scans for
 credential patterns. HTTP protocol fixtures are never described as real Google
 acceptance tests. No public uploads occur without explicit channel authorization.
+
+## One-command Windows deployment
+
+From this checkout, run:
+
+```powershell
+.\scripts\start-factory.ps1
+```
+
+The default controller starts Ollama, FastAPI with its supervised local worker,
+publisher and analytics loops, and the production web UI at
+http://localhost:5175/factory.html. Missing local authentication is generated only
+when `.env` is absent. Existing configuration and OAuth files are preserved.
+A short Whisper inference initializes the persistent cache and verifies the selected
+runtime. NVIDIA container access is probed before selecting the GPU overlay;
+failed CUDA inference receives an explicitly reported CPU fallback.
+
+Options: `-Role Worker`, `-CpuOnly`, `-Rebuild`, `-Status`, `-WithTTS`,
+`-TestInference`. Worker mode requires initial private controller configuration.
+Use `scripts/stop-factory.ps1`, `restart-factory.ps1`, `logs-factory.ps1`, and
+`update-factory.ps1` for maintenance. Updates require a clean fast-forwardable
+checkout and a successful SQLite online backup before pulling changes.
+See [deployment details](docs/FACTORY_DEPLOYMENT.md).
