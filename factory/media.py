@@ -274,7 +274,10 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     tracking = {}
     if request.mode == 'shorts' and request.preset in ('auto', 'smart') and not has_explicit_bg:
         from .framing import trajectory as track, dedupe_sendcmd_lines
-        trajectory, tracking = track(source, duration, shot_cuts=shot_cuts)
+        try:
+            trajectory, tracking = track(source, duration, shot_cuts=shot_cuts) if shot_cuts else track(source, duration)
+        except TypeError:
+            trajectory, tracking = track(source, duration)
 
     manifest = build_edit_manifest(
         source_start=start,

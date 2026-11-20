@@ -17,7 +17,7 @@ from .inference import generate, model_session
 
 CATEGORIES={'1':'Film & Animation','2':'Autos & Vehicles','10':'Music','15':'Pets & Animals','17':'Sports','19':'Travel & Events','20':'Gaming','22':'People & Blogs','23':'Comedy','24':'Entertainment','25':'News & Politics','26':'Howto & Style','27':'Education','28':'Science & Technology','29':'Nonprofits & Activism'}
 STOP=set('the a an and or to of in on for is are was were this that it with as at by from be have has not you your we our i they their video clip highlights це та і й або для на у в з із що як до по ми ви він вона вони не про este esta el la los las de y en un una que para con es por'.split())
-BOILERPLATE=set('video clip excerpt highlights source selected original watch discuss discusses discussion interview podcast stream gameplay short shorts відео уривок джерело оригінал фрагмент resumen vídeo fragmento fuente'.split())
+BOILERPLATE=set('video clip excerpt highlights source selected original watch discuss discusses discussion interview podcast stream gameplay short shorts відео уривок джерело оригінал фрагмент resumen vídeo fragmento fuente shown showing frames frame sequence scene scenes'.split())
 
 
 def words(text):
@@ -159,13 +159,35 @@ def _description(body,ctx,hashtags):
     return fit_bytes(clean_text(body),5000-len(suffix.encode())-2)+'\n\n'+suffix
 
 
+def _clean_phrase_truncate(text: str, max_len: int = 58) -> str:
+    """Truncate cleanly on word boundaries without leaving dangling stopwords/articles."""
+    text = re.sub(r'[\u4e00-\u9fff]+', '', text).strip()
+    text = ' '.join(text.split())
+    if len(text) > max_len:
+        cut = text[:max_len].rsplit(' ', 1)[0] if ' ' in text[:max_len] else text[:max_len]
+        text = cut.rstrip(',.;:-')
+    dangling = {'a', 'an', 'the', 'and', 'or', 'on', 'in', 'at', 'to', 'of', 'for', 'with', 'is', 'are', 'was', 'were', 'where', 'that', 'which', 'by'}
+    parts = text.split()
+    while len(parts) > 2 and parts[-1].rstrip(',.;:').casefold() in dangling:
+        parts.pop()
+    return ' '.join(parts).rstrip(',.;:- ')
+
+
 def _verified_visual_phrase(ctx) -> str:
+    boilerplate_prefix = re.compile(
+        r'^(?:a\s+)?(?:sequence of (?:four|\d+) (?:gameplay )?frames(?: from a video game)? showing|'
+        r'video game sequence shows?|four (?:gameplay )?frames(?: showing)?|'
+        r'the (?:video|clip|scene|frames) shows?)\s+',
+        re.IGNORECASE,
+    )
     for item in ctx.get('highlight_explanations', []):
         vlm_sum = clean_text(str(item.get('vlm_summary', '') or ''))
         if vlm_sum:
-            first_clause = re.split(r'[.!?;]', vlm_sum)[0].strip()
-            if len(first_clause) >= 8:
-                return first_clause[:72]
+            cleaned = boilerplate_prefix.sub('', vlm_sum).strip()
+            first_clause = re.split(r'[.!?;]', cleaned)[0].strip()
+            polished = _clean_phrase_truncate(first_clause, 58)
+            if len(polished) >= 8:
+                return polished[0].upper() + polished[1:]
     return ''
 
 

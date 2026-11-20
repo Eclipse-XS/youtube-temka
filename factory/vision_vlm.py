@@ -24,8 +24,8 @@ from jsonfile import write_json_atomic
 from . import config
 from .heavy import HEAVY_LOCK
 
-PROMPT_VERSION = 'vlm-8.0-r1'
-DEFAULT_VLM_MODEL = os.environ.get('FACTORY_VLM_MODEL', 'qwen3-vl:2b')
+PROMPT_VERSION = 'vlm-8.0-r3'
+DEFAULT_VLM_MODEL = os.environ.get('FACTORY_VLM_MODEL', 'qwen3-vl:2b-instruct')
 
 
 class FrameDescription(BaseModel):
@@ -152,12 +152,12 @@ def query_vram_mib() -> tuple[int | None, int | None]:
         return None, None
 
 
-def vlm_gpu_layers(model: str) -> int | None:
+def vlm_gpu_layers(model: str, ollama_url: str | None = None) -> int | None:
     """Conservative VRAM admission for 4 GB GPUs.
 
-    Returns None to let Ollama auto-size exact GPU offload when >= 2.8 GiB VRAM
-    is free, a partial cap when 2.2-2.8 GiB is free, or 0 (CPU-only) when
-    constrained or explicitly overridden via FACTORY_VLM_GPU_LAYERS.
+    Checks if `model` is already loaded in Ollama VRAM via /api/ps so subsequent
+    calls inside a session never misread the model's own VRAM footprint as OOM
+    pressure and accidentally evict it to CPU.
     """
     setting = os.environ.get('FACTORY_VLM_GPU_LAYERS', 'auto').strip().lower()
     if setting != 'auto':
@@ -165,6 +165,16 @@ def vlm_gpu_layers(model: str) -> int | None:
             return max(0, min(99, int(setting)))
         except ValueError:
             return 0
+    if ollama_url:
+        try:
+            ps = httpx.get(f'{ollama_url.rstrip("/")}/api/ps', timeout=2.0, trust_env=False)
+            if ps.status_code == 200:
+                for m in ps.json().get('models', []):
+                    name = str(m.get('name', ''))
+                    if (name == model or name == f'{model}:latest' or name.split(':')[0] == model) and int(m.get('size_vram', 0)) > 0:
+                        return None  # Already resident in GPU VRAM; reuse without evicting
+        except Exception:
+            pass
     _, free = query_vram_mib()
     if free is None or free < 2200:
         return 0
@@ -295,13 +305,13 @@ class LocalVisionAdapter:
 
         images_b64 = [base64.b64encode(img).decode('ascii') for img in frames]
         use_schema = schema is not None and not self.model.startswith('moondream')
-        layers = vlm_gpu_layers(self.model)
-        effective_prompt = f'/no_think {prompt}' if 'qwen3' in self.model.lower() else prompt
+        layers = vlm_gpu_layers(self.model, self.ollama_url)
 
+        is_thinking_qwen = 'qwen3' in self.model.lower() and 'instruct' not in self.model.lower()
         options: dict[str, Any] = {
             'num_ctx': 2048,
             'temperature': 0,
-            'num_predict': 512 if 'qwen3' in self.model.lower() else 200,
+            'num_predict': 450,
             'num_thread': 2,
         }
         if layers is not None:
@@ -309,11 +319,13 @@ class LocalVisionAdapter:
 
         payload: dict[str, Any] = {
             'model': self.model,
-            'messages': [{'role': 'user', 'content': effective_prompt, 'images': images_b64}],
+            'messages': [{'role': 'user', 'content': prompt, 'images': images_b64}],
             'stream': False,
             'keep_alive': 120,
             'options': options,
         }
+        if is_thinking_qwen:
+            payload['think'] = False
         if use_schema:
             payload['format'] = schema
 
@@ -527,28 +539,29 @@ class LocalVisionAdapter:
             },
         }
         prompt = (
-            'This side-by-side composite image shows LEFT (end of Shot A) and RIGHT (start of Shot B immediately after a cut). '
-            'Determine whether LEFT and RIGHT belong to the SAME continuous event/scene '
-            '(same location, same vehicle/character, same podcast studio/conversation, or direct camera angle cut of the same action) '
-            'OR whether RIGHT jumps to a NEW UNRELATED clip/scene (different vehicle/location/time of day/streamer/HUD) '
-            'OR a format_break (title card, end card, interstitial, black screen). '
-            'Note: In a podcast/interview, switching between Speaker A and Speaker B in the same conversation IS same_event=true (relation="same_scene_camera_cut"). '
-            'In a gaming compilation, jumping from a car to a boat or from daytime ocean to nighttime street is same_event=false (relation="new_unrelated_event"). '
+            'LEFT and RIGHT are two timestamps from a video. '
+            'Decide if they belong to the SAME continuous clip/event (same game scene, same vehicle or player moving along a road/sky/street, or same speaker/studio in a conversation -> same_event=true) '
+            'OR if they are TWO UNRELATED clips from a compilation (completely different vehicle/location/time-of-day, e.g., car interior vs ocean boat, scooter vs highway truck -> same_event=false, relation="new_unrelated_event") '
+            'OR if either side is a graphic title card, end card, outro logo, or text transition card (same_event=false, relation="format_break"). '
+            'Movement of the same vehicle or character along a road/bridge/sky is STILL same_event=true. '
             'Return strict JSON: same_event, relation, reason, confidence.'
         )
         raw = self._call_ollama_vision('compare_adjacent_shots', prompt, [combined_img], schema, ctx)
         if raw and '_raw_text' not in raw:
             rel = _norm_enum(raw.get('relation'), ContinuityVerdict.model_fields['relation'].annotation, 'uncertain')
             same = bool(raw.get('same_event'))
+            conf = _clamp01(raw.get('confidence', 0.7))
             if rel in ('new_unrelated_event', 'format_break'):
                 same = False
             elif rel in ('same_action_continuation', 'same_scene_camera_cut', 'reaction_cut'):
                 same = True
+            elif rel == 'uncertain' and conf >= 0.7:
+                rel = 'same_action_continuation' if same else 'new_unrelated_event'
             return ContinuityVerdict(
                 same_event=same,
                 relation=rel,
                 reason=str(raw.get('reason', ''))[:300],
-                confidence=_clamp01(raw.get('confidence', 0.7)),
+                confidence=conf,
                 backend=f'ollama:{self.model}',
                 verified=True,
             )
@@ -605,24 +618,22 @@ class LocalVisionAdapter:
                 'coherent_single_event': {'type': 'boolean'},
                 'contains_format_break': {'type': 'boolean'},
                 'contains_unrelated_scene': {'type': 'boolean'},
-                'event_summary': {'type': 'string', 'maxLength': 350},
-                'setup_observed': {'type': 'string', 'maxLength': 180},
-                'climax_observed': {'type': 'string', 'maxLength': 180},
-                'payoff_observed': {'type': 'string', 'maxLength': 180},
-                'defects': {'type': 'array', 'maxItems': 6, 'items': {'type': 'string'}},
+                'event_summary': {'type': 'string', 'maxLength': 140},
+                'setup_observed': {'type': 'string', 'maxLength': 90},
+                'climax_observed': {'type': 'string', 'maxLength': 90},
+                'payoff_observed': {'type': 'string', 'maxLength': 90},
+                'defects': {'type': 'array', 'maxItems': 4, 'items': {'type': 'string', 'maxLength': 60}},
                 'confidence': {'type': 'number'},
             },
         }
         transcript_excerpt = str(ctx.get('transcript', ''))[:400]
         prompt = (
-            f'This 2x2 chronological storyboard grid shows {len(chosen)} frames from ONE proposed short clip ({ts_str}). '
+            f'This 2x2 storyboard shows 4 frames in chronological order ({ts_str}) from ONE candidate short clip. '
             f'Transcript excerpt: "{transcript_excerpt}". '
-            'Answer strictly from visible evidence: '
-            '1) Do all panels belong to ONE coherent event/scene (coherent_single_event)? '
-            '2) Does ANY panel show a branded title card, end card, outro logo, interstitial card, menu or black screen (contains_format_break)? '
-            '3) Do panels jump between unrelated scenes/locations/vehicles/clips (contains_unrelated_scene)? '
-            '4) Summarize ONLY what is actually visible (event_summary, setup_observed, climax_observed, payoff_observed). '
-            'Leave fields empty if not clearly visible. Do NOT invent crashes, wins, or dialogue not shown. '
+            'Answer strictly from what is visible across the 4 panels: '
+            '1) contains_format_break=true ONLY if any panel shows a channel title card, end card, outro logo, video-box promo, "moments later" card, or black screen. Normal gameplay with a corner HUD or webcam is false. '
+            '2) contains_unrelated_scene=true ONLY if the panels jump between unrelated compilation clips (e.g. car -> boat -> night street, or completely different vehicle/player/time-of-day). A single player driving/riding/flying forward along a road, bridge, or city over 30-50 seconds is coherent_single_event=true and contains_unrelated_scene=false. '
+            '3) Write a concise factual event_summary describing ONLY what is visibly happening (e.g. "White pickup truck driving on a sunset highway and swapping vehicles"). '
             'Return strict JSON.'
         )
         raw = self._call_ollama_vision('verify_event_continuity', prompt, [grid_img], schema, {'ts': ts_str, **ctx})

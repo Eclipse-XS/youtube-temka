@@ -721,15 +721,26 @@ def discover_highlights(
 
 
 def _grounded_candidate_title(event: SemanticEvent | None, subject: str, visual_summary: str) -> str:
+    from .metadata import _clean_phrase_truncate
+    import re
     subj = subject.strip()
     if visual_summary:
-        # Take first clean clause from VLM verified observation
-        clean = visual_summary.split('.')[0].strip()[:90]
+        cleaned = re.sub(
+            r'^(?:a\s+)?(?:sequence of (?:four|\d+) (?:gameplay )?frames(?: from a video game)? showing|'
+            r'video game sequence shows?|four (?:gameplay )?frames(?: showing)?|'
+            r'the (?:video|clip|scene|frames) shows?)\s+',
+            '',
+            visual_summary,
+            flags=re.IGNORECASE,
+        ).strip()
+        clean = _clean_phrase_truncate(cleaned.split('.')[0].strip(), 68)
+        if clean:
+            clean = clean[0].upper() + clean[1:]
         if subj and subj.casefold() not in clean.casefold():
             return f'{subj} | {clean}'[:120]
         return clean[:120]
     if event and event.speech_text:
-        snippet = ' '.join(event.speech_text.split()[:12]).strip()
+        snippet = _clean_phrase_truncate(' '.join(event.speech_text.split()[:12]).strip(), 68)
         if subj and subj.casefold() not in snippet.casefold():
             return f'{subj} | {snippet}'[:120]
         return snippet[:120]

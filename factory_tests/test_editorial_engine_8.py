@@ -497,3 +497,30 @@ def test_27_29_30_api_feedback_rights_manual_preservation_and_publish_guard(tmp_
         assert after_regen['result']['outputs'][0]['publishing_metadata']['title'] == 'My Handcrafted Operator Title'
         after_force = drafts.regenerate(jid, force_overwrite=True)
         assert after_force['result']['outputs'][0]['publishing_metadata']['title'] != 'My Handcrafted Operator Title'
+
+
+def test_metadata_clean_phrase_truncation_and_boilerplate_cleanup():
+    from factory.metadata import _clean_phrase_truncate
+    from factory.discovery import _grounded_candidate_title
+
+    # Word-boundary truncation without dangling stopwords or stray CJK tokens
+    t1 = _clean_phrase_truncate(
+        'A white pickup truck moves to a dirt road where a man gets out of the vehicle near a',
+        max_len=58,
+    )
+    assert len(t1) <= 58
+    assert not t1.endswith((' a', ' dr', ' the', ' to', ' of', ' in'))
+
+    t2 = _clean_phrase_truncate('Player drives a red车 sedan into a tunnel', max_len=58)
+    assert '车' not in t2
+
+    # Grounded title strips VLM framing boilerplate ("A sequence of four gameplay frames showing...")
+    title = _grounded_candidate_title(
+        None,
+        'GTA 5',
+        'A sequence of four gameplay frames showing a yellow pickup truck flipping off a highway bridge into water.',
+    )
+    assert 'sequence of four' not in title.casefold()
+    assert 'yellow pickup truck' in title.casefold()
+    assert title.startswith('GTA 5 | ')
+

@@ -46,7 +46,7 @@ def test_vlm_mocked_ollama_and_cache_hit(tmp_path, monkeypatch):
             return resp
 
     monkeypatch.setattr('factory.vision_vlm.httpx.Client', FakeClient)
-    monkeypatch.setattr('factory.vision_vlm.vlm_gpu_layers', lambda m: 0)
+    monkeypatch.setattr('factory.vision_vlm.vlm_gpu_layers', lambda m, u=None: 0)
 
     v1 = adapter.detect_format_break([b'\xff\xd8img1'], {'shot': 100})
     assert v1.verified is True

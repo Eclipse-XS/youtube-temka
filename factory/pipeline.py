@@ -368,6 +368,18 @@ def process(claim,assets=None):
             update(result={'outputs':outputs})
             write_json_atomic(root/'metadata.json',metadata_obj,ensure_ascii=True);progress.done('drive','skipped','Local export selected')
         update('READY')
+        try:
+            diag = result.get('analysis_diagnostics', {})
+            vlm_st = diag.get('vlm_stats', {}) if isinstance(diag, dict) else {}
+            store.record_production_metrics(jid, {
+                'candidate_count': len(candidates),
+                'approved_count': sum(1 for o in outputs if o.get('approved')),
+                'model_calls': int(diag.get('requests', 0)) if isinstance(diag, dict) else 0,
+                'vlm_calls': int(vlm_st.get('calls_made', 0)),
+                'peak_vram_mib': int(vlm_st.get('peak_vram_mib', 0)),
+            })
+        except Exception:
+            pass
         if request.save_drive:
             from .retention import register
             register(store.get(jid))

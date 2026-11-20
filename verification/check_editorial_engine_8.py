@@ -150,7 +150,12 @@ def main(source: Path, transcript_path: Path, benchmark_path: Path, output_dir: 
         raw_path = output_dir / f'clip-{idx}-raw.mp4'
         mp4_path = output_dir / f'clip-{idx}.mp4'
         sb_path = output_dir / f'clip-{idx}-storyboard.jpg'
-        clip_req = req_editorial.model_copy(update={'hook': clip.get('title', 'GTA Highlight')[:60]})
+        short_hook = metadata._clean_phrase_truncate(
+            clip.get('title', '').split('|', 1)[-1].strip() or clip.get('vlm_summary', '').split('.')[0].strip(),
+            32,
+        )
+        hook_text = (short_hook[0].upper() + short_hook[1:]) if len(short_hook) >= 6 else 'GTA HIGHLIGHT'
+        clip_req = req_editorial.model_copy(update={'hook': hook_text, 'hook_font_size': 48})
 
         t_c = time.monotonic()
         media.download(req_editorial.source, raw_path, a, b, 360)
@@ -235,6 +240,6 @@ if __name__ == '__main__':
     parser.add_argument('--transcript', type=Path, default=Path(r'c:\Users\Eclipse\Desktop\7 семестр\робота\youtube-temka\scratch\controller\factory72-acceptance\transcript.json'))
     parser.add_argument('--benchmark', type=Path, default=Path(__file__).resolve().parent / 'benchmarks' / 'gta_yux8s3lwLss_v2.json')
     parser.add_argument('--output', type=Path, default=Path(r'C:\Users\Eclipse\.gemini\antigravity\brain\45244f68-2887-464a-b332-e9f07670ac5a\scratch\gta_v8_acceptance'))
-    parser.add_argument('--vlm-model', type=str, default='qwen3-vl:2b')
+    parser.add_argument('--vlm-model', type=str, default='qwen3-vl:2b-instruct')
     args = parser.parse_args()
     main(args.source, args.transcript, args.benchmark, args.output, args.vlm_model)

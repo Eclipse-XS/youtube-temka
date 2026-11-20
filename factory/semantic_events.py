@@ -397,14 +397,14 @@ def score_adjacent_shots(
 
     # Strong contradiction check: abrupt lighting + visual + HUD jump (e.g. car -> ocean -> night street)
     strong_visual_contradiction = (
-        (visual_sim < 0.42 and hud_sim < 0.58)
-        or (luma_shift >= 0.38 and visual_sim < 0.58)
-        or (hud_sim < 0.45 and visual_sim < 0.62)
+        (visual_sim < 0.48 and hud_sim < 0.62)
+        or (luma_shift >= 0.35 and visual_sim < 0.62)
+        or (hud_sim < 0.50 and visual_sim < 0.68)
         or (shot_b.boundary_type in ('fade_black', 'graphic_transition'))
     )
 
-    if strong_visual_contradiction or score < 0.56:
-        severity: BreakSeverity = 'strong_semantic_contradiction' if (visual_sim < 0.42 or luma_shift >= 0.40) else 'weak_discontinuity'
+    if strong_visual_contradiction or score < 0.70:
+        severity: BreakSeverity = 'strong_semantic_contradiction' if (visual_sim < 0.45 or luma_shift >= 0.35) else 'weak_discontinuity'
         return ShotEdge(
             from_shot=shot_a.shot_id,
             to_shot=shot_b.shot_id,
@@ -500,7 +500,7 @@ def build_event_graph(
             and sb.shot_id not in breaks_by_shot
             and sa.duration >= 4.0
             and sb.duration >= 4.0
-            and 0.48 <= edge.continuity_score <= 0.68
+            and 0.62 <= edge.continuity_score <= 0.80
         ):
             uncertain_edge_indices.append(len(edges) - 1)
 
@@ -521,17 +521,21 @@ def build_event_graph(
                 if verdict.verified and verdict.relation != 'uncertain':
                     edge = edges[idx]
                     edge.vlm_verified = True
-                    edge.same_event = verdict.same_event
                     edge.reason = f'VLM ({verdict.backend}): {verdict.reason}'
                     if verdict.relation == 'format_break':
+                        edge.same_event = False
                         edge.relation = 'format_break_title_card'
                         edge.severity = 'probable_format_break'
                         edge.continuity_score = 0.0
                     elif verdict.same_event:
-                        edge.relation = verdict.relation  # type: ignore[assignment]
-                        edge.severity = 'none'
-                        edge.continuity_score = max(edge.continuity_score, round(verdict.confidence, 4))
+                        # Require corroborating visual/HUD evidence before VLM overrides a CV split
+                        if edge.same_event or (verdict.confidence >= 0.88 and edge.visual_similarity >= 0.58 and edge.hud_similarity >= 0.62):
+                            edge.same_event = True
+                            edge.relation = verdict.relation  # type: ignore[assignment]
+                            edge.severity = 'none'
+                            edge.continuity_score = max(edge.continuity_score, round(verdict.confidence, 4))
                     else:
+                        edge.same_event = False
                         edge.relation = 'probable_new_event'
                         edge.severity = 'strong_semantic_contradiction'
                         edge.continuity_score = min(edge.continuity_score, 0.25)
@@ -611,7 +615,12 @@ def _materialize_event(
     mean_rms = sum(s.mean_audio_rms * s.duration for s in group) / total_dur
     peak_rms = max(s.peak_audio_rms for s in group)
     bursts = sum(s.audio_burst_count for s in group)
-    face_corners = sorted({c for s in group for c in s.face_corners})
+    # Only report persistent facecam corners (present in >=50% of the event's shots)
+    corner_hits: dict[str, int] = {}
+    for s in group:
+        for c in s.face_corners:
+            corner_hits[c] = corner_hits.get(c, 0) + 1
+    face_corners = sorted(c for c, cnt in corner_hits.items() if cnt >= max(1, (len(group) + 1) // 2))
 
     # Extract speech segments strictly inside this event
     segs = [

@@ -448,7 +448,15 @@ def create_job(body, seed=None, approved=None):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    try:return store.create(body.model_dump(), seed=seed, approved=approved)
+    try:
+        created = store.create(body.model_dump(), seed=seed, approved=approved)
+        store.save_source_rights(created['id'], {
+            'source_url': body.source if body.source.startswith('https://') else None,
+            'permission_status': 'operator_confirmed',
+            'attribution_required': body.attribution_required,
+            'license': body.source_attribution[:300] if body.source_attribution else 'Operator-confirmed rights',
+        })
+        return created
     except ValueError as error:raise HTTPException(409,str(error)) from None
 
 
