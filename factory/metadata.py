@@ -114,7 +114,31 @@ def context(transcript,request,source,candidates,output,source_url=None,preferen
         from .tts import VOICES
         actual=request.tts_text or actual;language=VOICES[request.tts_voice]
     preferences=preferences or getattr(request,'metadata_preferences',{})
-    return {'brief':brief(request,source.get('title','')),'transcript':actual,'source_title':source.get('title',''),'source_url':source_url if source_url and source_url.startswith('https://') else None,'intervals':[[request.start+c['start_seconds'],request.start+c['end_seconds']] for c in candidates],'highlight_explanations':[{'title':c.get('title',''),'reason':c.get('reason','')} for c in candidates],'audio_language':None if request.audio_mode=='silent' or not output.get('validation',{}).get('audio',True) else language,'metadata_language':getattr(request,'metadata_language',None) or preferences.get('metadata_language') or language,'content_category':request.source_category,'duration':output['duration'],'mode':request.mode,'source_attribution':request.source_attribution,'preferences':preferences,'series':output.get('series')}
+    return {
+        'brief': brief(request, source.get('title', '')),
+        'transcript': actual,
+        'source_title': source.get('title', ''),
+        'source_url': source_url if source_url and source_url.startswith('https://') else None,
+        'intervals': [[request.start + c['start_seconds'], request.start + c['end_seconds']] for c in candidates],
+        'highlight_explanations': [
+            {
+                'title': c.get('title', ''),
+                'reason': c.get('reason', ''),
+                'vlm_summary': c.get('vlm_summary', ''),
+                'evidence': c.get('evidence', [])[:4],
+                'semantic_verification': c.get('semantic_verification', ''),
+            }
+            for c in candidates
+        ],
+        'audio_language': None if request.audio_mode == 'silent' or not output.get('validation', {}).get('audio', True) else language,
+        'metadata_language': getattr(request, 'metadata_language', None) or preferences.get('metadata_language') or language,
+        'content_category': request.source_category,
+        'duration': output['duration'],
+        'mode': request.mode,
+        'source_attribution': request.source_attribution,
+        'preferences': preferences,
+        'series': output.get('series'),
+    }
 
 
 def fingerprint(ctx):return hashlib.sha256(json.dumps(ctx,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -135,10 +159,37 @@ def _description(body,ctx,hashtags):
     return fit_bytes(clean_text(body),5000-len(suffix.encode())-2)+'\n\n'+suffix
 
 
+def _verified_visual_phrase(ctx) -> str:
+    for item in ctx.get('highlight_explanations', []):
+        vlm_sum = clean_text(str(item.get('vlm_summary', '') or ''))
+        if vlm_sum:
+            first_clause = re.split(r'[.!?;]', vlm_sum)[0].strip()
+            if len(first_clause) >= 8:
+                return first_clause[:72]
+    return ''
+
+
+def _grounded_transcript_phrase(ctx) -> str:
+    text = clean_text(ctx.get('transcript', ''))
+    if not text:
+        return ''
+    terms = [w for w in words(text) if w not in STOP and len(w) > 2]
+    if len(terms) < 3:
+        return ''
+    # Pick a clean short clause from transcript (never single profanity/stopwords)
+    for clause in re.split(r'(?<=[.!?])\s+', text):
+        cleaned = clean_text(clause)
+        if 14 <= len(cleaned) <= 68 and len(cleaned.split()) >= 3:
+            return cleaned
+    return ' '.join(text.split()[:9])[:68]
+
+
 def contextual_draft(ctx):
     value = ContentBrief.model_validate(ctx['brief'])
     subject = ' '.join(clean_text(value.confirmed_subject).split()) or 'Gaming'
     observation = clean_text(value.operator_observation)
+    vlm_phrase = _verified_visual_phrase(ctx)
+    transcript_phrase = _grounded_transcript_phrase(ctx)
     lang = (ctx['metadata_language'] or 'en').split('-')[0]
     if lang == 'uk':
         labels = ['Ігровий момент','Фрагмент гри','Момент із добірки','Ігровий епізод','Короткий фрагмент']
@@ -146,19 +197,35 @@ def contextual_draft(ctx):
     else:
         labels = ['Gameplay Highlight','Gameplay Clip','Gaming Moments','Gameplay Excerpt','Short Gameplay Segment']
         neutral = 'Gameplay excerpt. The specific event needs editorial verification.'
+    specific_event = ''
     if observation:
         labels.insert(0, observation.splitlines()[0])
+        specific_event = observation.splitlines()[0]
+    elif vlm_phrase:
+        labels.insert(0, vlm_phrase)
+        specific_event = vlm_phrase
+    elif transcript_phrase and lang == (ctx.get('audio_language') or lang).split('-')[0]:
+        labels.insert(0, transcript_phrase)
+        specific_event = transcript_phrase
     titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in labels))
     is_gaming = value.gaming_hint or ctx['content_category']=='gameplay'
     if not is_gaming:
         titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in
-                      ([observation.splitlines()[0]] if observation else []) +
+                      ([specific_event] if specific_event else []) +
                       (['Короткий фрагмент','Уривок','Момент із відео'] if lang=='uk' else
                        ['Video Excerpt','Selected Moment','Short Clip','Source Highlight','Video Segment'])))
         neutral = subject
     subject_terms=set(words(subject))
     gameplay_tag=f'{subject} gameplay' if not subject_terms.intersection({'gaming','gameplay'}) else subject
-    tags = clean_tags([subject] + ([gameplay_tag,'gaming clips'] if is_gaming else []))
+    # Extract clean domain-relevant extra tags ONLY from verified visual summary (never transcript stopwords!)
+    extra_tags = []
+    if vlm_phrase:
+        for tok in words(vlm_phrase):
+            if tok not in STOP and tok not in BOILERPLATE and len(tok) >= 4 and tok not in subject_terms:
+                extra_tags.append(tok)
+                if len(extra_tags) >= 3:
+                    break
+    tags = clean_tags([subject] + ([gameplay_tag,'gaming clips'] if is_gaming else []) + extra_tags)
     hashtag = re.sub(r'[^\w]','',subject)[:60]
     hashtags = list(dict.fromkeys(([f'#{hashtag}'] if hashtag else []) +
                                (['#Gaming'] if is_gaming else ['#Video']) +
@@ -167,13 +234,23 @@ def contextual_draft(ctx):
     if not value.confirmed_subject:issues.append('game_identity_unconfirmed')
     if is_gaming and _category(ctx)!='20':issues.append('category_override_conflicts_with_gameplay')
     if lang not in ('uk','en'):issues.append('description_template_language_requires_review')
-    description = f'{subject}. {observation}' if observation else f'{subject}. {neutral}'
+    if observation:
+        description = f'{subject}. {observation}'
+        quality_reasons = ['Operator-confirmed observation and subject context.']
+    elif vlm_phrase:
+        description = f'{subject}. {vlm_phrase}.'
+        if transcript_phrase:
+            description += f' Dialogue excerpt: "{transcript_phrase}".'
+        quality_reasons = ['Grounded in verified local visual observation and confirmed subject; source title remains an unverified claim.']
+    else:
+        description = f'{subject}. {neutral}'
+        quality_reasons = ['Operator context and observations; source title is an unverified claim.']
     return PublishingMetadata(title=titles[0],alternative_titles=titles[1:3],title_candidates=titles[:10],
                               description=_description(description,ctx,hashtags),tags=tags,hashtags=hashtags,
                               category_id=_category(ctx),audio_language=ctx['audio_language'],
                               metadata_language=ctx['metadata_language'] or 'und',
                               source_attribution=ctx['source_attribution'],review_required=True,
-                              validation_issues=issues,quality_reasons=['Operator context and observations; source title is an unverified claim.'])
+                              validation_issues=issues,quality_reasons=quality_reasons)
 
 
 def fallback(ctx,reason='technical_llm_failure'):

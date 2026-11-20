@@ -67,6 +67,22 @@ def connect():
         db.execute('''CREATE TABLE IF NOT EXISTS render_lineages (
             id TEXT PRIMARY KEY, last_version INTEGER NOT NULL)''')
         db.execute('CREATE TABLE IF NOT EXISTS job_visibility (job TEXT PRIMARY KEY, status TEXT NOT NULL)')
+        db.execute('''CREATE TABLE IF NOT EXISTS editorial_feedback (
+            id TEXT PRIMARY KEY, job TEXT NOT NULL, candidate_index INTEGER,
+            decision TEXT NOT NULL, rejection_reasons TEXT NOT NULL DEFAULT '[]',
+            original_start REAL, original_end REAL, corrected_start REAL, corrected_end REAL,
+            original_score REAL, selected_layout TEXT, edited_hook TEXT,
+            notes TEXT NOT NULL DEFAULT '', created REAL NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS source_rights (
+            job TEXT PRIMARY KEY, source_url TEXT, original_creator TEXT,
+            permission_status TEXT NOT NULL DEFAULT 'operator_confirmed',
+            license TEXT NOT NULL DEFAULT '', attribution_required INTEGER NOT NULL DEFAULT 0,
+            commercial_restrictions TEXT NOT NULL DEFAULT '',
+            reused_content_acknowledged INTEGER NOT NULL DEFAULT 0, recorded_at REAL NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS production_metrics (
+            job TEXT PRIMARY KEY, analysis_seconds REAL, render_seconds REAL,
+            candidate_count INTEGER, approved_count INTEGER, model_calls INTEGER,
+            vlm_calls INTEGER, peak_vram_mib INTEGER, updated REAL NOT NULL)''')
         yield db
 
 
@@ -274,3 +290,165 @@ def source_in_use(source,exclude):
     # Never use the paginated UI list to decide whether an original may go away.
     with connect() as db:
         return db.execute("SELECT 1 FROM jobs WHERE id<>? AND json_extract(request,'$.source')=? AND state<>'READY' LIMIT 1",(exclude,source)).fetchone() is not None
+
+
+def record_feedback(job_id, payload):
+    fid = uuid.uuid4().hex
+    now = time.time()
+    with connect() as db:
+        db.execute(
+            '''INSERT INTO editorial_feedback(
+                id, job, candidate_index, decision, rejection_reasons,
+                original_start, original_end, corrected_start, corrected_end,
+                original_score, selected_layout, edited_hook, notes, created
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (
+                fid,
+                job_id,
+                payload.get('candidate_index'),
+                payload['decision'],
+                json.dumps(payload.get('rejection_reasons', []), ensure_ascii=False),
+                payload.get('original_start'),
+                payload.get('original_end'),
+                payload.get('corrected_start'),
+                payload.get('corrected_end'),
+                payload.get('original_score'),
+                payload.get('selected_layout'),
+                payload.get('edited_hook'),
+                payload.get('notes', '')[:500],
+                now,
+            ),
+        )
+    return {'id': fid, 'job': job_id, 'created': now, **payload}
+
+
+def list_feedback(job_id=None, limit=200):
+    with connect() as db:
+        if job_id:
+            rows = db.execute(
+                'SELECT * FROM editorial_feedback WHERE job=? ORDER BY created DESC LIMIT ?',
+                (job_id, min(500, max(1, limit))),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                'SELECT * FROM editorial_feedback ORDER BY created DESC LIMIT ?',
+                (min(500, max(1, limit)),),
+            ).fetchall()
+        out = []
+        for r in rows:
+            item = dict(r)
+            item['rejection_reasons'] = json.loads(item['rejection_reasons'] or '[]')
+            out.append(item)
+        return out
+
+
+def feedback_summary():
+    from collections import Counter
+    items = list_feedback(limit=500)
+    decisions = Counter(i['decision'] for i in items)
+    reasons = Counter(r for i in items for r in i.get('rejection_reasons', []))
+    total = len(items)
+    approved = decisions.get('approved', 0)
+    return {
+        'total_decisions': total,
+        'approved_count': approved,
+        'approval_rate': round(approved / total, 4) if total else None,
+        'decisions': dict(decisions),
+        'rejection_reasons': dict(reasons),
+        'automatic_training_enabled': False,
+        'note': 'Feedback is persisted for editorial audit and offline calibration; weights are not silently mutated online.',
+    }
+
+
+def save_source_rights(job_id, rights):
+    with connect() as db:
+        db.execute(
+            '''INSERT OR REPLACE INTO source_rights(
+                job, source_url, original_creator, permission_status, license,
+                attribution_required, commercial_restrictions, reused_content_acknowledged, recorded_at
+            ) VALUES (?,?,?,?,?,?,?,?,?)''',
+            (
+                job_id,
+                rights.get('source_url'),
+                rights.get('original_creator', ''),
+                rights.get('permission_status', 'operator_confirmed'),
+                rights.get('license', ''),
+                int(bool(rights.get('attribution_required', False))),
+                rights.get('commercial_restrictions', ''),
+                int(bool(rights.get('reused_content_acknowledged', False))),
+                time.time(),
+            ),
+        )
+
+
+def get_source_rights(job_id):
+    with connect() as db:
+        row = db.execute('SELECT * FROM source_rights WHERE job=?', (job_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item['attribution_required'] = bool(item['attribution_required'])
+        item['reused_content_acknowledged'] = bool(item['reused_content_acknowledged'])
+        return item
+
+
+def record_production_metrics(job_id, metrics):
+    with connect() as db:
+        db.execute(
+            '''INSERT OR REPLACE INTO production_metrics(
+                job, analysis_seconds, render_seconds, candidate_count,
+                approved_count, model_calls, vlm_calls, peak_vram_mib, updated
+            ) VALUES (?,?,?,?,?,?,?,?,?)''',
+            (
+                job_id,
+                metrics.get('analysis_seconds'),
+                metrics.get('render_seconds'),
+                metrics.get('candidate_count'),
+                metrics.get('approved_count'),
+                metrics.get('model_calls'),
+                metrics.get('vlm_calls'),
+                metrics.get('peak_vram_mib'),
+                time.time(),
+            ),
+        )
+
+
+def production_summary():
+    with connect() as db:
+        rows = [dict(r) for r in db.execute('SELECT * FROM production_metrics ORDER BY updated DESC LIMIT 200').fetchall()]
+    fb = feedback_summary()
+    if not rows:
+        return {'tracked_jobs': 0, 'feedback': fb, 'note': 'No tracked production jobs yet.'}
+    n = len(rows)
+    return {
+        'tracked_jobs': n,
+        'avg_analysis_seconds': round(sum(r['analysis_seconds'] or 0 for r in rows) / n, 2),
+        'avg_render_seconds': round(sum(r['render_seconds'] or 0 for r in rows) / n, 2),
+        'total_candidates': sum(r['candidate_count'] or 0 for r in rows),
+        'total_model_calls': sum(r['model_calls'] or 0 for r in rows),
+        'total_vlm_calls': sum(r['vlm_calls'] or 0 for r in rows),
+        'max_peak_vram_mib': max((r['peak_vram_mib'] or 0 for r in rows), default=0),
+        'feedback': fb,
+    }
+
+
+def editorial_workflow_state(job):
+    """Explicit editorial workflow state distinct from technical job READY."""
+    state = job.get('state', '')
+    if state in ('QUEUED', 'PROBING', 'DOWNLOADING', 'TRANSCRIBING', 'ANALYZING'):
+        return 'ANALYSIS_IN_PROGRESS'
+    if state in ('RENDERING', 'UPLOADING'):
+        return 'RENDERING_IN_PROGRESS'
+    if state in ('FAILED', 'BLOCKED', 'CANCELLED'):
+        return 'RENDER_VALIDATION_FAILED' if state == 'FAILED' else state
+    result = job.get('result') or {}
+    if result.get('planning_only'):
+        return 'CANDIDATES_READY'
+    outputs = result.get('outputs') or []
+    if not outputs:
+        return 'CANDIDATES_READY' if result.get('candidates') else 'NEEDS_EDITORIAL_REVIEW'
+    if any(o.get('editorial', {}).get('technical_valid') is False for o in outputs):
+        return 'RENDER_VALIDATION_FAILED'
+    if all(o.get('approved') for o in outputs):
+        return 'READY_FOR_PUBLISHING_REVIEW' if result.get('cloud_verified') else 'APPROVED'
+    return 'NEEDS_EDITORIAL_REVIEW'

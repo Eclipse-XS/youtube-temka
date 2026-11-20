@@ -150,19 +150,28 @@ def process(claim,assets=None):
             candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in (request.intervals if request.mode=='longs' or modern else sorted(request.intervals))]
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
         elif modern:
-            features = []
+            local_path=media.local_source(source)
             use_visual = request.series_mode != 'sequential' and (
                 not transcript['segments'] or request.series_mode == 'connected' or
                 request.source_category in ('visual','gameplay','stream','auto')
             )
-            if use_visual:
-                from .visual_analysis import sample
-                features = sample(source,request.start,end,root,progress.tick)
-            result=plan(transcript,request,duration,features,progress.tick)
-            local_path=media.local_source(source) if request.series_mode=='independent' and use_visual else None
-            if local_path:
-                from .visual_analysis import refine_local_plan
-                result=refine_local_plan(local_path,request.start,request,result,transcript,duration)
+            if local_path and request.series_mode != 'sequential':
+                from .shorts import plan_v8
+                result = plan_v8(
+                    source,
+                    request,
+                    transcript,
+                    duration,
+                    root=root,
+                    source_title=metadata.get('title', ''),
+                    progress=progress.tick,
+                )
+            else:
+                features = []
+                if use_visual:
+                    from .visual_analysis import sample
+                    features = sample(source,request.start,end,root,progress.tick)
+                result=plan(transcript,request,duration,features,progress.tick)
             candidates=result['candidates']
         elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
             candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
@@ -246,7 +255,14 @@ def process(claim,assets=None):
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
                     progress.begin('validation','RENDERING')
                 except Exception:output.unlink()
-            if not output.is_file():media.render(clip,output,transcript,candidate['start_seconds'],candidate['end_seconds'],clip_request,background,progress.tick,stage=render_stage,music_path=assets.get('music') if assets is not None else None,logo_path=assets.get('logos') if assets is not None else None)
+            if not output.is_file():
+                media.render(
+                    clip, output, transcript, candidate['start_seconds'], candidate['end_seconds'],
+                    clip_request, background, progress.tick, stage=render_stage,
+                    music_path=assets.get('music') if assets is not None else None,
+                    logo_path=assets.get('logos') if assets is not None else None,
+                    candidate_meta=candidate,
+                )
             progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
             from .thumbnails import create as make_thumbnail

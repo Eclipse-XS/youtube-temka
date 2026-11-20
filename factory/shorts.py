@@ -313,3 +313,147 @@ def plan(transcript, request, duration, features, progress):
         + 'Review narrative context and visual claims before publishing.' + coverage_note
     )
     return result
+
+
+def plan_v8(
+    source,
+    request,
+    transcript,
+    duration,
+    root=None,
+    source_title='',
+    progress=lambda *_: None,
+    vlm=None,
+):
+    """Factory 8.0 Unified Semantic Event & Multimodal Discovery Planner.
+
+    Preserves Independent Highlights, Connected Story, and Sequential Split
+    semantics while replacing raw motion-window expansion with:
+      SourceEvidence -> SemanticEventGraph -> Format-Break Exclusion ->
+      Bounded VLM Verification -> Map/Pool/Verify/Score/Pairwise/Select.
+    """
+    from pathlib import Path
+    from jsonfile import write_json_atomic
+    from . import media
+    from .discovery import DiscoveryBudget, discover_highlights
+    from .semantic_events import build_event_graph
+    from .source_intelligence import analyze_source
+    from .vision_vlm import LocalVisionAdapter
+
+    mode = request.series_mode
+    if mode == 'sequential':
+        candidates, summary = split(0, duration, request, transcript)
+        return {
+            'candidates': candidates,
+            'selection_summary': summary,
+            'analysis': 'deterministic source split',
+            'analysis_diagnostics': {'requests': 0, 'rejected_intervals': 0, 'windows': 0, 'decisions': [], 'used_fallback': False},
+        }
+
+    local_path = Path(source) if isinstance(source, Path) or (isinstance(source, str) and Path(source).is_file()) else media.local_source(str(source))
+    evidence = analyze_source(
+        local_path or str(source),
+        request.start,
+        request.start + duration,
+        transcript,
+        cache_dir=root,
+        content_category=request.source_category,
+        confirmed_subject=request.confirmed_subject,
+        source_title=source_title,
+        tick=progress,
+    )
+
+    owned_vlm = False
+    if vlm is None and local_path is not None:
+        vlm = LocalVisionAdapter(
+            cache_path=(root / 'vlm-cache.json') if root else None,
+            max_calls=12,
+        )
+        owned_vlm = True
+
+    try:
+        graph = build_event_graph(
+            evidence,
+            transcript,
+            local_source_path=local_path,
+            vlm=vlm,
+            vlm_edge_budget=4,
+        )
+        if root is not None:
+            write_json_atomic(root / 'event-graph.json', graph.model_dump(), ensure_ascii=True)
+
+        if mode == 'connected':
+            # Connected Story requires ONE verified coherent event spanning [low, high]
+            count, overlap = request.count, request.series_overlap
+            low = count * request.minimum - (count - 1) * overlap
+            high = count * min(request.maximum, PLATFORM_MAXIMUM) - (count - 1) * overlap
+            long_events = [e for e in graph.events if low <= e.duration <= high and e.decision != 'REJECT']
+            if long_events:
+                best = max(long_events, key=lambda e: (e.mean_continuity, e.speech_word_count, e.duration))
+                cuts = [s['end'] for s in transcript.get('segments', []) if s['text'].rstrip().endswith(('.', '?', '!'))]
+                parts, summary = split(best.start, best.end, request, transcript, cuts)
+                for p in parts:
+                    p['event_id'] = best.event_id
+                    p['evidence'] = list(best.evidence)
+                    p['semantic_verification'] = 'cv_graph_review_required'
+                return {
+                    'candidates': parts,
+                    'selection_summary': summary + f' Verified single coherent event {best.event_id} ({best.duration:.1f}s).',
+                    'analysis': 'editorial_engine_8_connected',
+                    'format_breaks': [b.model_dump() for b in graph.format_breaks],
+                    'events_summary': [{'event_id': e.event_id, 'start': e.start, 'end': e.end, 'duration': e.duration} for e in graph.events],
+                    'analysis_diagnostics': {'events': len(graph.events), 'format_breaks': len(graph.format_breaks), 'requests': 0, 'rejected_intervals': 0, 'windows': 1, 'decisions': [], 'used_fallback': False},
+                    'review_alternatives': [],
+                }
+            # Fall back to transcript connected_story search if speech exists, else return honest alternatives
+            cuts = [s['end'] for s in transcript.get('segments', []) if s['text'].rstrip().endswith(('.', '?', '!'))]
+            candidates, summary, diagnostics = connected_story(transcript, request, duration, cuts, progress)
+            # Filter out any transcript connected proposal that crosses a detected format break
+            if candidates:
+                span_a, span_b = candidates[0]['start_seconds'], candidates[-1]['end_seconds']
+                if any(max(0.0, min(span_b, br.end) - max(span_a, br.start)) >= 0.5 for br in graph.format_breaks):
+                    candidates = []
+                    summary = (
+                        f'No single coherent event lasting {low:g}–{high:g}s was verified without crossing a format break. '
+                        'Review independent coherent alternatives or use Sequential Source Split.'
+                    )
+            alts = []
+            if not candidates:
+                for ev in sorted(graph.events, key=lambda e: (-e.duration, e.start))[:request.count]:
+                    if ev.duration >= 12.0:
+                        alts.append(planned(
+                            ev.start, ev.end,
+                            f'{request.confirmed_subject} | Independent Event' if request.confirmed_subject else 'Independent Coherent Event',
+                            f'Coherent {ev.duration:.1f}s event (too short for {low:g}s Connected Story). Available as independent clip.',
+                            transcript, 'visual_activity', ev.evidence,
+                        ))
+            return {
+                'candidates': candidates,
+                'selection_summary': summary,
+                'analysis': 'editorial_engine_8_connected',
+                'format_breaks': [b.model_dump() for b in graph.format_breaks],
+                'analysis_diagnostics': diagnostics,
+                'review_alternatives': alts,
+            }
+
+        # Independent Highlights mode
+        speech_proposals = []
+        bounded = request.model_copy(update={'maximum': min(request.maximum, PLATFORM_MAXIMUM)})
+        if transcript.get('segments'):
+            # Reuse speech heuristic/LLM proposals as one MAP source (subject to strict event-graph verification!)
+            sp_res = analyze(transcript, bounded, duration, lambda *_: None)
+            speech_proposals = sp_res.get('candidates', [])
+
+        return discover_highlights(
+            evidence=evidence,
+            graph=graph,
+            transcript=transcript,
+            request=bounded,
+            local_source_path=local_path,
+            vlm=vlm,
+            budget=DiscoveryBudget(max_vlm_verified=min(6, max(3, request.count * 2))),
+            speech_proposals=speech_proposals,
+        )
+    finally:
+        if owned_vlm and vlm is not None:
+            vlm.unload()

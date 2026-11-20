@@ -2,10 +2,11 @@ import React,{useEffect,useState} from 'react';
 
 export const layouts={auto:['Auto Recommended','Зберігає основне відео, якщо додатковий матеріал не вибрано'],smart:['Fill Screen','Основне відео заповнює кадр'],crop:['Center Crop','Центральна частина кадру'],blur:['Blurred Sides','Основне відео на розмитому фоні'],gameplay:['Split Screen','Основне відео зверху, додаткове знизу']};
 const hookPresets={
-  'Clean Gaming':{hook_font:'sans',hook_font_size:56,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'Bold Creator':{hook_font:'sans',hook_font_size:66,hook_outline:4,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'Minimal':{hook_font:'serif',hook_font_size:43,hook_outline:1,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'High Contrast':{hook_font:'sans',hook_font_size:54,hook_outline:3,hook_shadow:false,hook_box:true,hook_position:'top'},
+  'Gaming Clean':{preset:'blur',hook_font:'sans',hook_font_size:52,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
+  'Gaming Dynamic':{preset:'auto',hook_font:'sans',hook_font_size:58,hook_outline:4,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'pop'},
+  'Streamer Reaction':{preset:'auto',hook_font:'sans',hook_font_size:50,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'pop'},
+  'Podcast Premium':{preset:'smart',hook_font:'sans',hook_font_size:48,hook_outline:2,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
+  'Satisfying / Visual':{preset:'blur',hook_font:'serif',hook_font_size:44,hook_outline:2,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
 };
 export const textModes={none:'No Text',subtitles:'Subtitles',static_hook:'Static Hook',hook_subtitles:'Hook + Subtitles',custom:'Custom Text'};
 
