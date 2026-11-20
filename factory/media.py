@@ -203,15 +203,16 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,candidate_meta=None,design_preset=None):
     from .heavy import HEAVY_LOCK
     with HEAVY_LOCK:
-        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path)
+        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path,candidate_meta=candidate_meta,design_preset=design_preset)
 
 
-def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,candidate_meta=None,design_preset=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
+    from .edit_manifest import build_edit_manifest, facecam_crop_filter
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
     # synthetic speech. Limit at the final sample rate with makeup gain disabled.
     audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
@@ -219,6 +220,9 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     import av
     with av.open(str(source)) as container:
         has_audio=bool(container.streams.audio)
+        vstream=next(iter(container.streams.video),None)
+        src_w=int(vstream.width) if vstream and vstream.width else 1280
+        src_h=int(vstream.height) if vstream and vstream.height else 720
     if stage:stage('captions_audio')
     if request.silence_removal and request.audio_mode!='voiceover':
         from .audio_edit import remove_pauses
@@ -256,35 +260,66 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             from jsonfile import write_json_atomic
             write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
-    caption_margin=request.caption_margin
-    if caption_margin is None and request.mode=='shorts' and request.background_position=='bottom' and (
-        request.preset=='gameplay' or (request.preset=='auto' and request.background)
-    ):
-        caption_margin=min(.68,1-request.split_ratio+.07)
+
+    # Build deterministic EditManifest driving layout, safe-area hook, captions, and scene-aware cropping
+    cand_meta = candidate_meta or {}
+    shot_cuts = [float(c) - start for c in cand_meta.get('internal_cuts', []) if start < float(c) < end]
+    has_explicit_bg = bool(
+        background and background.is_file() and (
+            request.preset == 'gameplay'
+            or (request.preset == 'auto' and (request.selection_version != 2 or request.background))
+        )
+    )
+    trajectory = None
+    tracking = {}
+    if request.mode == 'shorts' and request.preset in ('auto', 'smart') and not has_explicit_bg:
+        from .framing import trajectory as track, dedupe_sendcmd_lines
+        try:
+            trajectory, tracking = track(source, duration, shot_cuts=shot_cuts) if shot_cuts else track(source, duration)
+        except TypeError:
+            trajectory, tracking = track(source, duration)
+
+    manifest = build_edit_manifest(
+        source_start=start,
+        source_end=end,
+        request=request,
+        source_width=src_w,
+        source_height=src_h,
+        facecam_corners=cand_meta.get('face_corners', []),
+        has_center_face=bool(trajectory),
+        two_speakers_detected=bool(tracking.get('two_speakers')),
+        internal_cuts=cand_meta.get('internal_cuts', []),
+        climax_time=cand_meta.get('climax_time'),
+        design_preset=design_preset,
+        has_explicit_background=has_explicit_bg,
+    )
+    output.with_suffix('.manifest.json').write_text(json.dumps(manifest.model_dump(), indent=2), encoding='utf-8')
+
+    from .composition import GeometryRequest,geometry
+    split = manifest.layout == 'gameplay_split'
+    scene = geometry(GeometryRequest(ratio=request.split_ratio, secondary_position=request.background_position,
+                                     split=bool(split), hook_position=request.hook_position, caption_margin=request.caption_margin))
+    caption_margin = manifest.caption_margin if request.caption_margin is None else request.caption_margin
     generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700',
                  **({'margin_v':round(caption_margin*288)} if caption_margin is not None else {}))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
-    width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
-    preset=request.preset
-    framing={'strategy':preset}
-    if preset=='auto':
-        use_background = background and background.is_file() and (request.selection_version != 2 or request.background)
-        preset='gameplay' if use_background else 'smart'
-        framing={'strategy':preset,'reason':'An explicit secondary asset was selected' if use_background else 'Preserve the primary source composition'}
-    trajectory=None
-    if request.mode=='shorts' and preset=='smart':
-        from .framing import trajectory as track,dedupe_sendcmd_lines
-        trajectory,tracking=track(source,duration)
-        framing.update(tracking)
-        if trajectory:
-            crop_w,crop_h,positions=trajectory
-            commands=output.with_suffix('.camera.txt')
-            commands.write_text('\n'.join(dedupe_sendcmd_lines(positions,2)),encoding='utf-8')
-        else:preset='blur'
-    if request.mode=='longs':
+    width,height=(manifest.output_width, manifest.output_height)
+    framing = {
+        'strategy': manifest.layout,
+        'reason': manifest.layout_reason,
+        'manifest_schema_version': manifest.schema_version,
+        **tracking,
+    }
+    if manifest.layout == 'fullscreen_smart_crop' and trajectory:
+        from .framing import dedupe_sendcmd_lines
+        crop_w, crop_h, positions = trajectory
+        commands = output.with_suffix('.camera.txt')
+        commands.write_text('\n'.join(dedupe_sendcmd_lines(positions, 2)), encoding='utf-8')
+
+    if request.mode=='longs' or manifest.layout == 'landscape_standard':
         graph=f'[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]'
-    elif preset=='gameplay':
+    elif manifest.layout == 'gameplay_split':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
         with av.open(str(background)) as secondary:
@@ -293,31 +328,62 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             raise ValueError('Secondary start offset must be inside the selected video')
         if request.background_loop:args+=['-stream_loop','-1']
         args+=['-ss',str(request.background_offset),'-threads','2','-i',str(background)]
-        main_height=2*round(height*request.split_ratio/2)
-        secondary_height=height-main_height
-        def panel(source, name, height):
-            fill=f'scale=1080:{height}:force_original_aspect_ratio=increase,crop=1080:{height},setsar=1'
-            fit=f'scale=1080:{height}:force_original_aspect_ratio=decrease,setsar=1'
+        main_height=scene['primary']['height']
+        secondary_height=scene['secondary']['height']
+        def panel(source_tag, name, pheight):
+            fill=f'scale=1080:{pheight}:force_original_aspect_ratio=increase,crop=1080:{pheight},setsar=1'
+            fit=f'scale=1080:{pheight}:force_original_aspect_ratio=decrease,setsar=1'
             if request.split_crop=='fill':
-                return f'{source}{fill}[{name}]'
+                return f'{source_tag}{fill}[{name}]'
             if request.split_crop=='fit':
-                return f'{source}{fit},pad=1080:{height}:(ow-iw)/2:(oh-ih)/2[{name}]'
-            return (f'{source}split[{name}base][{name}fg];'
+                return f'{source_tag}{fit},pad=1080:{pheight}:(ow-iw)/2:(oh-ih)/2[{name}]'
+            return (f'{source_tag}split[{name}base][{name}fg];'
                     f'[{name}base]{fill},boxblur=24:2[{name}bg];'
                     f'[{name}fg]{fit}[{name}fit];'
                     f'[{name}bg][{name}fit]overlay=(W-w)/2:(H-h)/2[{name}]')
         order='[main][secondary]' if request.background_position=='bottom' else '[secondary][main]'
-        framing.update(secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
+        framing.update(geometry=scene,secondary_position=request.background_position,primary_ratio=request.split_ratio,crop=request.split_crop)
         graph=(panel('[0:v]','main',main_height)+';'+
                f'[1:v]setpts=PTS/{request.background_speed},tpad=stop_mode=clone:stop_duration={duration}[secondary_input];'+
                panel('[secondary_input]','secondary',secondary_height)+';'+f'{order}vstack=shortest=1[v]')
-    elif preset=='smart' and trajectory:
+    elif manifest.layout == 'gameplay_facecam' and manifest.facecam_corner and manifest.secondary_panel:
+        cam_h = manifest.secondary_panel.height
+        game_h = manifest.primary_panel.height
+        cam_filter = facecam_crop_filter(manifest.facecam_corner, 1080, cam_h)
+        framing.update(facecam_corner=manifest.facecam_corner, cam_height=cam_h, game_height=game_h)
+        graph = (
+            f'[0:v]split=3[cam_in][g_bg_in][g_fg_in];'
+            f'[cam_in]{cam_filter}[cam_panel];'
+            f'[g_bg_in]scale=1080:{game_h}:force_original_aspect_ratio=increase,crop=1080:{game_h},boxblur=24:2,eq=brightness=-0.08,setsar=1[g_bg];'
+            f'[g_fg_in]scale=1080:{game_h}:force_original_aspect_ratio=decrease,setsar=1[g_fg];'
+            f'[g_bg][g_fg]overlay=(W-w)/2:(H-h)/2[game_panel];'
+            f'[cam_panel][game_panel]vstack=inputs=2,setsar=1[v]'
+        )
+    elif manifest.layout == 'two_speaker_split' and tracking.get('speaker_centres'):
+        left_c, right_c = tracking['speaker_centres']
+        half_h = 960
+        crop_h = max(2, int(round(src_h * 0.85)) // 2 * 2)
+        crop_w = min(src_w, max(2, int(round(crop_h * (1080.0 / half_h))) // 2 * 2))
+        lx = max(0, min(src_w - crop_w, int(round(left_c[0] - crop_w / 2.0)))) // 2 * 2
+        ly = max(0, min(src_h - crop_h, int(round(left_c[1] - crop_h * 0.42)))) // 2 * 2
+        rx = max(0, min(src_w - crop_w, int(round(right_c[0] - crop_w / 2.0)))) // 2 * 2
+        ry = max(0, min(src_h - crop_h, int(round(right_c[1] - crop_h * 0.42)))) // 2 * 2
+        graph = (
+            f'[0:v]split=2[ta][ba];'
+            f'[ta]crop={crop_w}:{crop_h}:{lx}:{ly},scale=1080:{half_h},setsar=1[top];'
+            f'[ba]crop={crop_w}:{crop_h}:{rx}:{ry},scale=1080:{half_h},setsar=1[bot];'
+            f'[top][bot]vstack=inputs=2,setsar=1[v]'
+        )
+    elif manifest.layout == 'fullscreen_smart_crop' and trajectory:
         graph=f"[0:v]sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
-    elif preset=='crop':
+    elif manifest.layout == 'fullscreen_smart_crop' and src_w / float(max(1, src_h)) <= 0.62:
+        graph='[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
+    elif manifest.layout == 'center_crop':
         # Explicit center framing fallback; no unverified face-tracking claim.
         graph='[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
     else:
-        graph='[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:2[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
+        # Source-fit over darkened blurred extension (preserves full gameplay HUD & action width cleanly)
+        graph='[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,eq=brightness=-0.08[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
     if request.captions and ass.exists():
         graph+=f";[v]ass=filename='{escape_filter_value(str(ass.resolve()))}'[captioned]"
         video='[captioned]'
@@ -341,15 +407,15 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         hook_mode=request.hook_mode or ('persistent' if request.text_mode in ('static_hook','hook_subtitles') else 'intro')
         timing={'persistent':'1','intro':f'lt(t,{request.hook_duration})',
                 'timed':f'gte(t,{request.hook_start})*lt(t,{request.hook_end})'}[hook_mode]
-        if request.mode=='shorts' and preset=='gameplay':
-            offset=0 if request.background_position=='bottom' else secondary_height
-            hook_y={'top':f'{offset}+{main_height}*.09','center':f'{offset}+({main_height}-th)/2',
-                    'bottom':f'{offset}+{main_height}*.72-th'}[request.hook_position]
-        framing.update(hook_mode=hook_mode,hook_enable=timing)
+        if request.mode=='shorts':
+            anchor=scene['hook_anchor_y'] if manifest.layout=='gameplay_split' else manifest.hook_anchor_y
+            correction={'top':'','center':'-th/2','bottom':'-th'}[request.hook_position]
+            hook_y=f'{anchor}{correction}'
+        framing.update(hook_mode=hook_mode,hook_enable=timing,hook_anchor_y=manifest.hook_anchor_y)
         graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='{timing}'[hooked]"
         video='[hooked]'
     audio_map=None
-    next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
+    next_input=2 if manifest.layout=='gameplay_split' and request.mode=='shorts' else 1
     if request.logo_asset:
         logo=logo_path or config.DATA/'logos'/request.logo_asset
         if not logo.is_file():raise ValueError('Selected logo is unavailable')

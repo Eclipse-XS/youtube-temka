@@ -1,5 +1,6 @@
 import asyncio
 from typing import Literal
+from .composition import GeometryRequest, geometry
 from contextlib import asynccontextmanager
 import hmac
 import json
@@ -325,6 +326,59 @@ def library_frame(kind:str,name:str):
     return FileResponse(target)
 
 
+@app.post('/api/composition/geometry')
+def composition_geometry(body:GeometryRequest):
+    return geometry(body)
+
+
+class ManifestPreviewRequest(BaseModel):
+    source_start: float = Field(default=0.0, ge=0.0)
+    source_end: float = Field(default=45.0, gt=0.0)
+    source_width: int = Field(default=1280, gt=0)
+    source_height: int = Field(default=720, gt=0)
+    mode: Literal['shorts', 'longs'] = 'shorts'
+    preset: Literal['auto', 'smart', 'crop', 'blur', 'gameplay'] = 'auto'
+    source_category: Literal['auto', 'podcast', 'stream', 'gameplay', 'visual'] = 'auto'
+    split_ratio: float = Field(default=0.65, ge=0.2, le=0.8)
+    background_position: Literal['top', 'bottom'] = 'bottom'
+    background: str | None = None
+    split_crop: Literal['fill', 'fit', 'blurred'] = 'blurred'
+    hook: str = Field(default='', max_length=120)
+    hook_mode: Literal['persistent', 'timed', 'intro', 'none'] | None = 'persistent'
+    hook_position: Literal['top', 'center', 'bottom'] = 'top'
+    hook_font: Literal['sans', 'serif', 'mono'] = 'sans'
+    hook_font_size: int = Field(default=54, ge=18, le=96)
+    hook_color: str = Field(default='#FFFFFF', pattern=r'^#[0-9A-Fa-f]{6}$')
+    hook_outline: int = Field(default=3, ge=0, le=8)
+    hook_shadow: bool = True
+    hook_box: bool = False
+    captions: bool = True
+    caption_style: Literal['pop', 'karaoke', 'clean'] = 'pop'
+    caption_margin: float | None = Field(default=None, ge=0.07, le=0.75)
+    facecam_corners: list[str] = Field(default_factory=list)
+    has_center_face: bool = False
+    two_speakers_detected: bool = False
+    design_preset: Literal['gaming_clean', 'gaming_dynamic', 'streamer_reaction', 'podcast_premium', 'satisfying_visual'] | None = None
+
+
+@app.post('/api/composition/manifest')
+def composition_manifest(body: ManifestPreviewRequest):
+    from .edit_manifest import DESIGN_PRESETS, build_edit_manifest
+    manifest = build_edit_manifest(
+        source_start=body.source_start,
+        source_end=body.source_end,
+        request=body,
+        source_width=body.source_width,
+        source_height=body.source_height,
+        facecam_corners=body.facecam_corners,
+        has_center_face=body.has_center_face,
+        two_speakers_detected=body.two_speakers_detected,
+        design_preset=body.design_preset,
+        has_explicit_background=bool(body.background),
+    )
+    return {'manifest': manifest.model_dump(), 'design_presets': DESIGN_PRESETS}
+
+
 @app.get('/api/backgrounds')
 def backgrounds():
     from .library import entries
@@ -376,6 +430,7 @@ def create_job(body, seed=None, approved=None):
     if body.background and body.background_mode!='none' and body.background not in backgrounds():
         raise HTTPException(409,'Selected secondary asset is unavailable')
     if body.publish_automatic:
+        if not config.AUTOMATIC_PUBLISHING:raise HTTPException(422,'Automatic publishing is disabled')
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
         if not policy or not policy['public_allowed'] or not policy['automatic']:
@@ -393,7 +448,15 @@ def create_job(body, seed=None, approved=None):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    try:return store.create(body.model_dump(), seed=seed, approved=approved)
+    try:
+        created = store.create(body.model_dump(), seed=seed, approved=approved)
+        store.save_source_rights(created['id'], {
+            'source_url': body.source if body.source.startswith('https://') else None,
+            'permission_status': 'operator_confirmed',
+            'attribution_required': body.attribution_required,
+            'license': body.source_attribution[:300] if body.source_attribution else 'Operator-confirmed rights',
+        })
+        return created
     except ValueError as error:raise HTTPException(409,str(error)) from None
 
 
@@ -462,6 +525,33 @@ def jobs(limit:int=50,offset:int=0):
     return store.list_jobs(limit,offset)
 
 
+@app.get('/api/job-history')
+def job_history(scope:Literal['recent','all','archived','trash']='recent',
+                state:Literal['','active','READY','FAILED','BLOCKED','CANCELLED']='',
+                search:str='',after:float=0,sort:Literal['newest','oldest']='newest',
+                limit:int=10,offset:int=0):
+    if not 1<=limit<=50 or not 0<=offset or len(search)>150:
+        raise HTTPException(422,'Invalid history filter or page size')
+    terminal=('READY','FAILED','BLOCKED','CANCELLED')
+    where=['j.created>=?'];params=[after]
+    if scope!='all':
+        where.append("coalesce(v.status,'recent')=?");params.append(scope)
+    if state=='active':
+        where.append('j.state NOT IN (?,?,?,?)');params.extend(terminal)
+    elif state:
+        where.append('j.state=?');params.append(state)
+    if search:
+        where.append("instr(fold(coalesce(json_extract(j.result,'$.source.title'),json_extract(j.request,'$.source'),j.id)),?)>0")
+        params.append(search.casefold())
+    order='DESC' if sort=='newest' else 'ASC'
+    with store.connect() as db:
+        db.create_function('fold',1,str.casefold,deterministic=True)
+        rows=db.execute('SELECT j.* FROM jobs j LEFT JOIN job_visibility v ON v.job=j.id WHERE '+
+                        ' AND '.join(where)+f' ORDER BY j.created {order},j.id {order} LIMIT ? OFFSET ?',
+                        (*params,limit+1,offset)).fetchall()
+        return {'items':[store.decode(row,db) for row in rows[:limit]],'has_more':len(rows)>limit}
+
+
 class JobVisibility(BaseModel):
     ids: list[str] = Field(min_length=1,max_length=50)
     status: Literal['recent','archived','trash']
@@ -525,7 +615,92 @@ def get_job(jid:str):
     value=store.get(jid)
     if not value:
         raise HTTPException(404,'Job not found')
+    value['editorial_workflow_state'] = store.editorial_workflow_state(value)
+    value['source_rights'] = store.get_source_rights(jid)
     return value
+
+
+@app.get('/api/jobs/{jid}/evidence')
+def job_evidence(jid:str):
+    job = get_job(jid)
+    root = config.SCRATCH / jid
+    graph_path = root / 'event-graph.json'
+    ev_path = root / 'source-evidence-v1.json'
+    graph_data = json.loads(graph_path.read_text(encoding='utf-8')) if graph_path.is_file() else {}
+    shots = []
+    duration = job['result'].get('source', {}).get('duration') or job['result'].get('processing_end') or 0
+    if ev_path.is_file():
+        ev_data = json.loads(ev_path.read_text(encoding='utf-8'))
+        duration = ev_data.get('context', {}).get('duration', duration)
+        shots = [
+            {
+                'shot_id': s['shot_id'],
+                'start': s['start'],
+                'end': s['end'],
+                'duration': s['duration'],
+                'boundary_type': s.get('boundary_type', 'hard_cut'),
+                'mean_motion': s.get('mean_motion', 0),
+                'speech_word_count': s.get('speech_word_count', 0),
+                'face_corners': s.get('face_corners', []),
+            }
+            for s in ev_data.get('shots', [])
+        ]
+    return {
+        'job_id': jid,
+        'duration': duration,
+        'shots': shots,
+        'format_breaks': graph_data.get('format_breaks') or job['result'].get('format_breaks', []),
+        'events': graph_data.get('events') or job['result'].get('events_summary', []),
+        'candidates': job['result'].get('candidates', []),
+        'review_alternatives': job['result'].get('review_alternatives', []),
+        'rejected_candidates': job['result'].get('rejected_candidates', []),
+        'editorial_workflow_state': job['editorial_workflow_state'],
+    }
+
+
+class EditorialFeedbackRequest(BaseModel):
+    candidate_index: int | None = Field(default=None, ge=0, le=100)
+    decision: Literal[
+        'approved',
+        'needs_trim',
+        'needs_different_layout',
+        'incorrect_event',
+        'unrelated_scenes',
+        'missing_payoff',
+        'weak_hook',
+        'reject',
+    ]
+    rejection_reasons: list[str] = Field(default_factory=list, max_length=10)
+    original_start: float | None = None
+    original_end: float | None = None
+    corrected_start: float | None = None
+    corrected_end: float | None = None
+    original_score: float | None = None
+    selected_layout: str | None = Field(default=None, max_length=60)
+    edited_hook: str | None = Field(default=None, max_length=150)
+    notes: str = Field(default='', max_length=500)
+
+
+@app.post('/api/jobs/{jid}/feedback', status_code=201)
+def post_feedback(jid: str, body: EditorialFeedbackRequest):
+    get_job(jid)
+    return store.record_feedback(jid, body.model_dump())
+
+
+@app.get('/api/jobs/{jid}/feedback')
+def get_job_feedback(jid: str):
+    get_job(jid)
+    return store.list_feedback(jid)
+
+
+@app.get('/api/feedback/summary')
+def get_feedback_summary():
+    return store.feedback_summary()
+
+
+@app.get('/api/production/metrics')
+def get_production_metrics():
+    return store.production_summary()
 
 
 @app.get('/api/jobs/{jid}/events')
@@ -563,11 +738,11 @@ def approve(jid:str,index:int,body:Approval):
 
 
 @app.post('/api/jobs/{jid}/metadata')
-def generate_metadata(jid:str):
+def generate_metadata(jid:str, force_overwrite:bool=False):
     from .drafts import regenerate
     from .inference import HEAVY_LOCK
     if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'The processing slot is busy. Metadata regeneration can run after the current GPU task finishes.')
-    try:return regenerate(jid)
+    try:return regenerate(jid, force_overwrite=force_overwrite)
     except (ValueError,KeyError,IndexError) as error:raise HTTPException(409,str(error)) from None
     finally:HEAVY_LOCK.release()
 

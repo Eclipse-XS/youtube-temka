@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime,timezone,timedelta
 import httpx
-from . import store
+from . import config,store
 from .drive import Drive, BASE, CHUNK, acknowledged
 
 YT='https://www.googleapis.com/youtube/v3'
@@ -145,6 +145,8 @@ def edit(pid,title,description,privacy='private',publish_at=None):
 
 
 def enqueue(jid,index,channel,title=None,description=None,privacy='private',publish_at=None,automatic=False):
+    if automatic and not config.AUTOMATIC_PUBLISHING:
+        raise ValueError('Automatic publishing is disabled; approve this exact render and metadata manually')
     job=store.get(jid)
     if not job or job['state']!='READY' or index<0:
         raise ValueError('Only READY outputs can be queued')
@@ -304,6 +306,10 @@ def upload(publication):
         if not job or job['state']!='READY':raise ValueError('Publication source is no longer ready')
         current=job['result']['outputs'][publication['output']]
         queued=json.loads(publication['metadata'])
+        if queued.get('automatic') and not config.AUTOMATIC_PUBLISHING:
+            if publication.get('session'):
+                raise Uncertain('Automatic publishing is disabled; reconcile the existing upload session manually')
+            raise ValueError('Automatic publishing is disabled; nothing uploaded')
         if not current.get('approved'):
             if not queued.get('automatic') or needs_editorial_review(job,publication['output']) or not store.preferences(publication['channel']).get('auto_approve'):
                 raise ValueError('Editorial approval was withdrawn; nothing uploaded')
@@ -485,6 +491,7 @@ def refresh_scheduled(now=None):
 
 def auto_queue():
     """Reconcile READY automatic jobs after restarts; enqueue remains idempotent."""
+    if not config.AUTOMATIC_PUBLISHING:return
     for job in store.list_jobs():
         if job['state']!='READY' or not job['request'].get('publish_automatic'):
             continue

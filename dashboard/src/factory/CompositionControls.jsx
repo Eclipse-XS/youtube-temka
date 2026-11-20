@@ -2,10 +2,11 @@ import React,{useEffect,useState} from 'react';
 
 export const layouts={auto:['Auto Recommended','Зберігає основне відео, якщо додатковий матеріал не вибрано'],smart:['Fill Screen','Основне відео заповнює кадр'],crop:['Center Crop','Центральна частина кадру'],blur:['Blurred Sides','Основне відео на розмитому фоні'],gameplay:['Split Screen','Основне відео зверху, додаткове знизу']};
 const hookPresets={
-  'Clean Gaming':{hook_font:'sans',hook_font_size:56,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'Bold Creator':{hook_font:'sans',hook_font_size:66,hook_outline:4,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'Minimal':{hook_font:'serif',hook_font_size:43,hook_outline:1,hook_shadow:true,hook_box:false,hook_position:'top'},
-  'High Contrast':{hook_font:'sans',hook_font_size:54,hook_outline:3,hook_shadow:false,hook_box:true,hook_position:'top'},
+  'Gaming Clean':{preset:'blur',hook_font:'sans',hook_font_size:52,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
+  'Gaming Dynamic':{preset:'auto',hook_font:'sans',hook_font_size:58,hook_outline:4,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'pop'},
+  'Streamer Reaction':{preset:'auto',hook_font:'sans',hook_font_size:50,hook_outline:3,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'pop'},
+  'Podcast Premium':{preset:'smart',hook_font:'sans',hook_font_size:48,hook_outline:2,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
+  'Satisfying / Visual':{preset:'blur',hook_font:'serif',hook_font_size:44,hook_outline:2,hook_shadow:true,hook_box:false,hook_position:'top',caption_style:'clean'},
 };
 export const textModes={none:'No Text',subtitles:'Subtitles',static_hook:'Static Hook',hook_subtitles:'Hook + Subtitles',custom:'Custom Text'};
 
@@ -18,14 +19,22 @@ function BackgroundPreview({name}) {
 
 export function LayoutPreview({form,thumbnail,video}) {
   const split=form.preset==='gameplay',blur=form.preset==='blur',wide=form.mode==='longs';
-  const primary=form.split_ratio||.65;
-  const primaryOffset=split&&form.background_position==='top'?1-primary:0;
-  const hookTop=100*(primaryOffset+(split?primary:1)*({top:.09,center:.45,bottom:.65}[form.hook_position||'top']));
-  const captionBottom=100*(form.caption_margin??(split&&form.background_position!=='top'?Math.min(.68,1-primary+.07):.15));
+  const [geometry,setGeometry]=useState(null);
+  const geometryRequest=JSON.stringify({ratio:form.split_ratio||.65,secondary_position:form.background_position||'bottom',
+    split,hook_position:form.hook_position||'top',caption_margin:form.caption_margin??null});
+  useEffect(()=>{
+    const request=new AbortController();
+    fetch('/api/composition/geometry',{method:'POST',headers:{'Content-Type':'application/json'},body:geometryRequest,signal:request.signal})
+      .then(response=>response.ok?response.json():null).then(value=>{if(!request.signal.aborted)setGeometry(value);}).catch(()=>{});
+    return ()=>request.abort();
+  },[geometryRequest]);
+  const primary=geometry?.primary.height/1920||form.split_ratio||.65;
+  const hookTop=split&&geometry?geometry.hook_anchor_y/19.2:({top:12,center:50,bottom:75}[form.hook_position||'top']);
+  const captionBottom=100*(geometry?.caption_margin??form.caption_margin??.15);
   const frame=thumbnail ? <img src={thumbnail} alt="Кадр джерела"/> : video ? <video src={video} muted playsInline preload="metadata" controls/> : <span>Додайте джерело для перегляду кадру</span>;
   return <figure className="layout-preview"><div style={split?{display:'flex',flexDirection:form.background_position==='top'?'column-reverse':'column'}:undefined} className={`layout-frame ${wide?'wide':''} ${blur?'blurred':''} ${split?'split':''}`}>
-    <div className={`main-frame ${split&&form.split_crop!=='fill'?'panel-fit':''}`} style={split?{height:`${(form.split_ratio||.65)*100}%`}:undefined}>{split&&form.split_crop!=='fill'&&form.split_crop!=='fit'&&thumbnail&&<img aria-hidden="true" className="panel-extension" src={thumbnail}/>}<div className="panel-content">{frame}</div></div>{split&&<div className={`secondary-frame ${form.split_crop!=='fill'?'panel-fit':''}`} style={{height:`${(1-(form.split_ratio||.65))*100}%`}}>{form.background_mode==='none'?'Додаткове відео вимкнене':form.background?<BackgroundPreview key={form.background} name={form.background}/>:'Додаткове відео з бібліотеки'}</div>}
-    {form.hook_mode!=='none'&&['static_hook','hook_subtitles','custom'].includes(form.text_mode)&&<strong className="preview-hook" style={{top:`${hookTop}%`,color:form.hook_color||'#fff',background:form.hook_box===false?'transparent':'#000b',fontFamily:{sans:'sans-serif',serif:'serif',mono:'monospace'}[form.hook_font||'sans'],fontSize:Math.max(9,(form.hook_font_size||48)/6)}}>{form.hook||'Заголовок відео'}</strong>}
+    <div className={`main-frame ${split&&form.split_crop!=='fill'?'panel-fit':''}`} style={split?{height:`${primary*100}%`}:undefined}>{split&&form.split_crop!=='fill'&&form.split_crop!=='fit'&&thumbnail&&<img aria-hidden="true" className="panel-extension" src={thumbnail}/>}<div className="panel-content">{frame}</div></div>{split&&<div className={`secondary-frame ${form.split_crop!=='fill'?'panel-fit':''}`} style={{height:`${(1-primary)*100}%`}}>{form.background_mode==='none'?'Додаткове відео вимкнене':form.background?<BackgroundPreview key={form.background} name={form.background}/>:'Додаткове відео з бібліотеки'}</div>}
+    {form.hook_mode!=='none'&&['static_hook','hook_subtitles','custom'].includes(form.text_mode)&&<strong className="preview-hook" style={{top:`${hookTop}%`,transform:form.hook_position==='bottom'?'translateY(-100%)':form.hook_position==='center'?'translateY(-50%)':undefined,color:form.hook_color||'#fff',background:form.hook_box===false?'transparent':'#000b',fontFamily:{sans:'sans-serif',serif:'serif',mono:'monospace'}[form.hook_font||'sans'],fontSize:Math.max(9,(form.hook_font_size||48)/6)}}>{form.hook||'Заголовок відео'}</strong>}
     {(form.text_mode?['subtitles','hook_subtitles'].includes(form.text_mode):form.captions)&&<span className="preview-subtitles" style={{bottom:`${captionBottom}%`}}>Приклад субтитрів</span>}
     {form.logo_asset&&<span className="preview-logo"><img src={`/api/library/logos/${form.logo_asset}`} alt="Лого" style={{width:'100%'}}/></span>}
   </div><figcaption>Preview only · {layouts[form.preset]?.[1]}. Остаточне кадрування перевіряється після рендера.</figcaption></figure>;
@@ -66,6 +75,11 @@ export default function CompositionControls({form,set,backgrounds=[],channels=[]
     <label>Кадрування<select value={form.split_crop||'blurred'} onChange={e=>set('split_crop',e.target.value)}><option value="blurred">Весь кадр із розмитим заповненням</option><option value="fit">Весь кадр із чорними полями</option><option value="fill">Заповнити панелі</option></select></label>
     <label className="check"><input type="checkbox" checked={form.background_loop??true} onChange={e=>set('background_loop',e.target.checked)}/>Повторювати фонове відео</label>
   </div>}
+  {form.mode==='shorts'&&<p className="muted">{({
+    independent:'Окремі моменти з різних частин джерела.',
+    connected:'Послідовні частини однієї підтвердженої події.',
+    sequential:'Поділ заданого інтервалу за часом.'
+  })[form.series_mode||'independent']}</p>}
   <LayoutPreview form={form} thumbnail={thumbnail} video={video}/>
   <details><summary>Оформлення тексту та переклад</summary><div className="grid"><label>Шрифт<select value={form.hook_font||'sans'} onChange={e=>set('hook_font',e.target.value)}><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select></label><label>Колір<input type="color" value={form.hook_color||'#ffffff'} onChange={e=>set('hook_color',e.target.value)}/></label><label>Розмір шрифту<input type="number" min="18" max="96" value={form.hook_font_size||48} onChange={e=>set('hook_font_size',+e.target.value)}/></label><label>Обведення<input type="number" min="0" max="8" value={form.hook_outline??2} onChange={e=>set('hook_outline',+e.target.value)}/></label><label>Переклад субтитрів<select value={form.subtitle_language||''} onChange={e=>set('subtitle_language',e.target.value||null)}><option value="">Мова оригіналу</option>{['en','es','pt-BR','de','ru','uk'].map(l=><option key={l}>{l}</option>)}</select></label></div>{[['hook_box','Підкладка'],['hook_shadow','Тінь']].map(([key,label])=><label className="check" key={key}><input type="checkbox" checked={form[key]??true} onChange={e=>set(key,e.target.checked)}/>{label}</label>)}<p>Переклад зберігає часові межі фраз і потребує редакторської перевірки.</p></details>
   </section>;

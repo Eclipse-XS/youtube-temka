@@ -17,7 +17,7 @@ from .inference import generate, model_session
 
 CATEGORIES={'1':'Film & Animation','2':'Autos & Vehicles','10':'Music','15':'Pets & Animals','17':'Sports','19':'Travel & Events','20':'Gaming','22':'People & Blogs','23':'Comedy','24':'Entertainment','25':'News & Politics','26':'Howto & Style','27':'Education','28':'Science & Technology','29':'Nonprofits & Activism'}
 STOP=set('the a an and or to of in on for is are was were this that it with as at by from be have has not you your we our i they their video clip highlights це та і й або для на у в з із що як до по ми ви він вона вони не про este esta el la los las de y en un una que para con es por'.split())
-BOILERPLATE=set('video clip excerpt highlights source selected original watch discuss discusses discussion interview podcast stream gameplay short shorts відео уривок джерело оригінал фрагмент resumen vídeo fragmento fuente'.split())
+BOILERPLATE=set('video clip excerpt highlights source selected original watch discuss discusses discussion interview podcast stream gameplay short shorts відео уривок джерело оригінал фрагмент resumen vídeo fragmento fuente shown showing frames frame sequence scene scenes'.split())
 
 
 def words(text):
@@ -86,15 +86,18 @@ class ContentBrief(BaseModel):
     confirmed_subject: str = Field(default='',max_length=100)
     operator_observation: str = Field(default='',max_length=500)
     category: str
+    gaming_hint: bool = False
     include_source_link: bool
     attribution_required: bool
 
 
 def brief(request, source_title):
-    return ContentBrief(source_title_claim=source_title[:500],
+    gaming_hint=(request.source_category=='gameplay' or
+                 (request.source_category=='auto' and bool(re.search(r'\b(gta|grand theft auto|gameplay|minecraft)\b',source_title,re.I))))
+    return ContentBrief(gaming_hint=gaming_hint, source_title_claim=source_title[:500],
                         confirmed_subject=request.confirmed_subject.strip(),
                         operator_observation=request.clip_observation.strip(),
-                        category=request.category_override or ('20' if request.source_category=='gameplay' else ''),
+                        category=request.category_override or ('20' if gaming_hint else ''),
                         include_source_link=request.include_source_link,
                         attribution_required=request.attribution_required).model_dump()
 
@@ -111,7 +114,31 @@ def context(transcript,request,source,candidates,output,source_url=None,preferen
         from .tts import VOICES
         actual=request.tts_text or actual;language=VOICES[request.tts_voice]
     preferences=preferences or getattr(request,'metadata_preferences',{})
-    return {'brief':brief(request,source.get('title','')),'transcript':actual,'source_title':source.get('title',''),'source_url':source_url if source_url and source_url.startswith('https://') else None,'intervals':[[request.start+c['start_seconds'],request.start+c['end_seconds']] for c in candidates],'highlight_explanations':[{'title':c.get('title',''),'reason':c.get('reason','')} for c in candidates],'audio_language':None if request.audio_mode=='silent' or not output.get('validation',{}).get('audio',True) else language,'metadata_language':getattr(request,'metadata_language',None) or preferences.get('metadata_language') or language,'content_category':request.source_category,'duration':output['duration'],'mode':request.mode,'source_attribution':request.source_attribution,'preferences':preferences,'series':output.get('series')}
+    return {
+        'brief': brief(request, source.get('title', '')),
+        'transcript': actual,
+        'source_title': source.get('title', ''),
+        'source_url': source_url if source_url and source_url.startswith('https://') else None,
+        'intervals': [[request.start + c['start_seconds'], request.start + c['end_seconds']] for c in candidates],
+        'highlight_explanations': [
+            {
+                'title': c.get('title', ''),
+                'reason': c.get('reason', ''),
+                'vlm_summary': c.get('vlm_summary', ''),
+                'evidence': c.get('evidence', [])[:4],
+                'semantic_verification': c.get('semantic_verification', ''),
+            }
+            for c in candidates
+        ],
+        'audio_language': None if request.audio_mode == 'silent' or not output.get('validation', {}).get('audio', True) else language,
+        'metadata_language': getattr(request, 'metadata_language', None) or preferences.get('metadata_language') or language,
+        'content_category': request.source_category,
+        'duration': output['duration'],
+        'mode': request.mode,
+        'source_attribution': request.source_attribution,
+        'preferences': preferences,
+        'series': output.get('series'),
+    }
 
 
 def fingerprint(ctx):return hashlib.sha256(json.dumps(ctx,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -132,10 +159,59 @@ def _description(body,ctx,hashtags):
     return fit_bytes(clean_text(body),5000-len(suffix.encode())-2)+'\n\n'+suffix
 
 
+def _clean_phrase_truncate(text: str, max_len: int = 58) -> str:
+    """Truncate cleanly on word boundaries without leaving dangling stopwords/articles."""
+    text = re.sub(r'[\u4e00-\u9fff]+', '', text).strip()
+    text = ' '.join(text.split())
+    if len(text) > max_len:
+        cut = text[:max_len].rsplit(' ', 1)[0] if ' ' in text[:max_len] else text[:max_len]
+        text = cut.rstrip(',.;:-')
+    dangling = {'a', 'an', 'the', 'and', 'or', 'on', 'in', 'at', 'to', 'of', 'for', 'with', 'is', 'are', 'was', 'were', 'where', 'that', 'which', 'by'}
+    parts = text.split()
+    while len(parts) > 2 and parts[-1].rstrip(',.;:').casefold() in dangling:
+        parts.pop()
+    return ' '.join(parts).rstrip(',.;:- ')
+
+
+def _verified_visual_phrase(ctx) -> str:
+    boilerplate_prefix = re.compile(
+        r'^(?:a\s+)?(?:sequence of (?:four|\d+) (?:gameplay )?frames(?: from a video game)? showing|'
+        r'video game sequence shows?|four (?:gameplay )?frames(?: showing)?|'
+        r'the (?:video|clip|scene|frames) shows?)\s+',
+        re.IGNORECASE,
+    )
+    for item in ctx.get('highlight_explanations', []):
+        vlm_sum = clean_text(str(item.get('vlm_summary', '') or ''))
+        if vlm_sum:
+            cleaned = boilerplate_prefix.sub('', vlm_sum).strip()
+            first_clause = re.split(r'[.!?;]', cleaned)[0].strip()
+            polished = _clean_phrase_truncate(first_clause, 58)
+            if len(polished) >= 8:
+                return polished[0].upper() + polished[1:]
+    return ''
+
+
+def _grounded_transcript_phrase(ctx) -> str:
+    text = clean_text(ctx.get('transcript', ''))
+    if not text:
+        return ''
+    terms = [w for w in words(text) if w not in STOP and len(w) > 2]
+    if len(terms) < 3:
+        return ''
+    # Pick a clean short clause from transcript (never single profanity/stopwords)
+    for clause in re.split(r'(?<=[.!?])\s+', text):
+        cleaned = clean_text(clause)
+        if 14 <= len(cleaned) <= 68 and len(cleaned.split()) >= 3:
+            return cleaned
+    return ' '.join(text.split()[:9])[:68]
+
+
 def contextual_draft(ctx):
     value = ContentBrief.model_validate(ctx['brief'])
-    subject = clean_text(value.confirmed_subject) or 'Gaming'
+    subject = ' '.join(clean_text(value.confirmed_subject).split()) or 'Gaming'
     observation = clean_text(value.operator_observation)
+    vlm_phrase = _verified_visual_phrase(ctx)
+    transcript_phrase = _grounded_transcript_phrase(ctx)
     lang = (ctx['metadata_language'] or 'en').split('-')[0]
     if lang == 'uk':
         labels = ['Ігровий момент','Фрагмент гри','Момент із добірки','Ігровий епізод','Короткий фрагмент']
@@ -143,17 +219,35 @@ def contextual_draft(ctx):
     else:
         labels = ['Gameplay Highlight','Gameplay Clip','Gaming Moments','Gameplay Excerpt','Short Gameplay Segment']
         neutral = 'Gameplay excerpt. The specific event needs editorial verification.'
+    specific_event = ''
     if observation:
         labels.insert(0, observation.splitlines()[0])
+        specific_event = observation.splitlines()[0]
+    elif vlm_phrase:
+        labels.insert(0, vlm_phrase)
+        specific_event = vlm_phrase
+    elif transcript_phrase and lang == (ctx.get('audio_language') or lang).split('-')[0]:
+        labels.insert(0, transcript_phrase)
+        specific_event = transcript_phrase
     titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in labels))
-    is_gaming = ctx['content_category']=='gameplay'
+    is_gaming = value.gaming_hint or ctx['content_category']=='gameplay'
     if not is_gaming:
         titles = list(dict.fromkeys(f'{subject[:55]} | {label}'[:100].rstrip() for label in
-                      ([observation.splitlines()[0]] if observation else []) +
+                      ([specific_event] if specific_event else []) +
                       (['Короткий фрагмент','Уривок','Момент із відео'] if lang=='uk' else
                        ['Video Excerpt','Selected Moment','Short Clip','Source Highlight','Video Segment'])))
         neutral = subject
-    tags = clean_tags([subject] + ([f'{subject} gameplay','gaming clips'] if is_gaming else []))
+    subject_terms=set(words(subject))
+    gameplay_tag=f'{subject} gameplay' if not subject_terms.intersection({'gaming','gameplay'}) else subject
+    # Extract clean domain-relevant extra tags ONLY from verified visual summary (never transcript stopwords!)
+    extra_tags = []
+    if vlm_phrase:
+        for tok in words(vlm_phrase):
+            if tok not in STOP and tok not in BOILERPLATE and len(tok) >= 4 and tok not in subject_terms:
+                extra_tags.append(tok)
+                if len(extra_tags) >= 3:
+                    break
+    tags = clean_tags([subject] + ([gameplay_tag,'gaming clips'] if is_gaming else []) + extra_tags)
     hashtag = re.sub(r'[^\w]','',subject)[:60]
     hashtags = list(dict.fromkeys(([f'#{hashtag}'] if hashtag else []) +
                                (['#Gaming'] if is_gaming else ['#Video']) +
@@ -162,13 +256,23 @@ def contextual_draft(ctx):
     if not value.confirmed_subject:issues.append('game_identity_unconfirmed')
     if is_gaming and _category(ctx)!='20':issues.append('category_override_conflicts_with_gameplay')
     if lang not in ('uk','en'):issues.append('description_template_language_requires_review')
-    description = f'{subject}. {observation}' if observation else f'{subject}. {neutral}'
+    if observation:
+        description = f'{subject}. {observation}'
+        quality_reasons = ['Operator-confirmed observation and subject context.']
+    elif vlm_phrase:
+        description = f'{subject}. {vlm_phrase}.'
+        if transcript_phrase:
+            description += f' Dialogue excerpt: "{transcript_phrase}".'
+        quality_reasons = ['Grounded in verified local visual observation and confirmed subject; source title remains an unverified claim.']
+    else:
+        description = f'{subject}. {neutral}'
+        quality_reasons = ['Operator context and observations; source title is an unverified claim.']
     return PublishingMetadata(title=titles[0],alternative_titles=titles[1:3],title_candidates=titles[:10],
                               description=_description(description,ctx,hashtags),tags=tags,hashtags=hashtags,
                               category_id=_category(ctx),audio_language=ctx['audio_language'],
                               metadata_language=ctx['metadata_language'] or 'und',
                               source_attribution=ctx['source_attribution'],review_required=True,
-                              validation_issues=issues,quality_reasons=['Operator context and observations; source title is an unverified claim.'])
+                              validation_issues=issues,quality_reasons=quality_reasons)
 
 
 def fallback(ctx,reason='technical_llm_failure'):
@@ -271,7 +375,7 @@ class Generator:
         digest=fingerprint(ctx)
         if previous and previous.get('provenance',{}).get('input_sha256')==digest:return previous
         brief_data=ctx.get('brief',{})
-        if brief_data.get('confirmed_subject') or ctx['content_category']=='gameplay':
+        if brief_data.get('confirmed_subject') or brief_data.get('gaming_hint') or ctx['content_category']=='gameplay':
             draft=contextual_draft(ctx)
             result=draft.model_dump()
             result.update(version=uuid.uuid4().hex,generated_at=datetime.now(timezone.utc).isoformat(),

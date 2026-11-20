@@ -36,12 +36,18 @@ def contexts_for_job(job):
         if temporary:path.unlink(missing_ok=True)
 
 
-def regenerate(jid):
+def regenerate(jid, force_overwrite=False):
     job=store.get(jid)
     if not job or job['state']!='READY':raise ValueError('Metadata generation is available for completed jobs')
     contexts=contexts_for_job(job)
     drafts=metadata.generate_outputs(contexts,job['request'].get('llm_model'))
-    for index,value in enumerate(drafts):store.revise_metadata(jid,index,value,manual=False)
+    for index,value in enumerate(drafts):
+        if not force_overwrite:
+            history=store.metadata_history(jid,index)
+            if history and history[0].get('manual'):
+                # Preserve manually edited metadata unless force_overwrite is explicitly requested
+                continue
+        store.revise_metadata(jid,index,value,manual=False)
     return store.get(jid)
 
 

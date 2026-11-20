@@ -1,4 +1,4 @@
-import React,{useState} from 'react';
+import React,{useEffect,useState} from 'react';
 
 const terminal = ['READY','FAILED','BLOCKED','CANCELLED'];
 
@@ -6,12 +6,16 @@ export default function JobHistory({jobs,render,api,post,act,refresh}) {
   const [scope,setScope]=useState('recent'),[search,setSearch]=useState(''),[state,setState]=useState('');
   const [after,setAfter]=useState(''),[sort,setSort]=useState('newest');
   const [page,setPage]=useState(0),[selected,setSelected]=useState([]),[preview,setPreview]=useState(null);
-  const rows=jobs.filter(job=>(scope==='all'||(job.visibility||'recent')===scope)&&
-    (!state||(state==='active'?!terminal.includes(job.state):job.state===state))&&
-    (!after||job.created*1000>=new Date(after+'T00:00:00').getTime())&&
-    (job.result.source?.title||job.request.source||job.id).toLowerCase().includes(search.toLowerCase())).sort((a,b)=>sort==='newest'?b.created-a.created:a.created-b.created);
-  const last=Math.max(0,Math.ceil(rows.length/10)-1);
-  const current=Math.min(page,last);
+  const [data,setData]=useState({items:[],has_more:false}),[error,setError]=useState('');
+  const query=new URLSearchParams({scope,search,state,sort,offset:String(page*10),
+    after:String(after?new Date(after+'T00:00:00').getTime()/1000:0)});
+  useEffect(()=>{
+    const request=new AbortController();
+    api('/job-history?'+query,{signal:request.signal}).then(value=>{setData(value);setError('');})
+      .catch(error=>{if(!request.signal.aborted)setError(error.message);});
+    return ()=>request.abort();
+  },[query.toString(),jobs]);
+  const rows=data.items;
   const move=status=>act(async()=>{
     await post('/jobs/visibility',{ids:selected,status});setSelected([]);setPreview(null);await refresh();
   });
@@ -37,12 +41,13 @@ export default function JobHistory({jobs,render,api,post,act,refresh}) {
       await post('/jobs/'+preview.job+'/delete-record',{confirmation});
       setSelected([]);setPreview(null);await refresh();
     })}>Остаточно видалити запис</button>}
-    {rows.slice(current*10,current*10+10).map(job=><div key={job.id}>
+    {rows.map(job=><div key={job.id}>
       <label className="check"><input type="checkbox" disabled={!terminal.includes(job.state)} checked={selected.includes(job.id)}
         onChange={e=>{setPreview(null);setSelected(e.target.checked?[...selected,job.id]:selected.filter(id=>id!==job.id));}}/>Вибрати завдання</label>
       {render(job)}
     </div>)}
     {!rows.length&&<p>Завдань не знайдено.</p>}
-    {last>0&&<div><button disabled={!current} onClick={()=>setPage(current-1)}>Назад</button> {current+1} / {last+1} <button disabled={current===last} onClick={()=>setPage(current+1)}>Далі</button></div>}
+    {error&&<p className="error">{error}</p>}
+    {(data.has_more||page>0)&&<div><button disabled={!page} onClick={()=>setPage(page-1)}>Назад</button> {page+1} <button disabled={!data.has_more} onClick={()=>setPage(page+1)}>Далі</button></div>}
   </section>;
 }
