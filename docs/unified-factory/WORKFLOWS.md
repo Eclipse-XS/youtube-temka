@@ -37,3 +37,10 @@ disables automatic publishing and the publisher and Analytics background loops.
 For local staging, keep any provider verification read-only and keep credential
 mounts outside the repository. The integration backup and operator token stay on
 the local machine.
+
+To verify the existing providers through the unified controller, combine
+`compose.unified.local.yml` with `compose.unified.providers.yml`. Point
+`FACTORY89_MANAGED_OAUTH`, `FACTORY89_LEGACY_YOUTUBE`,
+`FACTORY89_LEGACY_ANALYTICS` and `FACTORY89_LEGACY_DRIVE` to the existing
+credential directories. The override mounts them read-only. Compose keeps the
+unified data and scratch mounts and leaves both background provider loops disabled.
