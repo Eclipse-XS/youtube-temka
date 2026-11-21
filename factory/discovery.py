@@ -364,6 +364,7 @@ def discover_highlights(
     vlm: LocalVisionAdapter | None = None,
     budget: DiscoveryBudget | None = None,
     speech_proposals: list[dict[str, Any]] | None = None,
+    activity_proposals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute Map -> Pool -> Verify -> Score -> Pairwise Rank -> Select."""
     budget = budget or DiscoveryBudget()
@@ -451,8 +452,14 @@ def discover_highlights(
             continue
         mapped.append(base_entry)
 
-    # 1b. Map from external speech/LLM proposals — ONLY trimmed/checked against SemanticEventGraph!
-    for sp in (speech_proposals or []):
+    # External proposals are all checked against the semantic event graph.
+    proposals = [
+        *((item, 'transcript_proposal') for item in (speech_proposals or [])),
+        *((item, 'activity_proposal') for item in (activity_proposals or [])),
+    ]
+    for sp, provenance in proposals:
+        is_activity = provenance == 'activity_proposal'
+        label = 'Activity' if is_activity else 'Speech'
         a, b = float(sp.get('start_seconds', 0)), float(sp.get('end_seconds', 0))
         if not (0 <= a < b <= duration):
             continue
@@ -468,17 +475,17 @@ def discover_highlights(
                 'start_seconds': a,
                 'end_seconds': b,
                 'decision': 'REJECT',
-                'reason': 'Speech proposal contaminated by format break; remaining clean span below minimum duration.',
+                'reason': f'{label} proposal contaminated by format break; remaining clean span below minimum duration.',
             })
             continue
-        # Reject speech proposals that cross an interior format break or merge unrelated events
+        # Reject proposals that cross an interior format break or merge unrelated events
         interior_breaks = _check_format_break_overlap(trimmed_a, trimmed_b, graph.format_breaks)
         if interior_breaks:
             rejected_log.append({
                 'start_seconds': a,
                 'end_seconds': b,
                 'decision': 'SPLIT_EVENTS',
-                'reason': f'Speech proposal crosses interior format break ({interior_breaks[0].kind}).',
+                'reason': f'{label} proposal crosses interior format break ({interior_breaks[0].kind}).',
             })
             continue
         matching_events = [e for e in graph.events if _overlap_sec(trimmed_a, trimmed_b, e.start, e.end) >= 3.5]
@@ -487,7 +494,7 @@ def discover_highlights(
                 'start_seconds': a,
                 'end_seconds': b,
                 'decision': 'SPLIT_EVENTS',
-                'reason': f'Speech proposal spans {len(matching_events)} unrelated visual events.',
+                'reason': f'{label} proposal spans {len(matching_events)} unrelated visual events.',
             })
             continue
         ev = matching_events[0] if matching_events else None
@@ -495,7 +502,7 @@ def discover_highlights(
             'event_id': ev.event_id if ev else None,
             'start_seconds': round(trimmed_a, 3),
             'end_seconds': round(trimmed_b, 3),
-            'provenance': ['transcript_proposal'],
+            'provenance': [provenance],
             'event': ev,
             'shot_count': ev.shot_count if ev else 1,
             'speech_text': sp.get('setup', '') + ' ' + sp.get('development', '') + ' ' + sp.get('payoff', ''),
@@ -509,9 +516,10 @@ def discover_highlights(
             'reaction_time': ev.reaction_time if ev else None,
             'natural_end_time': round(trimmed_b, 3),
             'face_corners': ev.face_corners if ev else [],
-            'evidence': list(sp.get('evidence', [])) + (list(ev.evidence[:2]) if ev else []),
-            'boundary_note': 'Trimmed cleanly before format break' if (trimmed_a != a or trimmed_b != b) else 'Speech proposal verified against event graph',
-            'content_type': 'speech',
+            'evidence': list(sp.get('evidence', [])) + ([sp['reason']] if is_activity and sp.get('reason') else [])
+                        + (list(ev.evidence[:2]) if ev else []),
+            'boundary_note': 'Trimmed cleanly before format break' if (trimmed_a != a or trimmed_b != b) else f'{label} proposal checked against the event graph',
+            'content_type': 'visual_activity' if is_activity else 'speech',
             'language': language,
             'llm_title': sp.get('title', ''),
         })

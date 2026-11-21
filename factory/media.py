@@ -66,7 +66,7 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None, cwd=No
             if now>=next_check:
                 preflight()
                 tick(None,duration)
-                next_check=now+.5
+                next_check=time.monotonic()+1
             if eof:
                 if process.poll() is not None:break
                 time.sleep(.1)

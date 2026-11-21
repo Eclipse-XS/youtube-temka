@@ -24,12 +24,14 @@ JSON columns. The existing schema and data remain readable.
 the unified code and built dashboard read-only, and shares the read-only model
 cache and the host inference lock. SQLite and the asset copy live in the
 `factory89-unified_unified_data` Docker volume. Render outputs and checkpoints
-live in the separate host directory set by `FACTORY89_SCRATCH`. Set
+live in the separate `factory89-unified_unified_scratch` volume. Native Docker
+volumes keep SQLite and scratch accounting off Windows bind mounts. Set
 `FACTORY89_CONTROLLER_TOKEN` to a separate token of at least 32 characters.
-To import prior state, create the controller without starting it, then seed the
-new volume with an online SQLite backup and copies of the asset directories.
-Run SQLite's quick check and set ownership to the container user (10001) before
-starting the controller. Build the dashboard with
+To import prior state, create the controller without starting it. Seed its new
+data volume with an online SQLite backup and copies of the asset directories.
+Copy the checkpoint and media snapshot into the new scratch volume. Run SQLite's
+quick check and set ownership to the container user (10001) before starting the
+controller. Finished videos can be exported with `docker cp`. Build the dashboard with
 `npm ci` and `npm run build` in `dashboard`, then run:
 
 ```powershell

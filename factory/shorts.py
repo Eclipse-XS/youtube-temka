@@ -413,11 +413,12 @@ def plan_v8(
 
         # Independent Highlights mode
         speech_proposals = []
+        activity_proposals = []
         coverage = None
         if include_activity:
             from .signals import from_evidence, propose
             events, scenes, coverage = from_evidence(evidence)
-            speech_proposals.extend(
+            activity_proposals.extend(
                 item.model_dump() for item in propose(events, scenes, request, duration, source_title)
             )
         bounded = (request.model_copy(update={'maximum': min(request.maximum, PLATFORM_MAXIMUM)})
@@ -436,6 +437,7 @@ def plan_v8(
             vlm=vlm,
             budget=DiscoveryBudget(max_vlm_verified=min(6, max(3, request.count * 2))),
             speech_proposals=speech_proposals,
+            activity_proposals=activity_proposals,
         )
         if coverage is not None:
             result['signal_coverage'] = coverage

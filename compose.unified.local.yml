@@ -26,7 +26,7 @@ services:
     volumes:
       - ./factory:/app/factory:ro
       - unified_data:/data
-      - ${FACTORY89_SCRATCH:?Set FACTORY89_SCRATCH}:/scratch
+      - unified_scratch:/scratch
       - factory8_models:/home/factory/.cache:ro
       - factory8_heavy_lock:/host-locks
     mem_limit: 4g
@@ -40,6 +40,7 @@ services:
       - controller
 volumes:
   unified_data:
+  unified_scratch:
   factory8_models:
     external: true
     name: factory80-staging_controller_models
