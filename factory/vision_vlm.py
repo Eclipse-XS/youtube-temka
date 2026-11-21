@@ -312,7 +312,7 @@ class LocalVisionAdapter:
         options: dict[str, Any] = {
             'num_ctx': 2048,
             'temperature': 0,
-            'num_predict': 240 if context.get('connected_story') else 450,
+            'num_predict': 640 if context.get('connected_story') else 450,
             'num_thread': 2,
         }
         if layers is not None:
@@ -654,9 +654,13 @@ class LocalVisionAdapter:
                 'Set contains_unrelated_scene for scenes without a common narrative. '
                 'Describe concrete setup_observed, development_observed, climax_observed and payoff_observed supported by the dialogue or visible action. '
                 'A plan alone has no payoff. Leave unsupported fields empty. '
-                'Use terse fragments, at most six words per text field. Return strict JSON.'
+                'Use at most six words per evidence field. Keep event_summary short and defects empty when no defect is visible. '
+                'Return only the JSON object.'
             )
-        raw = self._call_ollama_vision('verify_event_continuity', prompt, [grid_img], schema, {'ts': ts_str, **ctx})
+        request_context = {'ts': ts_str, **ctx}
+        if ctx.get('connected_story'):
+            request_context['story_output_version'] = 2
+        raw = self._call_ollama_vision('verify_event_continuity', prompt, [grid_img], schema, request_context)
         if raw and '_raw_text' not in raw:
             defects = [str(d)[:120] for d in (raw.get('defects') or [])[:8]]
             has_break = bool(raw.get('contains_format_break'))
