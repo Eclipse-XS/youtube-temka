@@ -22,10 +22,14 @@ JSON columns. The existing schema and data remain readable.
 
 `compose.unified.local.yml` uses the local Factory 8 dependency images, mounts
 the unified code and built dashboard read-only, and shares the read-only model
-cache and the host inference lock. It has an independent SQLite database and
-scratch directory. Set `FACTORY89_DATA`, `FACTORY89_SCRATCH` and
-`FACTORY89_CONTROLLER_TOKEN` locally. Use a separate token of at least 32
-characters and an independent copy of data and scratch. Build the dashboard with
+cache and the host inference lock. SQLite and the asset copy live in the
+`factory89-unified_unified_data` Docker volume. Render outputs and checkpoints
+live in the separate host directory set by `FACTORY89_SCRATCH`. Set
+`FACTORY89_CONTROLLER_TOKEN` to a separate token of at least 32 characters.
+To import prior state, create the controller without starting it, then seed the
+new volume with an online SQLite backup and copies of the asset directories.
+Run SQLite's quick check and set ownership to the container user (10001) before
+starting the controller. Build the dashboard with
 `npm ci` and `npm run build` in `dashboard`, then run:
 
 ```powershell

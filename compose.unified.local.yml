@@ -25,7 +25,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - ./factory:/app/factory:ro
-      - ${FACTORY89_DATA:?Set FACTORY89_DATA}:/data
+      - unified_data:/data
       - ${FACTORY89_SCRATCH:?Set FACTORY89_SCRATCH}:/scratch
       - factory8_models:/home/factory/.cache:ro
       - factory8_heavy_lock:/host-locks
@@ -39,6 +39,7 @@ services:
     depends_on:
       - controller
 volumes:
+  unified_data:
   factory8_models:
     external: true
     name: factory80-staging_controller_models
