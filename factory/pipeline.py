@@ -132,6 +132,7 @@ def process(claim,assets=None):
         srt=(root/'transcript.srt').read_text(encoding='utf-8')
         (root/'transcript.vtt').write_text('WEBVTT\n\n'+re.sub(r'(\d\d:\d\d:\d\d),(\d{3})',r'\1.\2',srt.lstrip('\ufeff')),encoding='utf-8')
         progress.begin('highlights','ANALYZING')
+        render_source, render_offset = source, request.start
         analysis_checkpoint=root/'analysis.json'
         from .shorts import identity, plan
         modern = request.mode == 'shorts' and (request.selection_version == 2 or request.series_mode == 'sequential')
@@ -151,6 +152,16 @@ def process(claim,assets=None):
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
         elif modern:
             local_path=media.local_source(source)
+            analysis_request = request
+            if local_path is None and request.series_mode == 'connected':
+                # The remote interval is stored in source-relative time, just like the transcript.
+                local_path = root / 'connected-source.mp4'
+                if not local_path.is_file():
+                    partial = root / 'connected-source.partial.mp4'
+                    media.download(source, partial, request.start, end, resolution, False, progress.tick)
+                    partial.replace(local_path)
+                analysis_request = request.model_copy(update={'start': 0})
+                render_source, render_offset = local_path, 0
             use_visual = request.series_mode != 'sequential' and (
                 not transcript['segments'] or request.series_mode == 'connected' or
                 request.source_category in ('visual','gameplay','stream','auto')
@@ -158,8 +169,8 @@ def process(claim,assets=None):
             if local_path and request.series_mode != 'sequential':
                 from .shorts import plan_v8
                 result = plan_v8(
-                    source,
-                    request,
+                    local_path,
+                    analysis_request,
                     transcript,
                     duration,
                     root=root,
@@ -210,7 +221,14 @@ def process(claim,assets=None):
                         if stale.is_file():stale.unlink()
                 result['outputs']=[]
         if candidates:write_json_atomic(analysis_checkpoint,result,ensure_ascii=True)
-        update(result=result);progress.done()
+        cached_source = root / 'connected-source.mp4'
+        if request.series_mode == 'connected' and cached_source.is_file():
+            render_source, render_offset = cached_source, 0
+        update(result=result)
+        if candidates:
+            progress.done()
+        else:
+            progress.done(status='blocked', message='Analysis finished with zero selected clips. Review the selection diagnostics.')
         if modern and not candidates:raise NeedsReview(result.get('selection_summary','No usable source interval was found.'))
         if request.plan_only:
             boundaries=[s['end'] for s in transcript['segments'] if s['text'].rstrip().endswith(('.', '?', '!'))]
@@ -242,7 +260,7 @@ def process(claim,assets=None):
             if clip.is_file():
                 try:media.validate_output(clip,duration)
                 except Exception:clip.unlink()
-            if not clip.is_file():media.download(source,clip,request.start+candidate['start_seconds'],request.start+candidate['end_seconds'],resolution,False,progress.tick)
+            if not clip.is_file():media.download(render_source,clip,render_offset+candidate['start_seconds'],render_offset+candidate['end_seconds'],resolution,False,progress.tick)
             raw_sources[output.name]=clip;progress.done()
             def render_stage(key):
                 if progress.active in ('rendering','captions_audio'):progress.done()

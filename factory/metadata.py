@@ -133,6 +133,7 @@ def context(transcript,request,source,candidates,output,source_url=None,preferen
         'audio_language': None if request.audio_mode == 'silent' or not output.get('validation', {}).get('audio', True) else language,
         'metadata_language': getattr(request, 'metadata_language', None) or preferences.get('metadata_language') or language,
         'content_category': request.source_category,
+        'channel_content_profile': request.youtube_channel_key,
         'duration': output['duration'],
         'mode': request.mode,
         'source_attribution': request.source_attribution,
@@ -388,6 +389,11 @@ class Generator:
         # UUID filenames, timestamps and source URLs are provenance, not claims
         # the small model should turn into a video title.
         prompt['evidence']={key:ctx[key] for key in ('metadata_language','audio_language','content_category')}
+        profile = ctx.get('channel_content_profile')
+        if profile == 'leonida_mayhem':
+            prompt['instruction'] += ' Prefer concise, lively wording for entertainment. Preserve the evidence and avoid manufactured jokes or events.'
+        elif profile == 'thevicescope':
+            prompt['instruction'] += ' Use a structured, informative tone and label speculation explicitly. Attribute claims to the provided transcript.'
         prompt['evidence']['transcript']=ctx['transcript'][:7500]
         prompt['validated_phrase_choices']=list(dict.fromkeys([grounded.title,*grounded.alternative_titles,*[item['text'] for item in rank_titles(grounded,ctx)]]))[:10]
         prompt['allowed_tags']=grounded.tags

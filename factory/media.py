@@ -182,9 +182,9 @@ def probe(source):
 
 
 def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
-    """Never fall back to downloading the full remote VOD."""
+    """Retrieve a bounded interval from a validated URL or internal local file."""
     preflight()
-    local=local_source(source)
+    local=source if isinstance(source,Path) else local_source(source)
     if local:
         args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-ss',str(start),'-i',str(local),'-t',str(end-start),'-threads','2','-filter_threads','1']
         if audio:

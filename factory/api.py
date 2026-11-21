@@ -107,9 +107,10 @@ def logout():
 @app.get('/api/settings')
 def settings():
     from .model_setup import status
+    from .youtube_channels import profiles
     from .publisher import channels
     from .tts import status as tts_status
-    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':config.AUDIO_CHUNK_SECONDS/60,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'youtube_profiles':profiles(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':config.AUDIO_CHUNK_SECONDS/60,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
 
 
 @app.post('/api/settings/check-ollama')
@@ -401,6 +402,13 @@ def music_assets():
 
 @app.post('/api/jobs',status_code=201)
 def create(body:JobRequest):
+    if body.youtube_channel_key:
+        from .youtube_channels import PROFILES
+        profile = PROFILES[body.youtube_channel_key]
+        if 'mode' not in body.model_fields_set:
+            body.mode = profile['mode']
+        if not body.metadata_language:
+            body.metadata_language = profile['language']
     if body.mode == 'shorts':
         body.selection_version = 2
         if 'minimum' not in body.model_fields_set:
@@ -410,6 +418,14 @@ def create(body:JobRequest):
 
 
 def create_job(body, seed=None, approved=None):
+    if body.youtube_channel_key:
+        from .youtube_channels import profiles
+        profile = next(row for row in profiles() if row['channel_key'] == body.youtube_channel_key)
+        if body.publish_channel and body.publish_channel != profile['channel_id']:
+            raise HTTPException(409,'The selected YouTube channel does not match the content profile')
+        if body.publish_automatic:
+            raise HTTPException(422,'Managed channels require manual approval and private visibility')
+        body.publish_channel = profile['channel_id']
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
@@ -429,6 +445,18 @@ def create_job(body, seed=None, approved=None):
         raise HTTPException(422,'Timed hook must start within the clip')
     if body.background and body.background_mode!='none' and body.background not in backgrounds():
         raise HTTPException(409,'Selected secondary asset is unavailable')
+    if body.background and body.background_mode != 'none':
+        from .library import entries
+        asset = next((item for item in entries() if item['kind'] == 'backgrounds' and item['name'] == body.background), {})
+        credit = asset.get('required_credit')
+        if credit:
+            existing_credit = body.source_attribution.strip()
+            if credit not in existing_credit:
+                combined = '\n'.join(filter(None, (existing_credit, credit)))
+                if len(combined) > 1000:
+                    raise HTTPException(422, 'Shorten source attribution to make room for the required background credit')
+                body.source_attribution = combined
+            body.attribution_required = True
     if body.publish_automatic:
         if not config.AUTOMATIC_PUBLISHING:raise HTTPException(422,'Automatic publishing is disabled')
         from .publisher import channels
@@ -440,6 +468,9 @@ def create_job(body, seed=None, approved=None):
             _,origin,index=body.source.split(':')
             original=store.get(origin)
             if not original or original['state']!='READY' or not original['result']['outputs'][int(index)].get('edit_source'):raise ValueError('Editable source unavailable; re-upload this older source once')
+            original_request=original['request']
+            if original_request.get('youtube_channel_key') and body.youtube_channel_key != original_request['youtube_channel_key']:
+                raise ValueError('An edited version must keep its original YouTube profile')
         elif not media.local_source(body.source):
             media.validate_url(body.source)
     except (ValueError,IndexError,KeyError) as error:
@@ -909,13 +940,64 @@ def checkpoint(jid:str,body:Checkpoint):
 @app.get('/api/publisher')
 def publisher():
     from .publisher import channels, history
-    return {'channels':channels(),'publications':history()}
+    from .youtube_channels import profiles
+    return {'channels':channels(),'publications':history(),'profiles':profiles()}
 
 
 @app.post('/api/publisher/discover')
 def discover_channels():
     from .publisher import discover_channels
     return discover_channels()
+
+
+@app.get('/api/youtube/profiles')
+def youtube_profiles():
+    from .youtube_channels import profiles
+    return profiles()
+
+
+@app.post('/api/youtube/profiles/{key}/verify')
+def youtube_verify(key: str):
+    from .youtube_channels import PROFILES, discover, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    discover(key)
+    return next(row for row in profiles() if row['channel_key'] == key)
+
+
+class YouTubeProfileState(BaseModel):
+    enabled: bool
+
+
+@app.post('/api/youtube/profiles/{key}/state')
+def youtube_profile_state(key: str, body: YouTubeProfileState):
+    from .youtube_channels import PROFILES, enable, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    try:
+        enable(key,body.enabled)
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+    return next(row for row in profiles() if row['channel_key'] == key)
+
+
+class YouTubeLegacyBinding(BaseModel):
+    alias: str = Field(pattern=r'^[A-Za-z0-9_-]{1,100}$')
+
+
+@app.post('/api/youtube/profiles/{key}/legacy-binding')
+def youtube_legacy_binding(key: str, body: YouTubeLegacyBinding):
+    from .youtube_channels import PROFILES, discover, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    try:
+        discover(key,legacy_alias=body.alias)
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+    profile = next(row for row in profiles() if row['channel_key'] == key)
+    if profile['status'] != 'CONNECTED':
+        raise HTTPException(409,profile['error'] or 'Verified legacy channel binding failed')
+    return profile
 
 
 @app.get('/api/analytics')
@@ -925,9 +1007,9 @@ def analytics_dashboard():
 
 
 @app.post('/api/analytics/discover')
-def discover_analytics():
+def discover_analytics(profile_key: Literal['leonida_mayhem', 'thevicescope'] | None = None):
     from .analytics import discover
-    return discover()
+    return discover(profile_key)
 
 
 @app.post('/api/analytics/{channel}/sync')

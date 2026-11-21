@@ -494,13 +494,17 @@ def build_event_graph(
             content_category=category,
         )
         edges.append(edge)
-        # Candidate uncertain edges worth spending VLM budget on: both shots >= 4s and borderline continuity
+        # Speech spanning the cut can corroborate a changed viewpoint or a transition
+        # into a cutscene. Keep fades and graphic transitions out of that path.
         if (
             sa.shot_id not in breaks_by_shot
             and sb.shot_id not in breaks_by_shot
-            and sa.duration >= 4.0
-            and sb.duration >= 4.0
-            and 0.62 <= edge.continuity_score <= 0.80
+            and sb.boundary_type not in ('fade_black', 'graphic_transition')
+            and (
+                (sa.duration >= 4 and sb.duration >= 4 and 0.62 <= edge.continuity_score <= 0.80)
+                or (edge.speech_crosses_cut and min(sa.duration, sb.duration) >= 1
+                    and edge.continuity_score >= 0.42 and not edge.same_event)
+            )
         ):
             uncertain_edge_indices.append(len(edges) - 1)
 
@@ -508,7 +512,10 @@ def build_event_graph(
     if vlm and vlm.is_available() and local_source_path and local_source_path.is_file() and vlm_edge_budget > 0:
         # Prioritize uncertain edges with longest combined duration (most likely to form top candidates)
         uncertain_edge_indices.sort(
-            key=lambda idx: -(shots[idx].duration + shots[idx + 1].duration)
+            key=lambda idx: (
+                edges[idx].same_event, not edges[idx].speech_crosses_cut,
+                -(shots[idx].duration + shots[idx + 1].duration),
+            )
         )
         for idx in uncertain_edge_indices[:vlm_edge_budget]:
             sa, sb = shots[idx], shots[idx + 1]
@@ -528,12 +535,18 @@ def build_event_graph(
                         edge.severity = 'probable_format_break'
                         edge.continuity_score = 0.0
                     elif verdict.same_event:
-                        # Require corroborating visual/HUD evidence before VLM overrides a CV split
-                        if edge.same_event or (verdict.confidence >= 0.88 and edge.visual_similarity >= 0.58 and edge.hud_similarity >= 0.62):
+                        corroborated = (
+                            (edge.visual_similarity >= 0.58 and edge.hud_similarity >= 0.62)
+                            or (edge.speech_crosses_cut and verdict.relation in ('same_scene_camera_cut', 'reaction_cut'))
+                        )
+                        if edge.same_event or (verdict.confidence >= 0.88 and corroborated
+                                               and bool(verdict.reason.strip())):
                             edge.same_event = True
                             edge.relation = verdict.relation  # type: ignore[assignment]
                             edge.severity = 'none'
                             edge.continuity_score = max(edge.continuity_score, round(verdict.confidence, 4))
+                        else:
+                            edge.reason += ' (insufficient corroboration to join the shots)'
                     else:
                         edge.same_event = False
                         edge.relation = 'probable_new_event'

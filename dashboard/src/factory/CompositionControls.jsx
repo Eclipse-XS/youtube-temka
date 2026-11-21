@@ -40,15 +40,26 @@ export function LayoutPreview({form,thumbnail,video}) {
   </div><figcaption>Preview only · {layouts[form.preset]?.[1]}. Остаточне кадрування перевіряється після рендера.</figcaption></figure>;
 }
 
-export default function CompositionControls({form,set,backgrounds=[],channels=[],thumbnail,video}) {
+export default function CompositionControls({form,set,backgrounds=[],channels=[],profiles=[],routingLocked=false,thumbnail,video}) {
   const [assets,setAssets]=useState([]);
   useEffect(()=>{fetch('/api/library').then(r=>r.ok?r.json():[]).then(setAssets).catch(()=>{});},[]);
   return <section className="composition-controls"><div className="grid">
-    <label>Канал / профіль<select value={form.publish_channel||''} onChange={e=>{
+    <label>Цільовий YouTube-канал<select disabled={routingLocked} value={form.youtube_channel_key||form.publish_channel||''} onChange={e=>{
+      const profile=profiles.find(p=>p.channel_key===e.target.value);
+      set('youtube_channel_key',profile?.channel_key||null);
+      if(profile){
+        set('publish_channel',profile.channel_id||null);
+        set('publish_automatic',false);
+        set('mode',profile.mode);
+        set('metadata_language',profile.language);
+        const preferences=channels.find(c=>c.id===profile.channel_id)?.preferences;
+        if(preferences?.editing_preset)set('preset',preferences.editing_preset);
+        return;
+      }
       const channel=channels.find(c=>c.id===e.target.value);set('publish_channel',channel?.id||null);set('publish_automatic',false);
       if(channel?.preferences?.metadata_language)set('metadata_language',channel.preferences.metadata_language);
       if(channel?.preferences?.editing_preset)set('preset',channel.preferences.editing_preset);
-    }}><option value="">Без публікації · ручний перегляд</option>{channels.map(c=><option key={c.id} value={c.id}>{c.preferences?.profile_name||c.title} · {c.preferences?.metadata_language||'auto'}</option>)}</select></label>
+    }}><option value="">Без публікації · ручний перегляд</option>{profiles.map(p=><option key={p.channel_key} value={p.channel_key}>{p.title} — {p.mode==='shorts'?'Shorts':'Long-form'}</option>)}{channels.filter(c=>!profiles.some(p=>p.channel_id===c.id)).map(c=><option key={c.id} value={c.id}>{c.preferences?.profile_name||c.title} · {c.preferences?.metadata_language||'auto'}</option>)}</select></label>
     <label>Текст<select value={form.text_mode||(form.captions?'subtitles':'none')} onChange={e=>{set('text_mode',e.target.value);set('captions',['subtitles','hook_subtitles'].includes(e.target.value));if(['none','subtitles'].includes(e.target.value))set('hook','');}}>{Object.entries(textModes).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
     <label>Макет<select value={form.preset} onChange={e=>set('preset',e.target.value)}>{Object.entries(layouts).map(([id,[label]])=><option key={id} value={id}>{label}</option>)}</select></label>
     <label>Додаткове відео<select value={['none','random'].includes(form.background_mode)?form.background_mode:form.background||'auto'} onChange={e=>{set('background_mode',['none','auto','random'].includes(e.target.value)?e.target.value:'specific');set('background',['none','auto','random'].includes(e.target.value)?null:e.target.value);}}><option value="none">Без додаткового відео</option><option value="auto">Автовибір з бібліотеки</option><option value="random">Випадковий із категорії</option>{backgrounds.map(name=><option key={name} value={name}>{assets.find(a=>a.name===name)?.display_name || "Фонове відео"}</option>)}</select></label>

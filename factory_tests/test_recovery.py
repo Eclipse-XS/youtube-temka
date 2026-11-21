@@ -110,3 +110,21 @@ def test_expired_processing_lease_preserves_checkpoints_for_manual_recovery(tmp_
     fresh=store.claim('replacement')
     with pytest.raises(InterruptedError):store.update(job['id'],claim['lease'],state='READY')
     assert fresh['lease']!=claim['lease']
+
+
+def test_selection_stage_can_finish_blocked_without_becoming_failed(tmp_path, monkeypatch):
+    from factory.progress import Progress
+
+    monkeypatch.setattr(config, 'DATA', tmp_path)
+    monkeypatch.setattr(config, 'SCRATCH', tmp_path / 'scratch')
+    monkeypatch.setattr(config, 'DB', tmp_path / 'db')
+    job = store.create(req().model_dump())
+    claim = store.claim('worker')
+    progress = Progress(lambda state=None, **kwargs: store.update(job['id'], claim['lease'], state, **kwargs))
+    progress.begin('highlights', 'ANALYZING')
+    progress.done(status='blocked', message='No selected clips')
+    store.update(job['id'], claim['lease'], state='BLOCKED')
+    saved = store.get(job['id'])
+    assert saved['state'] == 'BLOCKED'
+    assert saved['stages'][0]['status'] == 'blocked'
+    assert saved['stages'][0]['finished'] is not None

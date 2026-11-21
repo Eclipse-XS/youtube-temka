@@ -274,7 +274,7 @@ export default function CreatePage({
           </label>
 
         </div>
-        <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
+        <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} profiles={settings?.youtube_profiles||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
         <div className="grid"><label>Кількість кліпів<input type="number" min="1" max="20" value={form.count} onChange={e=>set('count',+e.target.value)}/></label>{form.mode==='longs'&&<label>Цільова тривалість, сек<input type="number" min="10" max="3600" value={form.target_duration||''} onChange={e=>set('target_duration',e.target.value?+e.target.value:null)}/></label>}</div>
         <label className="check">
           <input
@@ -595,7 +595,7 @@ export default function CreatePage({
             <input
               type="checkbox"
               checked={!!form.publish_automatic}
-              disabled={!form.publish_channel || !form.save_drive}
+              disabled={!form.publish_channel || !form.save_drive || !!form.youtube_channel_key}
               onChange={(e) => set("publish_automatic", e.target.checked)}
             />
             Дозволена автоматична публікація

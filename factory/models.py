@@ -71,6 +71,7 @@ class JobRequest(BaseModel):
     captions: bool = True
     save_drive: bool = True
     publish_channel: str | None = Field(default=None,pattern=r'^[A-Za-z0-9_-]{1,100}$')
+    youtube_channel_key: Literal['leonida_mayhem', 'thevicescope'] | None = None
     publish_automatic: bool = False
     intervals: list[tuple[float,float]] = Field(default_factory=list, max_length=30)
 

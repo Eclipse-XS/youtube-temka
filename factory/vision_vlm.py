@@ -110,6 +110,7 @@ class EventVerification(BaseModel):
     contains_unrelated_scene: bool = False
     event_summary: str = Field(default='', max_length=400)
     setup_observed: str = Field(default='', max_length=200)
+    development_observed: str = Field(default='', max_length=200)
     climax_observed: str = Field(default='', max_length=200)
     payoff_observed: str = Field(default='', max_length=200)
     defects: list[str] = Field(default_factory=list, max_length=10)
@@ -311,7 +312,7 @@ class LocalVisionAdapter:
         options: dict[str, Any] = {
             'num_ctx': 2048,
             'temperature': 0,
-            'num_predict': 450,
+            'num_predict': 240 if context.get('connected_story') else 450,
             'num_thread': 2,
         }
         if layers is not None:
@@ -332,7 +333,8 @@ class LocalVisionAdapter:
         t0 = time.monotonic()
         with HEAVY_LOCK:
             try:
-                with httpx.Client(timeout=self.timeout, trust_env=False) as client:
+                timeout = max(self.timeout, 150) if context.get('connected_story') else self.timeout
+                with httpx.Client(timeout=timeout, trust_env=False) as client:
                     self.calls_made += 1
                     resp = client.post(f'{self.ollama_url}/api/chat', json=payload)
                     if resp.status_code >= 500 and layers != 0:
@@ -544,6 +546,8 @@ class LocalVisionAdapter:
             'OR if they are TWO UNRELATED clips from a compilation (completely different vehicle/location/time-of-day, e.g., car interior vs ocean boat, scooter vs highway truck -> same_event=false, relation="new_unrelated_event") '
             'OR if either side is a graphic title card, end card, outro logo, or text transition card (same_event=false, relation="format_break"). '
             'Movement of the same vehicle or character along a road/bridge/sky is STILL same_event=true. '
+            'A camera change or a gameplay-to-cutscene transition can preserve the same event if a specific actor, action, or conversation continues across the cut. A shared game, art style, or HUD alone is insufficient. '
+            'State the specific matching detail or return uncertain. '
             'Return strict JSON: same_event, relation, reason, confidence.'
         )
         raw = self._call_ollama_vision('compare_adjacent_shots', prompt, [combined_img], schema, ctx)
@@ -555,8 +559,6 @@ class LocalVisionAdapter:
                 same = False
             elif rel in ('same_action_continuation', 'same_scene_camera_cut', 'reaction_cut'):
                 same = True
-            elif rel == 'uncertain' and conf >= 0.7:
-                rel = 'same_action_continuation' if same else 'new_unrelated_event'
             return ContinuityVerdict(
                 same_event=same,
                 relation=rel,
@@ -626,7 +628,7 @@ class LocalVisionAdapter:
                 'confidence': {'type': 'number'},
             },
         }
-        transcript_excerpt = str(ctx.get('transcript', ''))[:400]
+        transcript_excerpt = str(ctx.get('transcript', ''))[:700 if ctx.get('connected_story') else 400]
         prompt = (
             f'This 2x2 storyboard shows 4 frames in chronological order ({ts_str}) from ONE candidate short clip. '
             f'Transcript excerpt: "{transcript_excerpt}". '
@@ -636,6 +638,24 @@ class LocalVisionAdapter:
             '3) Write a concise factual event_summary describing ONLY what is visibly happening (e.g. "White pickup truck driving on a sunset highway and swapping vehicles"). '
             'Return strict JSON.'
         )
+        if ctx.get('connected_story'):
+            schema['required'].append('development_observed')
+            for field in ('setup_observed', 'development_observed', 'climax_observed', 'payoff_observed'):
+                schema['properties'][field] = {'type': 'string', 'maxLength': 64}
+            schema['properties']['event_summary']['maxLength'] = 84
+            schema['properties']['defects']['maxItems'] = 1
+            prompt = (
+                f'Four chronological frames from one proposed story ({ts_str}). '
+                f'Dialogue near the start and end: "{transcript_excerpt}". '
+                'Check whether specific people or actions tie a setup, development, turning point, and outcome together. '
+                'Different viewpoints and gameplay-to-cutscene edits are allowed only when the action or conversation carries across. '
+                'A common game, driving, similar landscapes or shared HUD alone do not establish a story. '
+                'Set contains_format_break for end cards, menus, promos, title cards or black screens. '
+                'Set contains_unrelated_scene for scenes without a common narrative. '
+                'Describe concrete setup_observed, development_observed, climax_observed and payoff_observed supported by the dialogue or visible action. '
+                'A plan alone has no payoff. Leave unsupported fields empty. '
+                'Use terse fragments, at most six words per text field. Return strict JSON.'
+            )
         raw = self._call_ollama_vision('verify_event_continuity', prompt, [grid_img], schema, {'ts': ts_str, **ctx})
         if raw and '_raw_text' not in raw:
             defects = [str(d)[:120] for d in (raw.get('defects') or [])[:8]]
@@ -652,6 +672,7 @@ class LocalVisionAdapter:
                 contains_unrelated_scene=has_unrelated,
                 event_summary=str(raw.get('event_summary', ''))[:400],
                 setup_observed=str(raw.get('setup_observed', ''))[:200],
+                development_observed=str(raw.get('development_observed', ''))[:200],
                 climax_observed=str(raw.get('climax_observed', ''))[:200],
                 payoff_observed=str(raw.get('payoff_observed', ''))[:200],
                 defects=defects,

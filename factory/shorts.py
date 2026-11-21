@@ -40,7 +40,8 @@ def identity(request, duration, transcript):
     fields = ('source', 'start', 'mode', 'series_mode', 'count', 'minimum', 'maximum',
               'series_overlap', 'intervals', 'target_duration', 'llm_model', 'source_category',
               'asr_model', 'language', 'captions', 'audio_mode')
-    value = [VERSION, duration, request.model_dump(include=set(fields)), config.MODEL, transcript]
+    version = (VERSION, 'connected-v8-subwindows') if request.series_mode == 'connected' else VERSION
+    value = [version, duration, request.model_dump(include=set(fields)), config.MODEL, transcript]
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -383,57 +384,28 @@ def plan_v8(
             write_json_atomic(root / 'event-graph.json', graph.model_dump(), ensure_ascii=True)
 
         if mode == 'connected':
-            # Connected Story requires ONE verified coherent event spanning [low, high]
-            count, overlap = request.count, request.series_overlap
-            low = count * request.minimum - (count - 1) * overlap
-            high = count * min(request.maximum, PLATFORM_MAXIMUM) - (count - 1) * overlap
-            long_events = [e for e in graph.events if low <= e.duration <= high and e.decision != 'REJECT']
-            if long_events:
-                best = max(long_events, key=lambda e: (e.mean_continuity, e.speech_word_count, e.duration))
-                cuts = [s['end'] for s in transcript.get('segments', []) if s['text'].rstrip().endswith(('.', '?', '!'))]
-                parts, summary = split(best.start, best.end, request, transcript, cuts)
-                for p in parts:
-                    p['event_id'] = best.event_id
-                    p['evidence'] = list(best.evidence)
-                    p['semantic_verification'] = 'cv_graph_review_required'
-                return {
-                    'candidates': parts,
-                    'selection_summary': summary + f' Verified single coherent event {best.event_id} ({best.duration:.1f}s).',
-                    'analysis': 'editorial_engine_8_connected',
-                    'format_breaks': [b.model_dump() for b in graph.format_breaks],
-                    'events_summary': [{'event_id': e.event_id, 'start': e.start, 'end': e.end, 'duration': e.duration} for e in graph.events],
-                    'analysis_diagnostics': {'events': len(graph.events), 'format_breaks': len(graph.format_breaks), 'requests': 0, 'rejected_intervals': 0, 'windows': 1, 'decisions': [], 'used_fallback': False},
-                    'review_alternatives': [],
-                }
-            # Fall back to transcript connected_story search if speech exists, else return honest alternatives
-            cuts = [s['end'] for s in transcript.get('segments', []) if s['text'].rstrip().endswith(('.', '?', '!'))]
-            candidates, summary, diagnostics = connected_story(transcript, request, duration, cuts, progress)
-            # Filter out any transcript connected proposal that crosses a detected format break
-            if candidates:
-                span_a, span_b = candidates[0]['start_seconds'], candidates[-1]['end_seconds']
-                if any(max(0.0, min(span_b, br.end) - max(span_a, br.start)) >= 0.5 for br in graph.format_breaks):
-                    candidates = []
-                    summary = (
-                        f'No single coherent event lasting {low:g}–{high:g}s was verified without crossing a format break. '
-                        'Review independent coherent alternatives or use Sequential Source Split.'
-                    )
-            alts = []
-            if not candidates:
-                for ev in sorted(graph.events, key=lambda e: (-e.duration, e.start))[:request.count]:
-                    if ev.duration >= 12.0:
-                        alts.append(planned(
-                            ev.start, ev.end,
-                            f'{request.confirmed_subject} | Independent Event' if request.confirmed_subject else 'Independent Coherent Event',
-                            f'Coherent {ev.duration:.1f}s event (too short for {low:g}s Connected Story). Available as independent clip.',
-                            transcript, 'visual_activity', ev.evidence,
-                        ))
+            from .connected_windows import plan_connected
+
+            parts, summary, decisions, alternatives, windows = plan_connected(
+                graph, evidence, transcript, request, local_path, vlm,
+            )
             return {
-                'candidates': candidates,
+                'candidates': parts,
                 'selection_summary': summary,
                 'analysis': 'editorial_engine_8_connected',
+                'analysis_outcome': 'selected' if parts else 'insufficient_coherent_events',
                 'format_breaks': [b.model_dump() for b in graph.format_breaks],
-                'analysis_diagnostics': diagnostics,
-                'review_alternatives': alts,
+                'events_summary': [
+                    e.model_dump(exclude={'speech_text', 'shot_ids'}) for e in graph.events
+                ],
+                'analysis_diagnostics': {
+                    'events': len(graph.events),
+                    'windows': windows,
+                    'decisions': decisions,
+                    'rejected_edges': [e.model_dump() for e in graph.edges if not e.same_event],
+                    'vlm_stats': vlm.stats() if vlm else {},
+                },
+                'review_alternatives': alternatives,
             }
 
         # Independent Highlights mode

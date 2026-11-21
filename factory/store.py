@@ -24,6 +24,14 @@ def connect():
             id TEXT PRIMARY KEY, alias TEXT NOT NULL, title TEXT NOT NULL,
             daily_limit INTEGER NOT NULL DEFAULT 3, public_allowed INTEGER NOT NULL DEFAULT 0,
             automatic INTEGER NOT NULL DEFAULT 0)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS youtube_profiles (
+            channel_key TEXT PRIMARY KEY, channel_id TEXT UNIQUE,
+            enabled INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'NOT_CONNECTED',
+            verified_at REAL, error TEXT)''')
+        if db.execute('SELECT count(*) FROM youtube_profiles').fetchone()[0] < 2:
+            db.executemany('INSERT OR IGNORE INTO youtube_profiles(channel_key) VALUES(?)',
+                           [('leonida_mayhem',), ('thevicescope',)])
+            db.commit()
         db.execute('''CREATE TABLE IF NOT EXISTS publications (
             id TEXT PRIMARY KEY, job TEXT NOT NULL, output INTEGER NOT NULL, channel TEXT NOT NULL,
             state TEXT NOT NULL, metadata TEXT NOT NULL, session TEXT, video_id TEXT,
@@ -197,13 +205,13 @@ def update(jid, lease, state=None, result=None, error=None, current=None, total=
         if stage_update:
             s=stage_update
             status=s.get('status','running')
-            if status not in ('running','completed','skipped','failed','pending'):
+            if status not in ('running','completed','skipped','failed','blocked','pending'):
                 raise ValueError('Invalid stage status')
             db.execute('''INSERT INTO job_stages VALUES(?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(job,key) DO UPDATE SET status=excluded.status,
                 finished=excluded.finished,current=excluded.current,total=excluded.total,
                 unit=excluded.unit,message=excluded.message''',
-                (jid,s['key'],status,time.time(),time.time() if status in ('completed','skipped','failed') else None,s.get('current'),s.get('total'),s.get('unit'),s.get('message')))
+                (jid,s['key'],status,time.time(),time.time() if status in ('completed','skipped','failed','blocked') else None,s.get('current'),s.get('total'),s.get('unit'),s.get('message')))
 
 
 def heartbeat(worker, resources):

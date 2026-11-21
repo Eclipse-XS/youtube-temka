@@ -10,7 +10,7 @@ export default function OutputEditor({job,output,index,act,api,post,onCreated,ba
   },[job.id]);
   if(!output.edit_source)return <small>Для цього результату немає збереженого вихідного уривка. Повторно додайте оригінальне джерело для монтажу.</small>;
   return <details><summary>Редагувати відео · нова версія</summary><p>Попереднє відео та його схвалення зберігаються. Нова версія потребуватиме окремого перегляду.</p>
-    <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} thumbnail={output.thumbnail?`/api/jobs/${job.id}/files/${output.thumbnail.name}`:null}/>
+    <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} profiles={settings?.youtube_profiles||[]} routingLocked={!!job.request.youtube_channel_key} thumbnail={output.thumbnail?`/api/jobs/${job.id}/files/${output.thumbnail.name}`:null}/>
     <div className="grid"><label>Лого<select value={form.logo_asset||''} onChange={e=>set('logo_asset',e.target.value||null)}><option value="">Без лого</option>{logos.map(a=><option key={a.id}>{a.name}</option>)}</select></label><label>CTA<input value={form.cta_text||''} maxLength={120} onChange={e=>set('cta_text',e.target.value)}/></label></div>
     <button onClick={()=>set('cta_text',ctas[form.metadata_language||job.result.language]||ctas.en)}>Додати CTA мовою каналу</button>
     <h3>Таймлайн · секунди від початку збереженого джерела</h3>

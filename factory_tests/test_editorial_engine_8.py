@@ -342,6 +342,139 @@ def test_19_20_21_connected_and_sequential_modes(tmp_path):
     assert all(e.duration < 99.0 for e in short_graph.events)
 
 
+@pytest.mark.parametrize('verdict,selected', [
+    ('story', True), ('compilation', False), ('no_payoff', False), ('no_vlm', False),
+])
+def test_connected_excerpt_inside_long_multishot_event(monkeypatch, tmp_path, verdict, selected):
+    from factory import connected_windows
+    from factory.vision_vlm import EventVerification
+
+    shots = [_mk_shot(i, i * 40, (i + 1) * 40) for i in range(4)]
+    evidence = _ev(shots, 160)
+    transcript = {'language': 'en', 'segments': []}
+    graph = build_event_graph(evidence, transcript)
+    assert [event.duration for event in graph.events] == [160]
+    source = tmp_path / 'cached.mp4'
+    monkeypatch.setattr(connected_windows, 'extract_frames_at_timestamps',
+                        lambda path, times: [(t, b'frame') for t in times])
+    vlm = MagicMock()
+    vlm.verify_event_continuity.return_value = EventVerification(
+        verified=True, confidence=.91, coherent_single_event=verdict != 'compilation',
+        contains_unrelated_scene=verdict == 'compilation',
+        event_summary='A character rescues a passenger after a crash.',
+        setup_observed='Passenger is trapped in the vehicle.',
+        development_observed='The driver approaches the passenger door.',
+        climax_observed='The driver pulls the passenger from the wreck.',
+        payoff_observed='' if verdict == 'no_payoff' else 'Both characters escape.',
+    )
+    parts, _, decisions, alternatives, windows = connected_windows.plan_connected(
+        graph, evidence, transcript, _req(count=2, series_mode='connected'), source,
+        None if verdict == 'no_vlm' else vlm,
+    )
+    assert windows > 0 and decisions
+    if selected:
+        assert len(parts) == 2
+        assert 67 <= parts[1]['end_seconds'] - parts[0]['start_seconds'] <= 117
+        assert parts[0]['end_seconds'] - parts[1]['start_seconds'] == 3
+        assert all(35 <= part['end_seconds'] - part['start_seconds'] <= 60 for part in parts)
+        assert any(parts[0]['start_seconds'] < edge.boundary_time < parts[-1]['end_seconds']
+                   for edge in graph.edges)
+    else:
+        assert not parts and alternatives
+
+
+def test_connected_cannot_cross_format_break_and_returns_review_intervals(tmp_path):
+    from factory.connected_windows import plan_connected
+
+    evidence = _ev([
+        _mk_shot(0, 0, 54),
+        _mk_shot(1, 54, 59, luma=5, dark=1, stat=1, mot=0),
+        _mk_shot(2, 59, 115),
+    ], 115)
+    transcript = {'language': 'en', 'segments': []}
+    graph = build_event_graph(evidence, transcript)
+    assert graph.format_breaks
+    vlm = MagicMock()
+    parts, _, _, alternatives, windows = plan_connected(
+        graph, evidence, transcript, _req(count=2, series_mode='connected'), tmp_path / 'video.mp4', vlm,
+    )
+    assert windows == 0 and not parts
+    assert [(c['start_seconds'], c['end_seconds']) for c in alternatives] == [(59, 115), (0, 54)]
+    vlm.verify_event_continuity.assert_not_called()
+
+
+@pytest.mark.parametrize('relation,expected_events', [
+    ('same_scene_camera_cut', 1), ('new_unrelated_event', 2),
+])
+def test_camera_cut_requires_corroborated_vlm_continuity(monkeypatch, tmp_path, relation, expected_events):
+    from factory.vision_vlm import ContinuityVerdict
+
+    shots = [
+        _mk_shot(0, 0, 50, luma=70),
+        _mk_shot(1, 50, 100, luma=119, grid=[.59] * 27, hud=[.48] * 24),
+    ]
+    evidence = _ev(shots, 100)
+    transcript = {'language': 'en', 'segments': [
+        {'start': 48, 'end': 52, 'text': 'Keep holding the other side of the door.'},
+    ]}
+    baseline = build_event_graph(evidence, transcript)
+    assert len(baseline.events) == 2
+    source = tmp_path / 'cached.mp4'
+    source.touch()
+    monkeypatch.setattr('factory.semantic_events.extract_frames_at_timestamps',
+                        lambda path, times, **kw: [(t, b'frame') for t in times])
+    vlm = MagicMock()
+    vlm.detect_format_break.return_value.is_format_break = False
+    vlm.stats.return_value = {}
+    vlm.compare_adjacent_shots.return_value = ContinuityVerdict(
+        verified=True, confidence=.95, relation=relation,
+        same_event=relation == 'same_scene_camera_cut',
+        reason='The reverse angle shows the same two actors holding the door.',
+    )
+    graph = build_event_graph(evidence, transcript, local_source_path=source, vlm=vlm)
+    assert len(graph.events) == expected_events
+    assert graph.edges[0].vlm_verified
+
+
+@pytest.mark.parametrize('verified_contradiction', [False, True])
+def test_connected_storyboard_reconsiders_cv_only_splits(monkeypatch, tmp_path, verified_contradiction):
+    from factory import connected_windows
+    from factory.vision_vlm import EventVerification
+
+    evidence = _ev([
+        _mk_shot(0, 0, 40, luma=50),
+        _mk_shot(1, 40, 73, luma=180, grid=[.8] * 27, hud=[.75] * 24),
+        _mk_shot(2, 73, 110, luma=50),
+    ], 110)
+    transcript = {'language': 'en', 'segments': [
+        {'start': 2+i*4, 'end': 4+i*4, 'text': 'We need to rescue the passenger before the fire spreads.'}
+        for i in range(6)
+    ]}
+    graph = build_event_graph(evidence, transcript)
+    assert len(graph.events) == 3
+    graph.edges[0].vlm_verified = verified_contradiction
+    monkeypatch.setattr(connected_windows, 'extract_frames_at_timestamps',
+                        lambda path, times: [(t, b'frame') for t in times])
+    vlm = MagicMock()
+    vlm.verify_event_continuity.return_value = EventVerification(
+        verified=True, coherent_single_event=True, confidence=.95,
+        event_summary='Same people and vehicle throughout the rescue.',
+        setup_observed='Two people are trapped in a car.',
+        development_observed='The driver reaches the passenger side.',
+        climax_observed='The driver pulls the passenger free.',
+        payoff_observed='The two are clear of the car.',
+    )
+    parts, _, _, _, _ = connected_windows.plan_connected(
+        graph, evidence, transcript, _req(count=2, series_mode='connected'), tmp_path / 'video.mp4', vlm,
+    )
+    if verified_contradiction:
+        assert not parts
+        vlm.verify_event_continuity.assert_not_called()
+    else:
+        assert len(parts) == 2
+        assert vlm.verify_event_continuity.call_args.args[1]['crosses_cv_split']
+
+
 # Case 22, 23, 24, 25, 28: Manual override, VLM unavailable, GPU constrained, cache reuse & invalidation
 def test_22_23_24_25_28_vlm_fallback_gpu_bounds_and_edit_manifest(monkeypatch):
     # Case 24: VLM unavailable

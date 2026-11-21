@@ -55,6 +55,8 @@ services:
     environment:
       <<: *worker-environment
       WORKER_ID: ${CONTROLLER_WORKER_ID:-worker-a}
+      FACTORY_MANAGED_YOUTUBE_DIR: /run/secrets/youtube-managed/upload
+      FACTORY_MANAGED_ANALYTICS_DIR: /run/secrets/youtube-managed/analytics
     ports: ['${API_BIND:-127.0.0.1}:8000:8000']
     volumes:
       - controller_data:/data

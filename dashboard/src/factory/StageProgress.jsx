@@ -44,12 +44,14 @@ export default function StageProgress({ job }) {
       <ol>
         {stages.map(([key, label]) => {
           const s = entries[key];
+          const emptySelection = key === "highlights" && terminal &&
+            Array.isArray(job.result.candidates) && job.result.candidates.length === 0;
           const pct =
-            s?.current != null && s.total > 0
+            !emptySelection && s?.current != null && s.total > 0
               ? Math.min(100, Math.floor((s.current / s.total) * 100))
               : null;
           const status =
-            key === "approval" && job.state === "READY"
+            emptySelection ? "blocked" : key === "approval" && job.state === "READY"
               ? job.result.outputs?.every((o) => o.approved)
                 ? "approved"
                 : "awaiting review"
@@ -60,7 +62,7 @@ export default function StageProgress({ job }) {
               <small>
                 {status}
                 {pct !== null ? ` · ${pct}%` : ""}
-                {s?.unit && s.current != null
+                {!emptySelection && s?.unit && s.current != null
                   ? ` · ${Number(s.current).toFixed(0)} / ${s.total ?? "…"} ${s.unit}`
                   : ""}
               </small>
@@ -70,7 +72,8 @@ export default function StageProgress({ job }) {
                 ) : (
                   <progress />
                 ))}
-              {s?.message && <small>{s.message}</small>}
+              {emptySelection ? <small>Кліпів не вибрано. Перегляньте діагностику відбору.</small>
+                : s?.message && <small>{s.message}</small>}
             </li>
           );
         })}
