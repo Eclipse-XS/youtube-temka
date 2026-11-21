@@ -1,10 +1,29 @@
 from typing import Literal
 from pydantic import BaseModel, Field, model_validator
+from . import config
+
+
+class CompilationSource(BaseModel):
+    source: str = Field(min_length=1, max_length=2048)
+    start: float = Field(default=0, ge=0, le=86400, allow_inf_nan=False)
+    end: float | None = Field(default=None, gt=0, le=86400, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_interval(self):
+        if self.end is not None and self.end <= self.start:
+            raise ValueError('Source end must be after its start')
+        return self
 
 
 class JobRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     rights_confirmed: bool
+    workflow: Literal['highlights', 'story', 'compilation'] | None = None
+    sources: list[CompilationSource] = Field(default_factory=list, max_length=12)
+    story_count: int | None = Field(default=None, ge=1, le=100)
+    destination: Literal['youtube_shorts', 'video'] | None = None
+    review_before_render: bool = False
+    transition: Literal['cut','fade'] = 'cut'
     mode: Literal['shorts','longs'] = 'shorts'
     resolution: Literal[480,720,1080,'best'] = 720
     output_height: Literal[720,1080] = 720
@@ -12,6 +31,23 @@ class JobRequest(BaseModel):
     caption_style: Literal['pop','karaoke','clean'] = 'pop'
     split_ratio: float = Field(default=.5,ge=.2,le=.8,allow_inf_nan=False)
     hook: str = Field(default='',max_length=120)
+    text_mode: Literal['none','subtitles','static_hook','hook_subtitles','custom'] | None = None
+    hook_duration: float = Field(default=3,ge=.5,le=30,allow_inf_nan=False)
+    hook_position: Literal['top','center','bottom'] = 'top'
+    hook_font_size: int = Field(default=48,ge=18,le=96)
+    hook_font: Literal['sans','serif','mono'] = 'sans'
+    hook_color: str = Field(default='#FFFFFF',pattern=r'^#[0-9A-Fa-f]{6}$')
+    hook_outline: int = Field(default=2,ge=0,le=8)
+    hook_shadow: bool = True
+    hook_box: bool = True
+    subtitle_language: str | None = Field(default=None,pattern=r'^(en|es|pt-BR|de|ru|uk)$')
+    series_mode: Literal['independent','connected'] = 'independent'
+    series_overlap: float = Field(default=3,ge=0,le=5,allow_inf_nan=False)
+    target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
+    logo_asset: str | None = Field(default=None,pattern=r'^[a-zA-Z0-9_-]+\.png$')
+    cta_text: str = Field(default='',max_length=120)
+    background_mode: Literal['auto','none','specific','random'] = 'auto'
+    background_category: str | None = Field(default=None,max_length=80)
     preserve_fps: bool = False
     asr_model: Literal['tiny','base','small','medium','large-v3','large-v3-turbo'] | None = None
     llm_model: str | None = Field(default=None,pattern=r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$')
@@ -43,6 +79,39 @@ class JobRequest(BaseModel):
     def validate_job(self):
         if not self.rights_confirmed:
             raise ValueError('Confirm rights to the source and selected background')
+        if self.workflow == 'compilation':
+            if len(self.sources) < 2 or self.sources[0].source != self.source:
+                raise ValueError('Provide at least two sources with the first as the primary source')
+            if len({(s.source, s.start, s.end) for s in self.sources}) != len(self.sources):
+                raise ValueError('Remove duplicate source ranges from the compilation')
+            if self.intervals or self.destination == 'youtube_shorts':
+                raise ValueError('Compilations use per-source ranges and regular video output')
+            if self.audio_mode == 'voiceover':
+                raise ValueError('Compilation supports original sound, music, or silent audio')
+            self.mode = 'longs'
+            self.preserve_fps = False
+        elif self.sources:
+            raise ValueError('Multiple sources require Longs Compilation')
+        if self.workflow == 'story':
+            if self.intervals or self.silence_removal:
+                raise ValueError('Story parts cover the full range; remove manual clips and pause removal')
+            if self.review_before_render:
+                raise ValueError('Story boundaries are constrained by complete source coverage')
+            self.mode = 'shorts'
+            self.series_mode = 'connected'
+        elif self.workflow:
+            self.series_mode = 'independent'
+        if self.destination == 'youtube_shorts' and (
+            self.mode != 'shorts' or self.maximum > config.SHORTS_MAX_SECONDS
+            or any(b-a > config.SHORTS_MAX_SECONDS for a,b in self.intervals)
+        ):
+            raise ValueError(f'YouTube Shorts require vertical output and at most {config.SHORTS_MAX_SECONDS} seconds per part; lower the maximum or select regular video')
+        if self.text_mode is not None:
+            self.captions=self.text_mode in ('subtitles','hook_subtitles')
+            if self.text_mode in ('none','subtitles'):self.hook=''
+        if self.text_mode=='custom' and not self.hook.strip():raise ValueError('Custom Text requires nonempty text')
+        if self.series_mode=='connected' and self.mode!='shorts':raise ValueError('Connected Series requires Shorts')
+        if self.series_mode=='connected' and self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
         if self.publish_automatic and (not self.save_drive or not self.publish_channel):
             raise ValueError('Automatic publishing requires a selected authorized channel and verified Drive storage')
         if (self.end is not None and self.end <= self.start) or self.minimum > self.maximum:

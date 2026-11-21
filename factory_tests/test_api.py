@@ -28,6 +28,34 @@ def test_control_endpoints_require_auth(client):
     assert client.get('/api/jobs').status_code==401
 
 
+def test_readiness_json_is_compatible_with_case_insensitive_clients(client,monkeypatch):
+    from factory import deployment
+    monkeypatch.setattr(deployment,'readiness',lambda:{'Analytics':'AUTHORIZATION_REQUIRED','SQLite':'READY'})
+    assert client.get('/api/readiness').status_code==401
+    client.headers['Authorization']='Bearer '+'a'*40
+    result=client.get('/api/readiness').json()
+    assert len({key.casefold() for key in result})==len(result)
+    assert set(result['services'])=={'local_worker','publisher','analytics'}
+
+
+def test_compilation_preflight_reports_each_source(client,monkeypatch):
+    from factory import media
+    def probe(source):
+        if source.endswith('missing.mp4'):
+            raise ValueError('Uploaded source is missing')
+        return {'duration':600,'resolutions':[720],'platform':'local','title':'Owned fixture'}
+    monkeypatch.setattr(media,'probe',probe)
+    body={'source':'upload:owned.mp4','sources':[{'source':'upload:owned.mp4'},{'source':'upload:missing.mp4'}],
+          'rights_confirmed':True,'workflow':'compilation'}
+    assert client.post('/api/preflight',json=body).status_code==401
+    client.headers['Authorization']='Bearer '+'a'*40
+    response=client.post('/api/preflight',json=body)
+    assert response.status_code==200
+    assert response.json()['ready'] is False
+    assert response.json()['sources'][0]['selected_seconds']==600
+    assert response.json()['sources'][1]['error']=='Uploaded source is missing'
+
+
 def test_invalid_sources_and_rights(client):
     client.headers['Authorization']='Bearer '+'a'*40
     for url in ['http://127.0.0.1','https://youtube.com.attacker.invalid/x','file:///etc/passwd','https://twitch.tv@127.0.0.1/x']:

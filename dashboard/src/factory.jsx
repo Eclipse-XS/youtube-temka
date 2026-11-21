@@ -15,9 +15,12 @@ import CreatePage from "./factory/CreatePage.jsx";
 import StageProgress from "./factory/StageProgress.jsx";
 import VoiceSettings from "./factory/VoiceSettings.jsx";
 import OutputEditor from "./factory/OutputEditor.jsx";
+import EditPlan from "./factory/EditPlan.jsx";
 import PublisherPanel from "./factory/PublisherPanel.jsx";
 import MetadataEditor from "./factory/MetadataEditor.jsx";
 import AnalyticsPanel from "./factory/AnalyticsPanel.jsx";
+import StoragePanel from "./factory/StoragePanel.jsx";
+import AssetLibrary from "./factory/AssetLibrary.jsx";
 
 async function api(path, options = {}) {
   const response = await fetch("/api" + path, {
@@ -45,16 +48,8 @@ async function api(path, options = {}) {
 }
 const post = (path, body = {}) =>
   api(path, { method: "POST", body: JSON.stringify(body) });
-const pages = [
-  ["Dashboard", Activity],
-  ["Create", Plus],
-  ["Jobs", ListVideo],
-  ["Editor", Scissors],
-  ["Library", FolderOpen],
-  ["Publisher", Upload],
-  ["Analytics", Activity],
-  ["Settings", Settings],
-];
+const pages = [["Create", Plus], ["Jobs", ListVideo], ["Editor", Scissors], ["Publish", Upload], ["Settings", Settings]];
+
 function ModelConfiguration({ settings, act }) {
   const [ollama, setOllama] = useState(settings?.ollama_model || "qwen2.5:3b");
   const [whisper, setWhisper] = useState(settings?.whisper_model || "small");
@@ -126,7 +121,8 @@ function JobEvents({ job }) {
 }
 
 function App() {
-  const [page, setPage] = useState("Dashboard"),
+  const [readiness, setReadiness] = useState(null);
+  const [page, setPage] = useState("Create"),
     [jobs, setJobs] = useState([]),
     [settings, setSettings] = useState(null),
     [backgrounds, setBackgrounds] = useState([]);
@@ -138,6 +134,7 @@ function App() {
     [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(null),
     [edits, setEdits] = useState({});
+  const [outputIndex,setOutputIndex]=useState(0);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryMode, setLibraryMode] = useState("all");
   const act = async (fn) => {
@@ -152,11 +149,11 @@ function App() {
       setBusy(false);
     }
   };
-  const refresh = async () => {
+  const refresh = async (signal) => {
     const [j, s, b] = await Promise.all([
-      api("/jobs"),
-      api("/settings"),
-      api("/backgrounds"),
+      api("/jobs",{signal}),
+      api("/settings",{signal}),
+      api("/backgrounds",{signal}),
     ]);
     setJobs(j);
     setSettings(s);
@@ -169,17 +166,21 @@ function App() {
   }, []);
   useEffect(() => {
     if (!auth) return;
-    const interval = setInterval(
-      () => refresh().catch((e) => setConnectionError(e.message)),
-      3000,
-    );
-    return () => clearInterval(interval);
+    const abort=new AbortController();let timer;
+    const poll=async()=>{
+      try{await refresh(abort.signal);}catch(e){if(!abort.signal.aborted)setConnectionError(e.message);}
+      if(!abort.signal.aborted)timer=setTimeout(poll,3000);
+    };
+    timer=setTimeout(poll,3000);
+    return () => {abort.abort();clearTimeout(timer);};
   }, [auth]);
   const active = jobs.filter(
     (j) => !["READY", "FAILED", "BLOCKED", "CANCELLED"].includes(j.state),
   );
   const ready = jobs.filter((j) => j.state === "READY");
   const chosen = jobs.find((j) => j.id === selected) || ready[0] || jobs[0];
+  useEffect(()=>{if(!selected&&chosen)setSelected(chosen.id);},[selected,chosen?.id]);
+  useEffect(()=>{setOutputIndex(0);},[selected]);
   const outputs = jobs.flatMap((j) =>
     (j.result.outputs || []).map((o, i) => ({ ...o, job: j, index: i })),
   );
@@ -192,6 +193,7 @@ function App() {
           {j.request.mode}
         </small>
         {j.error && <p className="error">{j.error}</p>}
+        {j.state==='QUEUED'&&settings?.workers.some(w=>w.resources?.memory_admission==='WAITING_MEMORY')&&<p className="warning">Воркер очікує вільної RAM. Закрийте зайві програми або виберіть меншу модель; завдання збережене в черзі.</p>}
       </div>
       <span className={"state " + j.state.toLowerCase()}>{j.state}</span>
       <div>
@@ -205,7 +207,7 @@ function App() {
           </>
         ) : (
           <small>
-            {["READY", "FAILED", "BLOCKED", "CANCELLED", "QUEUED"].includes(
+            {["READY", "FAILED", "BLOCKED", "CANCELLED", "QUEUED", "REVIEW"].includes(
               j.state,
             )
               ? ""
@@ -402,6 +404,7 @@ function App() {
                   value={chosen.id}
                   onChange={(e) => {
                     setSelected(e.target.value);
+                    setOutputIndex(0);
                     setEdits({});
                   }}
                 >
@@ -417,16 +420,23 @@ function App() {
                     : chosen.result.analysis}
                 </p>
                 {chosen.result.selection_summary && <p className="muted">{chosen.result.selection_summary}</p>}
+                {chosen.result.signal_coverage && <small>
+                  Візуальний і звуковий аналіз охопив {chosen.result.signal_coverage.scanned_seconds} з {chosen.result.signal_coverage.source_seconds} сек.
+                </small>}
                 {(chosen.result.candidates || []).some((c) => c.editorial_review_required || c.selection_method === "heuristic" || c.score < 50 || c.confidence < .6) && (
                   <p className="warning">Відбір або назва потребує редакторської перевірки. Перевірте уривок і назву перед схваленням; автоматична публікація таких уривків очікує схвалення.</p>
                 )}
                 {chosen.error && <p className="error">{chosen.error}</p>}
+                {chosen.state==='REVIEW' && chosen.result.edit_plan && <EditPlan
+                  key={chosen.id+':'+chosen.result.edit_plan.revision}
+                  job={chosen} api={api} post={post} act={act} onSaved={refresh}/>}
+                {!!chosen.result.outputs?.length && <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>}
                 <div className="outputs">
-                  {(chosen.result.outputs || []).map((o, i) => (
-                    <section key={o.name}>
+                  {(chosen.result.outputs || []).map((o, i) => i===Math.min(outputIndex,(chosen.result.outputs||[]).length-1) && (
+                    <section key={`${chosen.id}:${o.name}`}>
                       <video
                         controls
-                        preload="metadata"
+                        preload="none"
                         src={"/api/jobs/" + chosen.id + "/files/" + o.name}
                       />
                       {o.drive && (
@@ -448,6 +458,9 @@ function App() {
                       <OutputEditor
                         job={chosen}
                         output={o}
+                        api={api}
+                        backgrounds={backgrounds}
+                        settings={settings}
                         index={i}
                         act={act}
                         post={post}
@@ -479,7 +492,7 @@ function App() {
                     </section>
                   ))}
                 </div>
-                <h2>Кандидати та повторний монтаж</h2>
+                {chosen.state!=='REVIEW' && chosen.request.workflow!=='compilation' && chosen.request.workflow!=='story' && <><h2>Кандидати та повторний монтаж</h2>
                 {(chosen.result.candidates || []).map((c, i) => (
                   <section className="candidate" key={i}>
                     <b>{c.title}</b>
@@ -541,6 +554,7 @@ function App() {
                           ];
                           const j = await post("/jobs", {
                             ...chosen.request,
+                            review_before_render: false,
                             intervals: [
                               [
                                 range[0] + chosen.request.start,
@@ -557,7 +571,7 @@ function App() {
                       Рендер цього інтервалу
                     </button>
                   </section>
-                ))}
+                ))}</>}
                 {["json", "srt", "vtt"].map((ext) => (
                   <a
                     className="export"
@@ -657,11 +671,22 @@ function App() {
             )}
           </>
         )}
-        {page === "Publisher" && (
+        {page === "Publish" && (
           <PublisherPanel outputs={outputs} settings={settings} act={act} api={api} post={post} refreshJobs={refresh} />
         )}
         {page === "Settings" && (
           <>
+            <section>
+              <h2>Додаткові розділи</h2><div className="actions">{['Dashboard','Library','Analytics'].map(name=><button key={name} onClick={()=>setPage(name)}>{name}</button>)}</div>
+              <h2>Стан інтеграцій</h2>
+              <button disabled={busy} onClick={() => act(async () => setReadiness(await api('/readiness')))}>
+                Перевірити підключення
+              </button>
+              {['Google Drive', 'YouTube', 'Analytics'].map(name => (
+                <p key={name}>{name}: {readiness?.[name] || 'NOT_CHECKED'}</p>
+              ))}
+              <p>Drive: підключіть наявний OAuth у розділі Google Drive нижче. YouTube: окремий Desktop OAuth у Publisher. Analytics: окремий read-only OAuth у Analytics. Помилки авторизації цих сервісів не блокують локальний рендер.</p>
+            </section>
             <section>
               <h2>Google Drive</h2>
               <p>
@@ -729,6 +754,8 @@ function App() {
                 />
               )}
             </section>
+            <AssetLibrary api={api} post={post} act={act}/>
+            <StoragePanel api={api} post={post} act={act}/>
             <VoiceSettings settings={settings} post={post} act={act} />
             <section>
               <h2>Ресурси та обмеження</h2>

@@ -1,14 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
+import CompositionControls from './CompositionControls.jsx';
 
 const initial = {
   source: "",
   rights_confirmed: false,
+  workflow: "highlights",
+  destination: "youtube_shorts",
   mode: "shorts",
   preset: "auto",
   resolution: 720,
   start: 0,
   end: 1800,
-  count: 5,
+  count: 1,
   minimum: 20,
   maximum: 60,
   language: null,
@@ -39,7 +42,6 @@ const presets = {
     audio_mode: "original",
   },
   silent: { source_category: "visual", audio_mode: "silent", captions: false },
-  longs: { mode: "longs", preset: "auto", audio_mode: "original" },
   narrated: { audio_mode: "voiceover", tts_voice: "af_heart", language: "en" },
 };
 function loadDefaults(settings) {
@@ -49,6 +51,10 @@ function loadDefaults(settings) {
       save_drive: !!settings?.drive_configured,
       ...JSON.parse(localStorage.getItem("factory.preferences") || "{}"),
       source: "",
+      workflow: "highlights",
+      mode: "shorts",
+      destination: "youtube_shorts",
+      maximum: 60,
       rights_confirmed: false,
       start: 0,
       end: 1800,
@@ -77,9 +83,38 @@ export default function CreatePage({
     [probeError, setProbeError] = useState(""),
     [submitting, setSubmitting] = useState(false),
     [intervals, setIntervals] = useState(""),
-    [music, setMusic] = useState([]);
+    [music, setMusic] = useState([]),
+    [additional, setAdditional] = useState([]),
+    [plan, setPlan] = useState(null);
   const submission = useRef(false);
-  const set = (key, value) => setForm((v) => ({ ...v, [key]: value }));
+  const compilation = form.workflow === 'compilation';
+  const story = form.workflow === 'story';
+  const set = (key, value) => {
+    setPlan(null);
+    setForm((v) => ({ ...v, [key]: value }));
+  };
+  const changeWorkflow = (workflow) => {
+    setPlan(null);
+    setForm(v => ({
+      ...v,
+      workflow,
+      mode:workflow==='compilation'?'longs':'shorts',
+      destination:workflow==='compilation'?'video':'youtube_shorts',
+      preset:'auto',
+      count:workflow==='compilation'?20:5,
+      maximum:workflow==='compilation'?180:60,
+      end:workflow==='highlights'?1800:null,
+      target_duration:workflow==='compilation'?900:null,
+      audio_mode:workflow==='compilation'&&v.audio_mode==='voiceover'?'original':v.audio_mode,
+      preserve_fps:workflow==='compilation'?false:v.preserve_fps,
+      review_before_render:workflow==='story'?false:v.review_before_render,
+      silence_removal:workflow==='story'?false:v.silence_removal,
+    }));
+  };
+  const setSources = (update) => {
+    setPlan(null);
+    setAdditional(update);
+  };
   useEffect(() => {
     api("/assets/music")
       .then(setMusic)
@@ -89,6 +124,7 @@ export default function CreatePage({
     if (!form.source) {
       setMetadata(null);
       setProbeError("");
+      setProbing(false);
       return;
     }
     const abort = new AbortController();
@@ -102,7 +138,7 @@ export default function CreatePage({
           body: JSON.stringify({ source: form.source }),
           signal: abort.signal,
         });
-        setMetadata(result);
+        if (!abort.signal.aborted) setMetadata(result);
       } catch (e) {
         if (!abort.signal.aborted) setProbeError(e.message);
       } finally {
@@ -124,7 +160,7 @@ export default function CreatePage({
       : metadata?.resolutions
           .filter((r) => form.resolution === "best" || r <= form.resolution)
           .sort((a, b) => b - a)[0];
-  const upload = async (file, kind) => {
+  const upload = async (file, kind, index = null) => {
     if (!form.rights_confirmed)
       throw new Error(
         "Спершу підтвердьте права на джерело та вибрані матеріали.",
@@ -135,12 +171,38 @@ export default function CreatePage({
     body.append("background", String(kind === "background"));
     body.append("music", String(kind === "music"));
     const result = await api("/uploads", { method: "POST", body });
-    if (kind === "source") set("source", result.source);
+    if (kind === "source") {
+      if (index === null) set("source", result.source);
+      else setSources(items=>items.map((item,i)=>i===index?result.source:item));
+    }
     if (kind === "background") set("background", result.name);
     if (kind === "music") {
       setMusic((v) => [...v, result.name]);
       set("music_asset", result.name);
     }
+  };
+  const buildRequest = () => {
+    const ranges = !story && !compilation && intervals.trim()
+      ? intervals.trim().split("\n").map(line => {
+          const pair = line.split(",").map(Number);
+          if (pair.length !== 2 || pair.some(n => !Number.isFinite(n))) {
+            throw new Error("Інтервал має вигляд start,end у секундах.");
+          }
+          return pair;
+        })
+      : [];
+    const source = form.source.trim();
+    const sources = compilation
+      ? [{source,start:form.start,end:form.end}, ...additional.map(url=>({source:url.trim()}))]
+      : [];
+    return {...form,source,sources,intervals:ranges,
+      background:compilation||form.background_mode==='none'?null:background,
+      background_mode:compilation?'none':form.background_mode};
+  };
+  const checkPlan = async (request) => {
+    const result = await post("/preflight", request);
+    setPlan(result);
+    return result;
   };
   const generate = async (e) => {
     e.preventDefault();
@@ -149,22 +211,14 @@ export default function CreatePage({
     setSubmitting(true);
     try {
       await act(async () => {
-        const ranges = intervals.trim()
-          ? intervals
-              .trim()
-              .split("\n")
-              .map((line) => {
-                const pair = line.split(",").map(Number);
-                if (pair.length !== 2 || pair.some((n) => !Number.isFinite(n)))
-                  throw new Error("Інтервал має вигляд start,end у секундах.");
-                return pair;
-              })
-          : [];
-        const request = { ...form, background, intervals: ranges };
+        const request = buildRequest();
+        if ((story || compilation) && !plan?.ready && !(await checkPlan(request)).ready) return;
         const {
           source,
           rights_confirmed,
           intervals: unused,
+          sources,
+          workflow,
           start,
           end,
           tts_text,
@@ -190,13 +244,20 @@ export default function CreatePage({
   return (
     <form onSubmit={generate} className="create-simple">
       <section className="source-entry">
-        <h2>Створіть відео з одного посилання</h2>
-        <p className="muted">
-          Вставте завершений YouTube / Twitch VOD. Джерело перевіриться
-          автоматично.
-        </p>
         <label>
-          Video URL
+          Режим монтажу
+          <select value={form.workflow} onChange={e=>changeWorkflow(e.target.value)}>
+            <option value="highlights">Smart Highlights</option>
+            <option value="story">Connect a Story</option>
+            <option value="compilation">Longs Compilation</option>
+          </select>
+        </label>
+        <p className="muted">{story
+          ? "Поділіть увесь вибраний фрагмент на послідовні частини."
+          : compilation ? "Зберіть один горизонтальний ролик із кількох джерел."
+          : "Знайдіть найкращі моменти у відео за мовленням, звуком і рухом."}</p>
+        <label>
+          {compilation ? "Джерело 1 · URL" : "URL відео"}
           <input
             className="source-url"
             type="text"
@@ -207,6 +268,38 @@ export default function CreatePage({
             autoComplete="off"
           />
         </label>
+          <label>
+            Або додайте локальне відео
+            <input
+              type="file"
+              accept=".mp4,.mkv,.mov"
+              onChange={(e) =>
+                e.target.files[0] &&
+                act(() => upload(e.target.files[0], "source"))
+              }
+            />
+          </label>
+        {compilation && <section aria-label="Додаткові джерела">
+          {additional.map((source,index)=><div className="grid" key={index}>
+            <label>Джерело {index+2} · URL
+              <input value={source} required onChange={e=>setSources(items=>items.map((item,i)=>i===index?e.target.value:item))}
+                placeholder="https://www.twitch.tv/videos/…" />
+            </label>
+            <label>Локальний файл
+              <input type="file" accept=".mp4,.mkv,.mov"
+                onChange={e=>e.target.files[0]&&act(()=>upload(e.target.files[0],"source",index))}/>
+            </label>
+            <div>
+              <button type="button" disabled={index===0} onClick={()=>setSources(items=>{
+                const ordered=[...items];
+                [ordered[index-1],ordered[index]]=[ordered[index],ordered[index-1]];
+                return ordered;
+              })}>Вище</button>
+              <button type="button" onClick={()=>setSources(items=>items.filter((_,i)=>i!==index))}>Прибрати</button>
+            </div>
+          </div>)}
+          <button type="button" disabled={additional.length>=11} onClick={()=>setSources(items=>[...items,""])}>Додати джерело</button>
+        </section>}
         {probing && (
           <div role="status" className="source-skeleton">
             Перевіряю назву, тривалість і доступні формати…
@@ -242,30 +335,38 @@ export default function CreatePage({
             </div>
           </div>
         )}
-        <div className="grid">
-          <label>
-            Output type
-            <select
-              value={form.mode}
-              onChange={(e) => set("mode", e.target.value)}
-            >
-              <option value="shorts">Shorts · 9:16</option>
-              <option value="longs">Longs · 16:9</option>
-            </select>
+        {!compilation && <label>Формат вертикального відео
+          <select value={form.destination} onChange={e=>set("destination",e.target.value)}>
+            <option value="youtube_shorts">YouTube Shorts</option>
+            <option value="video">Звичайне вертикальне відео</option>
+          </select>
+        </label>}
+        {story ? <div className="grid">
+          <label>Кількість частин
+            <input type="number" min="1" max="100" value={form.story_count??''}
+              placeholder="Автоматично" onChange={e=>set('story_count',e.target.value?+e.target.value:null)}/>
           </label>
-          <label>
-            Editing style
-            <select
-              value={form.preset}
-              onChange={(e) => set("preset", e.target.value)}
-            >
-              <option value="auto">Automatic</option>
-              <option value="gameplay">Gameplay Split</option>
-              <option value="smart">Smart Crop</option>
-              <option value="blur">Blurred Background</option>
-            </select>
+          <label>Перекриття, сек
+            <input type="number" min="0" max="5" step=".1" value={form.series_overlap??3}
+              onChange={e=>set('series_overlap',+e.target.value)}/>
           </label>
-        </div>
+        </div> : <div className="grid">
+          <label>{compilation?'Максимум фрагментів':'Кількість кліпів'}
+            <input type="number" min="1" max="20" value={form.count} onChange={e=>set('count',+e.target.value)}/>
+          </label>
+          {compilation && <label>Цільова тривалість, хв
+            <input type="number" min=".2" max="60" step=".1"
+              list="compilation-durations" value={form.target_duration==null?'':form.target_duration/60}
+              onChange={e=>set('target_duration',e.target.value?+e.target.value*60:null)}/>
+            <datalist id="compilation-durations"><option value="15"/><option value="20"/><option value="30"/></datalist>
+          </label>}
+        </div>}
+        <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
+        {!story && <label className="check">
+          <input type="checkbox" checked={!!form.review_before_render}
+            onChange={e=>set('review_before_render',e.target.checked)}/>
+          Переглянути план перед рендером
+        </label>}
         <label className="check">
           <input
             type="checkbox"
@@ -274,6 +375,15 @@ export default function CreatePage({
           />
           Я маю права на джерело, фон і вибрану музику
         </label>
+        {(story || compilation) && <button type="button" disabled={submitting || !metadata ||
+          !form.rights_confirmed || (compilation && (!additional.length || additional.some(s=>!s.trim())))}
+          onClick={()=>act(()=>checkPlan(buildRequest()))}>Перевірити план</button>}
+        {plan && <ul aria-label="Результат перевірки">
+          {plan.sources.map((item,index)=><li key={item.source_id}>
+            {item.error ? 'Джерело '+(index+1)+' — '+item.error :
+              item.title+' · '+Math.round(item.selected_seconds)+' сек'+(item.story_count?' · '+item.story_count+' частин':'')}
+          </li>)}
+        </ul>}
         <button
           className="primary generate"
           disabled={
@@ -281,18 +391,19 @@ export default function CreatePage({
             probing ||
             !metadata ||
             !form.rights_confirmed ||
-            (form.preset === "gameplay" && !background)
+            (compilation && (!additional.length || additional.some(s=>!s.trim()))) ||
+            (!compilation && form.preset === "gameplay" && !background)
           }
         >
-          {submitting ? "Додаю до черги…" : "Generate Videos"}
+          {submitting ? "Додаю до черги…" : "Почати монтаж"}
         </button>
-        {form.preset === "gameplay" && !background && (
+        {!compilation && form.preset === "gameplay" && !background && (
           <p className="warning">
             Додайте авторизований MP4-фон в Advanced Settings.
           </p>
         )}
         <p className="muted">
-          {form.resolution}p джерело · {form.count} кліпів · {form.minimum}–
+          Якість джерела {form.resolution} · {form.minimum}–
           {form.maximum} сек · мова {form.language || "auto"} · звук{" "}
           {form.audio_mode === "original" ? "оригінальний" : form.audio_mode} ·{" "}
           {form.captions ? "субтитри ввімкнено" : "без субтитрів"} ·{" "}
@@ -309,17 +420,17 @@ export default function CreatePage({
             Збережений пресет
             <select
               defaultValue=""
-              onChange={(e) =>
-                setForm((v) => ({ ...v, ...presets[e.target.value] }))
-              }
+              onChange={(e) => {
+                setPlan(null);
+                setForm(v => ({...v,...presets[e.target.value]}));
+              }}
             >
               <option value="">Власні налаштування</option>
               <option value="podcast">Podcast Shorts</option>
               <option value="stream">Stream Highlights</option>
-              <option value="gameplay">Gameplay Split</option>
+              {!compilation && <option value="gameplay">Split Screen</option>}
               <option value="silent">Silent Satisfying Clips</option>
-              <option value="longs">Long-Form Highlights</option>
-              <option value="narrated">Optional Narrated Video</option>
+              {!compilation && <option value="narrated">Optional Narrated Video</option>}
             </select>
           </label>
           <div className="grid">
@@ -384,16 +495,7 @@ export default function CreatePage({
             >
               Аналізувати увесь VOD
             </button>
-            <label>
-              Кількість кліпів
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={form.count}
-                onChange={(e) => set("count", +e.target.value)}
-              />
-            </label>
+
             <label>
               Мінімальна тривалість
               <input
@@ -414,7 +516,7 @@ export default function CreatePage({
               />
             </label>
           </div>
-          <label>
+          {!story && !compilation && <label>
             Ручні інтервали, за потреби
             <textarea
               value={intervals}
@@ -424,7 +526,7 @@ export default function CreatePage({
             <small>
               Порожньо = автоматичний відбір; часові межі від початку джерела.
             </small>
-          </label>
+          </label>}
           <label>
             Audio mode
             <select
@@ -434,7 +536,7 @@ export default function CreatePage({
               <option value="original">Original Audio · default</option>
               <option value="music">Original Audio + Music</option>
               <option value="silent">Silent Video</option>
-              <option value="voiceover">AI Voice-over · optional</option>
+              {!compilation && <option value="voiceover">AI Voice-over · optional</option>}
             </select>
           </label>
           {form.audio_mode === "music" && (
@@ -508,23 +610,7 @@ export default function CreatePage({
               </label>
             </>
           )}
-          <label>
-            Фон
-            <select
-              value={background || ""}
-              onChange={(e) => set("background", e.target.value || null)}
-            >
-              <option value="">Automatic approved asset</option>
-              {[
-                ...new Set([
-                  ...backgrounds,
-                  ...(form.background ? [form.background] : []),
-                ]),
-              ].map((v) => (
-                <option key={v}>{v}</option>
-              ))}
-            </select>
-          </label>
+
           <label>
             Додати MP4-фон
             <input
@@ -536,17 +622,7 @@ export default function CreatePage({
               }
             />
           </label>
-          <label>
-            Або локальне джерело
-            <input
-              type="file"
-              accept=".mp4,.mkv,.mov"
-              onChange={(e) =>
-                e.target.files[0] &&
-                act(() => upload(e.target.files[0], "source"))
-              }
-            />
-          </label>
+
           <div className="grid">
             <label>
               Стиль субтитрів
@@ -591,14 +667,7 @@ export default function CreatePage({
               </select>
             </label>
           </div>
-          <label>
-            Opening hook
-            <input
-              maxLength="120"
-              value={form.hook || ""}
-              onChange={(e) => set("hook", e.target.value)}
-            />
-          </label>
+
           <label>
             Авторство / ліцензія
             <input
@@ -608,11 +677,10 @@ export default function CreatePage({
             />
           </label>
           {[
-            ["captions", "Субтитри для мовлення"],
             ["preserve_fps", "Зберегти FPS"],
             ["silence_removal", "Видаляти довгі паузи"],
             ["save_drive", "Зберігати в Google Drive"],
-          ].map(([key, label]) => (
+          ].filter(([key])=>!(story&&key==='silence_removal')&&!(compilation&&key==='preserve_fps')).map(([key, label]) => (
             <label key={key} className="check">
               <input
                 type="checkbox"
@@ -622,25 +690,7 @@ export default function CreatePage({
               {label}
             </label>
           ))}
-          <label>
-            Канал
-            <select
-              value={form.publish_channel || ""}
-              onChange={(e) => {
-                set("publish_channel", e.target.value || null);
-                set("publish_automatic", false);
-              }}
-            >
-              <option value="">Review first</option>
-              {settings?.channels
-                ?.filter((c) => c.automatic && c.public_allowed)
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-            </select>
-          </label>
+
           <label className="check">
             <input
               type="checkbox"

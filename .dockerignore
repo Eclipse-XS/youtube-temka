@@ -73,3 +73,6 @@ README.md
 
 # Rust build output
 osrender/target/
+*.part
+.factory-runtime.json
+**/*.part

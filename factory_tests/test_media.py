@@ -65,7 +65,8 @@ def test_opening_text_hook_is_really_rendered(fixture):
     output=tmp_path/'with-hook.mp4'
     media.render(source,output,transcript,0,5,req)
     media.validate_output(output,5)
-    assert output.with_suffix('.hook.txt').read_text(encoding='utf-8')=='A clear opening hook'
+    # Safe line wrapping changes layout, never the hook's words or order.
+    assert ' '.join(output.with_suffix('.hook.txt').read_text(encoding='utf-8').split())=='A clear opening hook'
 
 
 def test_pipeline_local_manual_clip_is_playable_without_drive(fixture,monkeypatch):
@@ -117,6 +118,28 @@ def test_pause_removal_really_trims_video_audio_and_captions(fixture):
     assert report['audio'] and 1<report['duration']<2
     srt=output.with_suffix('.srt').read_text(encoding='utf-8')
     assert 'last' in srt and '00:00:04' not in srt
+
+
+@pytest.mark.parametrize('has_audio',[True,False])
+def test_many_pause_intervals_preserve_duration_order_and_cleanup(fixture,has_audio):
+    from factory.audio_edit import remove_pauses,speech_timeline
+    _,_,tmp_path=fixture
+    source=tmp_path/'many-pauses.mp4'
+    args=[media.ffmpeg(),'-hide_banner','-loglevel','error','-y',
+          '-f','lavfi','-i','testsrc2=size=160x90:rate=30']
+    if has_audio:args+=['-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-c:a','aac']
+    media.run(args+['-t','40','-c:v','libx264','-preset','ultrafast','-threads','2',str(source)])
+    transcript={'segments':[{'start':0,'end':40,'text':' speech',
+                            'words':[{'word':f' word{i}','start':i*2+.3,'end':i*2+.6}
+                                     for i in range(20)]}]}
+    _,_,_,expected=speech_timeline(transcript,0,40)
+    output=tmp_path/'speech.mp4'
+    _,timed,start,duration=remove_pauses(source,output,transcript,0,40,has_audio,lambda *_:None)
+    report=media.validate_output(output,expected,expected_audio=has_audio)
+    assert abs(report['duration']-expected)<.15
+    assert start==0 and duration==expected
+    assert [s['words'][0]['word'] for s in timed['segments']]==[f' word{i}' for i in range(20)]
+    assert not list(tmp_path.glob('pause-*'))
 
 
 def test_smart_camera_path_is_accepted_by_real_ffmpeg(fixture,monkeypatch):
@@ -250,3 +273,15 @@ def test_silent_short_without_captions_needs_no_speech_model(fixture,monkeypatch
     done=store.get(job['id'])
     assert done['state']=='READY',done['error']
     assert done['result']['outputs'][0]['validation']['audio'] is False
+
+
+@pytest.mark.parametrize('mode',['none','subtitles','static_hook','hook_subtitles','custom'])
+def test_v7_text_modes_render_real_unicode_video(fixture,mode):
+    source,transcript,folder=fixture
+    req=JobRequest(source='upload:fixture.mp4',rights_confirmed=True,save_drive=False,end=6,
+                   text_mode=mode,hook='Україна · español',hook_position='bottom',hook_duration=2,preset='crop')
+    path=folder/(mode+'.mp4')
+    media.render(source,path,transcript,0,5,req)
+    assert media.validate_output(path,5,expected_audio=True)['validated']
+    assert path.with_suffix('.hook.txt').exists()==(mode in ('static_hook','hook_subtitles','custom'))
+    assert not path.with_suffix('.rendering.mp4').exists()

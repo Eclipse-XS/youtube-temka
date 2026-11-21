@@ -1,5 +1,5 @@
 """Measured stage checkpoints shared by local and remote workers."""
-STAGES=[('source','Source Analysis'),('extraction','Download / Extraction'),('transcription','Transcription'),('language','Language Detection'),('highlights','AI Highlight Selection'),('retrieval','Video Retrieval'),('captions_audio','Audio / Caption Processing'),('rendering','Rendering'),('validation','Output Validation'),('metadata','Metadata Generation'),('editorial','Editorial Validation'),('drive','Drive Upload / Verification')]
+STAGES=[('source','Source Analysis'),('extraction','Download / Extraction'),('transcription','Transcription'),('language','Language Detection'),('highlights','AI Highlight Selection'),('hooks','Hook Candidates'),('retrieval','Video Retrieval'),('captions_audio','Audio / Caption Processing'),('rendering','Rendering'),('validation','Output Validation'),('metadata','Metadata Generation'),('editorial','Editorial Validation'),('drive','Drive Upload / Verification')]
 
 
 class Progress:
