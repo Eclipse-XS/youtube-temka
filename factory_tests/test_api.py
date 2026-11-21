@@ -191,3 +191,26 @@ def test_history_paginates_and_filters_archived_rows(client):
     assert page['items'][0]['id']!=job['id']
     archive=client.get('/api/job-history?scope=archived').json()
     assert [row['id'] for row in archive['items']]==[job['id']]
+
+
+def test_story_can_fork_manual_replan_using_the_saved_transcript(client, monkeypatch):
+    from factory import media, store
+    from factory.models import JobRequest
+
+    client.headers['Authorization'] = 'Bearer ' + 'a'*40
+    source = 'upload:owned.mp4'
+    request = JobRequest(source=source, rights_confirmed=True, workflow='story',
+                         workflow_version=2, story_mode='chronological', save_drive=False)
+    original = store.create(request.model_dump())
+    workspace = config.SCRATCH / original['id']
+    workspace.mkdir(parents=True)
+    (workspace/'transcript.json').write_text('{"language":null,"segments":[]}', encoding='utf-8')
+    claim = store.claim('fixture')
+    store.update(original['id'], claim['lease'], state='READY')
+    monkeypatch.setattr(media, 'local_source', lambda _: workspace/'owned.mp4')
+    response = client.post('/api/jobs/'+original['id']+'/replan', json={'intervals':[[0,35]]})
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job['request']['intervals'] == [[0,35]]
+    assert job['request']['workflow'] is None
+    assert (config.SCRATCH/job['id']/'transcript.json').is_file()

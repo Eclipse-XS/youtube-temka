@@ -96,7 +96,17 @@ export default function CreatePage({
   const story = form.workflow === 'story';
   const set = (key, value) => {
     setPlan(null);
-    setForm((v) => ({ ...v, [key]: value }));
+    setForm((v) => {
+      if (key === "mode" && value !== v.mode && !["story","compilation"].includes(v.workflow)) {
+        const wide = value === "longs";
+        return {...v, mode:value, workflow:wide?"single_long":"highlights",
+          destination:wide?"video":"youtube_shorts", series_mode:"independent", plan_only:false,
+          review_before_render:false, maximum:wide?180:60};
+      }
+      if (key === "review_before_render" && value) return {...v, [key]:value, plan_only:false};
+      if (key === "plan_only" && value) return {...v, [key]:value, review_before_render:false, publish_automatic:false};
+      return {...v, [key]:value};
+    });
   };
   const changeWorkflow = (workflow) => {
     setPlan(null);

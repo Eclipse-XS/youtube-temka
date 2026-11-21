@@ -547,6 +547,7 @@ def replan(jid:str, body:Replan):
     if original['mode']!='shorts' or job['state'] not in ('READY','BLOCKED','FAILED'):
         raise HTTPException(409,'Wait for Shorts analysis to finish')
     values={**original,'selection_version':2,'publish_automatic':False,
+            'workflow':None,'story_mode':None,'review_before_render':False,
             'plan_only':body.intervals is None,'intervals':body.intervals or []}
     for target, value in (('series_mode',body.mode),('count',body.count),
                           ('minimum',body.minimum),('maximum',body.maximum),('series_overlap',body.overlap)):
