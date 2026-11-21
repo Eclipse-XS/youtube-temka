@@ -113,6 +113,8 @@ export default function CreatePage({
     setForm(v => ({
       ...v,
       workflow,
+      series_mode: 'independent',
+      plan_only: false,
       mode:['compilation','single_long'].includes(workflow)?'longs':'shorts',
       destination:['compilation','single_long'].includes(workflow)?'video':'youtube_shorts',
       preset:'auto',
@@ -122,7 +124,7 @@ export default function CreatePage({
       target_duration:workflow==='compilation'?900:null,
       audio_mode:workflow==='compilation'&&v.audio_mode==='voiceover'?'original':v.audio_mode,
       preserve_fps:workflow==='compilation'?false:v.preserve_fps,
-      review_before_render:workflow==='story'?false:v.review_before_render,
+      review_before_render:['story','single_long'].includes(workflow)?false:v.review_before_render,
       silence_removal:['compilation','story'].includes(workflow)?false:v.silence_removal,
     }));
   };
@@ -392,6 +394,10 @@ export default function CreatePage({
           </label>}
         </div>}
         <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} profiles={settings?.youtube_profiles||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
+        {form.workflow==="highlights" && <label className="check">
+          <input type="checkbox" checked={!!form.plan_only} onChange={e=>set("plan_only",e.target.checked)}/>
+          Зберегти лише план відбору
+        </label>}
         {!story && !singleLong && <label className="check">
           <input type="checkbox" checked={!!form.review_before_render}
             onChange={e=>set('review_before_render',e.target.checked)}/>

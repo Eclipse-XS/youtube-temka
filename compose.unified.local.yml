@@ -18,7 +18,9 @@ services:
       WHISPER_COMPUTE: int8
       OMP_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
-      FFMPEG_ENCODER: x264
+      FFMPEG_ENCODER: auto
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+      OLLAMA_GPU_LAYERS: auto
       HF_HUB_OFFLINE: "1"
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
