@@ -103,24 +103,52 @@ def list_jobs(limit=200,offset=0):
         return [decode(r,db) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT ? OFFSET ?',(min(200,max(1,limit)),max(0,offset))).fetchall()]
 
 
+def can_claim_remote(payload):
+    request = json.loads(payload)
+    urls = [item['source'] for item in request.get('sources', [])] or [request['source']]
+    return request['save_drive'] and all(not url.startswith('upload:') for url in urls)
+
+
 def claim(worker, remote=False):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        # Uncertain external effects must be reviewed, never replayed blindly.
-        expired=db.execute("UPDATE jobs SET state='BLOCKED',error='Worker lease expired; inspect outputs before retry',lease=NULL WHERE lease IS NOT NULL AND seen < ? RETURNING id", (time.time()-120,)).fetchall()
+        now = time.time()
+        expired = db.execute("SELECT id,state,result FROM jobs WHERE lease IS NOT NULL AND seen < ?", (now-120,))
         for item in expired:
-            db.execute('INSERT INTO events VALUES(?,?,?,?)',(item['id'],time.time(),'BLOCKED','Worker lease expired; inspect outputs before retry'))
-            db.execute("UPDATE job_stages SET status='failed',finished=?,message='Worker lease expired; checkpoints retained' WHERE job=? AND status='running'",(time.time(),item['id']))
+            result = json.loads(item['result'])
+            # Drive may have accepted a write before the worker lost its lease.
+            retryable = item['state'] != 'UPLOADING' or bool(result.get('cloud_verified'))
+            message = ('Worker lease expired; checkpoints retained' if retryable else
+                       'Worker lease expired during upload; inspect remote outputs before retry')
+            failure = {'code':'WORKER_LEASE_EXPIRED','stage':result.get('active_stage') or item['state'],
+                       'message':message,'retryable':retryable}
+            state = schedule_retry(result, failure, now) if retryable else 'BLOCKED'
+            result['failure'] = failure
+            db.execute('UPDATE jobs SET state=?,error=?,result=?,lease=NULL,seen=? WHERE id=?',
+                       (state,message,json.dumps(result,ensure_ascii=False),now,item['id']))
+            db.execute('INSERT INTO events VALUES(?,?,?,?)',(item['id'],now,state,message))
+            db.execute("UPDATE job_stages SET status='failed',finished=?,message=? WHERE job=? AND status='running'",(now,message,item['id']))
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
-        rows = db.execute("SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0 ORDER BY created")
-        row = next((r for r in rows if not remote or (not json.loads(r['request'])['source'].startswith('upload:') and json.loads(r['request'])['save_drive'])),None)
+        rows = db.execute("""SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0
+                          AND coalesce(json_extract(result,'$.retry_at'),0)<=? ORDER BY created""", (now,))
+        row = next((r for r in rows if not remote or can_claim_remote(r['request'])),None)
         if not row:
             return None
         lease = uuid.uuid4().hex
-        db.execute("UPDATE jobs SET state='PROBING',worker=?,lease=?,seen=? WHERE id=?", (worker,lease,time.time(),row['id']))
+        db.execute("UPDATE jobs SET state='PROBING',error=NULL,worker=?,lease=?,seen=?,result=json_remove(result,'$.retry_at') WHERE id=?", (worker,lease,now,row['id']))
         db.execute('INSERT INTO events VALUES(?,?,?,?)',(row['id'],time.time(),'PROBING','Lease assigned to '+worker))
         return {'job': decode(db.execute('SELECT * FROM jobs WHERE id=?', (row['id'],)).fetchone()), 'lease': lease}
+
+
+def schedule_retry(result, failure, now):
+    used = result.get('automatic_retries', 0)
+    failure.update(attempt=used+1, max_attempts=config.AUTOMATIC_RETRIES+1)
+    if used >= config.AUTOMATIC_RETRIES:
+        return 'FAILED'
+    result['automatic_retries'] = used+1
+    result['retry_at'] = now + (30 if failure['code']=='DOWNLOAD_RATE_LIMITED' else 5) * 2**used
+    return 'QUEUED'
 
 
 def update(jid, lease, state=None, result=None, error=None, current=None, total=None,stage_update=None):
@@ -138,12 +166,19 @@ def update(jid, lease, state=None, result=None, error=None, current=None, total=
                     provenance=metadata.pop('_provenance',{})
                     db.execute('INSERT OR IGNORE INTO metadata_versions VALUES(?,?,?,?,?,?,?)',(jid,index,metadata['version'],json.dumps(metadata,ensure_ascii=False),json.dumps(provenance,ensure_ascii=False),time.time(),0))
             value.update(result)
+        if state=='QUEUED':
+            failure=value.get('failure')
+            if row['state']=='UPLOADING' or not failure or not failure.get('retryable'):
+                raise ValueError('Automatic retry requires a retryable processing failure')
+            state=schedule_retry(value,failure,time.time())
+        if state=='READY':
+            value.pop('failure',None)
         if state is None:
             if current is None:
                 current=row['current']
             if total is None:
                 total=row['total']
-        terminal = state in ('READY','FAILED','BLOCKED','CANCELLED')
+        terminal = state in ('READY','FAILED','BLOCKED','CANCELLED','QUEUED','REVIEW')
         db.execute('UPDATE jobs SET state=?,result=?,error=?,current=?,total=?,seen=?,lease=? WHERE id=?',
                    (state or row['state'], json.dumps(value, ensure_ascii=False), error,current,total,time.time(),None if terminal else lease,jid))
         db.execute('UPDATE workers SET seen=? WHERE id=?',(time.time(),row['worker']))
@@ -186,10 +221,54 @@ def cancel(jid):
 def retry(jid):
     with connect() as db:
         # A retry resumes files/checkpoints; verified Drive outputs are retained.
-        cur = db.execute("UPDATE jobs SET state='QUEUED',error=NULL,cancelled=0,lease=NULL WHERE id=? AND state IN ('FAILED','BLOCKED','CANCELLED')", (jid,))
+        cur = db.execute("""UPDATE jobs SET state='QUEUED',error=NULL,cancelled=0,lease=NULL,
+                         result=json_remove(result,'$.automatic_retries','$.retry_at','$.failure')
+                         WHERE id=? AND state IN ('FAILED','BLOCKED','CANCELLED')""", (jid,))
         if cur.rowcount:
             db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),'QUEUED','Manual retry; checkpoints retained'))
         return cur.rowcount == 1
+
+
+def edit_plan(jid, revision, edits, target, approve=False):
+    from .models import JobRequest
+
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT state,request,result FROM jobs WHERE id=?',(jid,)).fetchone()
+        if row is None:
+            raise KeyError(jid)
+        result = json.loads(row['result'])
+        plan = result.get('edit_plan')
+        if row['state']!='REVIEW' or not plan or plan['revision']!=revision:
+            raise InterruptedError('The edit plan changed or was submitted. Reload and try again.')
+        request = JobRequest.model_validate_json(row['request'])
+        original = {segment['id']:segment for segment in plan['segments']}
+        if len({edit['id'] for edit in edits})!=len(edits):
+            raise ValueError('Choose each segment at most once')
+        selected = []
+        for edit in edits:
+            segment = original.get(edit['id'])
+            if segment is None:
+                raise ValueError('Unknown segment in edit plan')
+            start,end = edit['start_seconds'],edit['end_seconds']
+            source = plan['sources'][segment['source_id']]
+            if not request.minimum<=end-start<=request.maximum or end+segment['source_offset']>source['end']+1e-8:
+                raise ValueError(f'Segment {edit["id"]}: choose a range within the source and the clip duration limits')
+            selected.append({**segment,**edit})
+            if (start,end)!=(segment['start_seconds'],segment['end_seconds']):
+                selected[-1].update(selection_method='manual_boundaries',reason='Boundaries edited by the operator')
+                selected[-1].pop('score',None)
+        if target is not None and request.workflow!='compilation':
+            raise ValueError('A timeline target is available for compilations')
+        plan.update(revision=revision+1,segments=selected,approved=approve)
+        if target is not None:
+            plan['target_duration']=target
+        state = 'QUEUED' if approve else 'REVIEW'
+        db.execute('UPDATE jobs SET state=?,result=?,seen=? WHERE id=?',
+                   (state,json.dumps(result,ensure_ascii=False),time.time(),jid))
+        if approve:
+            db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),state,'Edit plan approved for rendering'))
+        return plan
 
 
 def approve(jid,index,value):
@@ -244,4 +323,8 @@ def preferences(channel):
 def source_in_use(source,exclude):
     # Never use the paginated UI list to decide whether an original may go away.
     with connect() as db:
-        return db.execute("SELECT 1 FROM jobs WHERE id<>? AND json_extract(request,'$.source')=? AND state<>'READY' LIMIT 1",(exclude,source)).fetchone() is not None
+        return db.execute("""SELECT 1 FROM jobs WHERE id<>? AND state<>'READY' AND
+                            (json_extract(request,'$.source')=? OR EXISTS (
+                              SELECT 1 FROM json_each(jobs.request,'$.sources')
+                              WHERE json_extract(value,'$.source')=?)) LIMIT 1""",
+                          (exclude,source,source)).fetchone() is not None

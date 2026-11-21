@@ -1,15 +1,13 @@
 # AI Content Factory
 
-Version 7 operation, memory limits and precise feature boundaries:
-[Factory 7 guide](docs/FACTORY_7.md).
+Self-hosted clipping and editing on the MIT OpenShorts core. Use Smart Highlights
+to find moments, Connect a Story to split a complete range into chronological
+parts, or Longs Compilation to combine several inputs. Inputs include supported
+YouTube videos, completed Twitch VODs and uploaded files. Original audio is the
+default. Outputs can stay local or be copied to verified Drive storage.
 
-Latest measured release results and limitations:
-[Factory 7 release verification](verification/FACTORY_7_RELEASE_2026-11-19.md).
-
-Self-hosted clipping and editing on the MIT OpenShorts core. Paste a completed
-YouTube/Twitch VOD, choose Shorts or Longs and a style, then Generate. The app
-probes the source, analyzes speech in bounded chunks, ranks highlights, renders,
-previews and stores verified outputs on Drive. Original audio is the default.
+See the [Factory 9 workflows and recovery guide](docs/FACTORY_9.md) and
+[Factory 9 verification](verification/FACTORY_9.md).
 
 Acceptance results and remaining limits: [actual verification](verification/REPORT.md).
 One owner-authorized private YouTube upload and separate read-only Analytics

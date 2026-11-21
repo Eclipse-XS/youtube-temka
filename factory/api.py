@@ -9,6 +9,7 @@ import time
 import uuid
 import re
 import mimetypes
+from typing import Literal
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -301,6 +302,37 @@ def music_assets():
     return [p.name for p in (config.DATA/'music').glob('*') if p.suffix in ('.mp3','.wav','.mp4')]
 
 
+@app.post('/api/preflight')
+def preflight_job(body: JobRequest):
+    from .models import CompilationSource
+    from .timeline import story_part_count
+
+    sources = body.sources or [CompilationSource(source=body.source,start=body.start,end=body.end)]
+    checked = []
+    for index, item in enumerate(sources,1):
+        record = {'source_id':f'source-{index}'}
+        try:
+            data = media.probe(item.source)
+            end = min(data['duration'], item.end or data['duration'])
+            span = end-item.start
+            if not 0 < span <= 86400:
+                raise ValueError('Choose a selected range of up to 24 hours inside the source')
+            if body.resolution != 'best' and data['platform']!='local' and not any(r<=body.resolution for r in data['resolutions']):
+                raise ValueError('No source format matches the selected input resolution')
+            if body.workflow=='story':
+                record['story_count'] = story_part_count(body,span)
+            if any(b>end for _,b in body.intervals):
+                raise ValueError('A manual interval extends beyond the source')
+            record.update(title=data['title'],duration=data['duration'],selected_seconds=span)
+        except (ValueError, media.MediaFailure) as error:
+            record['error'] = str(error)[:500]
+        except Exception:
+            record['error'] = 'Media is unavailable. Check access, format or connection.'
+        checked.append(record)
+    return {'sources':checked,'ready':all('error' not in item for item in checked),
+            'shorts_max_seconds':config.SHORTS_MAX_SECONDS}
+
+
 @app.post('/api/jobs',status_code=201)
 def create(body:JobRequest):
     body.asr_model=body.asr_model or config.ASR_MODEL
@@ -319,7 +351,14 @@ def create(body:JobRequest):
         if not policy or not policy['public_allowed'] or not policy['automatic']:
             raise HTTPException(409,'Explicitly enable automatic public publishing for this authenticated channel first')
     try:
-        if body.source.startswith('edit:'):
+        if body.workflow=='compilation':
+            for index, item in enumerate(body.sources,1):
+                try:
+                    if not media.local_source(item.source):
+                        media.validate_url(item.source)
+                except ValueError as error:
+                    raise ValueError(f'Source {index}: {error}') from error
+        elif body.source.startswith('edit:'):
             _,origin,index=body.source.split(':')
             original=store.get(origin)
             if not original or original['state']!='READY' or not original['result']['outputs'][int(index)].get('edit_source'):raise ValueError('Editable source unavailable; re-upload this older source once')
@@ -366,6 +405,49 @@ def retry(jid:str):
     if not store.retry(jid):
         raise HTTPException(409,'Only failed, blocked or cancelled jobs can be retried')
     return get_job(jid)
+
+
+class EditSegment(BaseModel):
+    id: int = Field(ge=1, le=30)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    transition: Literal['cut','fade'] = 'cut'
+
+
+class EditPlanUpdate(BaseModel):
+    revision: int = Field(ge=1)
+    segments: list[EditSegment] = Field(min_length=1, max_length=30)
+    target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
+
+
+@app.get('/api/jobs/{jid}/edit-plan')
+def get_edit_plan(jid: str):
+    plan = get_job(jid)['result'].get('edit_plan')
+    if not plan:
+        raise HTTPException(404,'No edit plan available')
+    return plan
+
+
+def save_edit_plan(jid, body, approve=False):
+    try:
+        return store.edit_plan(jid,body.revision,[item.model_dump() for item in body.segments],
+                               body.target_duration,approve)
+    except KeyError:
+        raise HTTPException(404,'Job not found') from None
+    except InterruptedError as error:
+        raise HTTPException(409,str(error)) from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
+
+
+@app.patch('/api/jobs/{jid}/edit-plan')
+def revise_edit_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body)
+
+
+@app.post('/api/jobs/{jid}/render')
+def render_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body,approve=True)
 
 
 class Approval(BaseModel):
@@ -539,13 +621,15 @@ class Checkpoint(BaseModel):
 
 @app.post('/api/workers/jobs/{jid}')
 def checkpoint(jid:str,body:Checkpoint):
-    states={'PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED'}
+    states={'QUEUED','PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED','REVIEW'}
     if body.state and body.state not in states:
         raise HTTPException(422,'Invalid worker state')
     try:
         store.update(jid,**body.model_dump())
     except InterruptedError:
         raise HTTPException(409,'Worker lease lost or job cancelled') from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
     if body.state=='READY':
         from .retention import register
         register(store.get(jid))

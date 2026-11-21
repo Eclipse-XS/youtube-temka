@@ -1,10 +1,29 @@
 from typing import Literal
 from pydantic import BaseModel, Field, model_validator
+from . import config
+
+
+class CompilationSource(BaseModel):
+    source: str = Field(min_length=1, max_length=2048)
+    start: float = Field(default=0, ge=0, le=86400, allow_inf_nan=False)
+    end: float | None = Field(default=None, gt=0, le=86400, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_interval(self):
+        if self.end is not None and self.end <= self.start:
+            raise ValueError('Source end must be after its start')
+        return self
 
 
 class JobRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     rights_confirmed: bool
+    workflow: Literal['highlights', 'story', 'compilation'] | None = None
+    sources: list[CompilationSource] = Field(default_factory=list, max_length=12)
+    story_count: int | None = Field(default=None, ge=1, le=100)
+    destination: Literal['youtube_shorts', 'video'] | None = None
+    review_before_render: bool = False
+    transition: Literal['cut','fade'] = 'cut'
     mode: Literal['shorts','longs'] = 'shorts'
     resolution: Literal[480,720,1080,'best'] = 720
     output_height: Literal[720,1080] = 720
@@ -60,12 +79,39 @@ class JobRequest(BaseModel):
     def validate_job(self):
         if not self.rights_confirmed:
             raise ValueError('Confirm rights to the source and selected background')
+        if self.workflow == 'compilation':
+            if len(self.sources) < 2 or self.sources[0].source != self.source:
+                raise ValueError('Provide at least two sources with the first as the primary source')
+            if len({(s.source, s.start, s.end) for s in self.sources}) != len(self.sources):
+                raise ValueError('Remove duplicate source ranges from the compilation')
+            if self.intervals or self.destination == 'youtube_shorts':
+                raise ValueError('Compilations use per-source ranges and regular video output')
+            if self.audio_mode == 'voiceover':
+                raise ValueError('Compilation supports original sound, music, or silent audio')
+            self.mode = 'longs'
+            self.preserve_fps = False
+        elif self.sources:
+            raise ValueError('Multiple sources require Longs Compilation')
+        if self.workflow == 'story':
+            if self.intervals or self.silence_removal:
+                raise ValueError('Story parts cover the full range; remove manual clips and pause removal')
+            if self.review_before_render:
+                raise ValueError('Story boundaries are constrained by complete source coverage')
+            self.mode = 'shorts'
+            self.series_mode = 'connected'
+        elif self.workflow:
+            self.series_mode = 'independent'
+        if self.destination == 'youtube_shorts' and (
+            self.mode != 'shorts' or self.maximum > config.SHORTS_MAX_SECONDS
+            or any(b-a > config.SHORTS_MAX_SECONDS for a,b in self.intervals)
+        ):
+            raise ValueError(f'YouTube Shorts require vertical output and at most {config.SHORTS_MAX_SECONDS} seconds per part; lower the maximum or select regular video')
         if self.text_mode is not None:
             self.captions=self.text_mode in ('subtitles','hook_subtitles')
             if self.text_mode in ('none','subtitles'):self.hook=''
         if self.text_mode=='custom' and not self.hook.strip():raise ValueError('Custom Text requires nonempty text')
         if self.series_mode=='connected' and self.mode!='shorts':raise ValueError('Connected Series requires Shorts')
-        if self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
+        if self.series_mode=='connected' and self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
         if self.publish_automatic and (not self.save_drive or not self.publish_channel):
             raise ValueError('Automatic publishing requires a selected authorized channel and verified Drive storage')
         if (self.end is not None and self.end <= self.start) or self.minimum > self.maximum:

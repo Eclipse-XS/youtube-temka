@@ -1,6 +1,7 @@
 """Bounded local inference with validated, deterministic candidate selection."""
 import httpx
 import re
+from bisect import bisect_left
 from . import config
 from .models import Ranking, Candidate
 
@@ -28,7 +29,8 @@ def heuristics(transcript, request):
         if i and first['start']-segments[i-1]['end']<.6 and not complete(segments[i-1]['text']):
             continue
         texts=[];eligible=None
-        for j,last in enumerate(segments[i:],start=i):
+        for j in range(i,len(segments)):
+            last=segments[j]
             if last['end']-first['start'] > request.maximum:
                 break
             texts.append(last['text'])
@@ -44,30 +46,35 @@ def heuristics(transcript, request):
     return out
 
 
-def analyze(transcript, request, duration, progress=lambda *_:None):
+def analyze(transcript, request, duration, progress=lambda *_:None, visual_candidates=()):
     import json
     from .inference import generate,model_session
     model = request.llm_model or config.MODEL
     candidates = []
-    llm_candidates=[]
+    llm_candidates=set()
     failed = False
     rejected = 0
     calls = 0
     decisions = []
     fallback_reason = None
     fallback = heuristics(transcript, request)
-    windows, window = [], []
-    for segment in transcript['segments']:
-        window.append(segment)
-        if sum(len(s['text']) for s in window) >= 3500:
-            windows.append(window)
-            window = []
-    if window:
-        windows.append(window)
+    segments=transcript['segments']
+    windows, start, characters = [], 0, 0
+    for i, segment in enumerate(segments):
+        characters += len(segment['text'])
+        if characters >= 3500:
+            windows.append((start,i+1))
+            start,characters=i+1,0
+    if start < len(segments):
+        windows.append((start,len(segments)))
+    fallback_starts=[c.start_seconds for c in fallback]
     try:
         with httpx.Client(timeout=180, trust_env=False) as client, model_session(client,config.OLLAMA+'/api/generate',model) as session:
-            for i, window in enumerate(windows):
-                choices = [c for c in fallback if window[0]['start'] <= c.start_seconds < c.end_seconds <= window[-1]['end']]
+            for i, (first,last) in enumerate(windows):
+                window=segments[first:last]
+                left=bisect_left(fallback_starts,window[0]['start'])
+                right=bisect_left(fallback_starts,window[-1]['end'],lo=left)
+                choices = [c for c in fallback[left:right] if c.end_seconds <= window[-1]['end']]
                 if len(choices) > 12:
                     choices = [choices[round(k * (len(choices)-1) / 11)] for k in range(12)]
                 if not choices:
@@ -109,7 +116,7 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
                         if ranking.candidates and not valid:
                             raise ValueError('LLM returned no semantically valid supplied interval')
                         candidates.extend(valid)
-                        llm_candidates.extend(c.model_dump() for c in valid)
+                        llm_candidates.update((c.start_seconds,c.end_seconds,c.score,c.title) for c in valid)
                         break
                     except (ValueError,KeyError):
                         if attempt == 1:
@@ -123,9 +130,16 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
         fallback_reason=fallback_reason or 'technical_llm_failure'
     if failed or not calls:
         candidates = candidates+[c for c in fallback if not any(d['start']<=c.start_seconds and c.end_seconds<=d['end'] for d in decisions)]
+    visual_keys={(c.start_seconds,c.end_seconds,c.score,c.title) for c in visual_candidates}
+    candidates.extend(visual_candidates)
     selected=select(candidates,request,duration)
     for candidate in selected:
-        used_llm=candidate in llm_candidates
+        key=tuple(candidate[k] for k in ('start_seconds','end_seconds','score','title'))
+        if key in visual_keys:
+            candidate.update(selection_method='sampled_media_signals',analysis_model=None,
+                             title_method='source_label',editorial_review_required=True)
+            continue
+        used_llm=key in llm_candidates
         candidate['selection_method']='ollama' if used_llm else 'heuristic'
         candidate['analysis_model']=model if used_llm else None
         text=' '.join(s['text'].strip() for s in transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds']).strip()
@@ -142,6 +156,6 @@ def analyze(transcript, request, duration, progress=lambda *_:None):
         'selection_summary':f'Selected {len(selected)} of {request.count} requested clips from {len(candidates)} candidates after duration and overlap checks. Editorial review is required.',
         'analysis':'heuristic' if failed or not calls else 'ollama',
         'model':None if failed or not calls else model,
-        'analysis_outcome':fallback_reason or (('no_coherent_intervals' if transcript['segments'] else 'insufficient_speech') if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
+        'analysis_outcome':'media_event_candidates' if any(c['selection_method']=='sampled_media_signals' for c in selected) else fallback_reason or (('no_coherent_intervals' if transcript['segments'] else 'insufficient_speech') if not fallback else ('unsuitable' if not candidates and decisions else 'selected')),
         'analysis_diagnostics':{'requests':calls,'rejected_intervals':rejected,'windows':len(windows),'decisions':decisions},
     }
