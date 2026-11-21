@@ -78,6 +78,13 @@ export default function StageProgress({ job }) {
           );
         })}
       </ol>
+      {job.result.failure && <p>
+        <code>{job.result.failure.code}</code> · {job.result.failure.stage}
+        {job.result.failed_source_id && <> · {job.result.failed_source_id}</>}
+      </p>}
+      {job.result.retry_at && job.state==='QUEUED' && <p role="status">
+        Повторна спроба після {new Date(job.result.retry_at*1000).toLocaleTimeString()}.
+      </p>}
       {job.error && <p className="error">{job.error}</p>}
     </details>
   );

@@ -1,10 +1,31 @@
 from typing import Literal
 from pydantic import BaseModel, Field, model_validator
+from . import config
+
+
+class CompilationSource(BaseModel):
+    source: str = Field(min_length=1, max_length=2048)
+    start: float = Field(default=0, ge=0, le=86400, allow_inf_nan=False)
+    end: float | None = Field(default=None, gt=0, le=86400, allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def validate_interval(self):
+        if self.end is not None and self.end <= self.start:
+            raise ValueError('Source end must be after its start')
+        return self
 
 
 class JobRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     rights_confirmed: bool
+    workflow_version: Literal[1, 2] = 1
+    story_mode: Literal['chronological', 'ai_verified'] | None = None
+    workflow: Literal['highlights', 'story', 'compilation'] | None = None
+    sources: list[CompilationSource] = Field(default_factory=list, max_length=12)
+    story_count: int | None = Field(default=None, ge=1, le=100)
+    destination: Literal['youtube_shorts', 'video'] | None = None
+    review_before_render: bool = False
+    transition: Literal['cut','fade'] = 'cut'
     mode: Literal['shorts','longs'] = 'shorts'
     resolution: Literal[480,720,1080,'best'] = 720
     output_height: Literal[720,1080] = 720
@@ -79,6 +100,44 @@ class JobRequest(BaseModel):
     def validate_job(self):
         if not self.rights_confirmed:
             raise ValueError('Confirm rights to the source and selected background')
+        if self.workflow == 'compilation':
+            if len(self.sources) < 2 or self.sources[0].source != self.source:
+                raise ValueError('Provide at least two sources with the first as the primary source')
+            if len({(s.source, s.start, s.end) for s in self.sources}) != len(self.sources):
+                raise ValueError('Remove duplicate source ranges from the compilation')
+            if self.intervals or self.destination == 'youtube_shorts':
+                raise ValueError('Compilations use per-source ranges and regular video output')
+            if self.audio_mode == 'voiceover':
+                raise ValueError('Compilation supports original sound, music, or silent audio')
+            self.mode = 'longs'
+            self.preserve_fps = False
+        elif self.sources:
+            raise ValueError('Multiple sources require Longs Compilation')
+        if self.workflow == 'story':
+            if self.workflow_version == 2 and self.story_mode is None:
+                raise ValueError('Choose chronological or AI-verified story mode')
+            self.story_mode = self.story_mode or 'chronological'
+            if self.intervals or self.silence_removal:
+                raise ValueError('Story parts cover the full range; remove manual clips and pause removal')
+            if self.review_before_render:
+                raise ValueError('Story boundaries are constrained by complete source coverage')
+            self.mode = 'shorts'
+            self.series_mode = 'sequential' if self.story_mode == 'chronological' else 'connected'
+            if self.story_mode == 'ai_verified':
+                self.selection_version = 2
+                if self.story_count is not None:
+                    if self.story_count > 20:
+                        raise ValueError('AI-verified stories support up to 20 parts')
+                    self.count = self.story_count
+        elif self.workflow:
+            self.series_mode = 'independent'
+            if self.workflow == 'highlights' and self.workflow_version == 2 and self.mode == 'shorts':
+                self.selection_version = 2
+        if self.destination == 'youtube_shorts' and (
+            self.mode != 'shorts' or self.maximum > config.SHORTS_MAX_SECONDS
+            or any(b-a > config.SHORTS_MAX_SECONDS for a,b in self.intervals)
+        ):
+            raise ValueError(f'YouTube Shorts require vertical output and at most {config.SHORTS_MAX_SECONDS} seconds per part; lower the maximum or select regular video')
         if self.text_mode is not None:
             self.captions=self.text_mode in ('subtitles','hook_subtitles')
             if self.text_mode in ('none','subtitles'):self.hook=''
@@ -91,6 +150,10 @@ class JobRequest(BaseModel):
         if self.plan_only and (self.mode!='shorts' or self.publish_automatic):raise ValueError('Planning requires Shorts with automatic publishing disabled')
         if self.series_mode=='sequential' and self.intervals:raise ValueError('Sequential Source Split uses the selected start and end')
         if self.series_overlap>=self.minimum:raise ValueError('Series overlap must be shorter than the minimum clip')
+        if self.review_before_render and (self.plan_only or self.publish_automatic):
+            raise ValueError('Edit-plan review requires automatic publishing and planning-only mode to be disabled')
+        if self.workflow == 'compilation' and self.silence_removal:
+            raise ValueError('Compilation preserves segment timing and cannot remove silence')
         if self.publish_automatic and (not self.save_drive or not self.publish_channel):
             raise ValueError('Automatic publishing requires a selected authorized channel and verified Drive storage')
         if (self.end is not None and self.end <= self.start) or self.minimum > self.maximum:

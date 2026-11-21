@@ -15,6 +15,13 @@ from . import config
 from .resources import preflight
 
 
+class MediaFailure(RuntimeError):
+    def __init__(self, code, message, retryable=False):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
 def ffmpeg():
     if os.environ.get('FFMPEG_BINARY'):
         return os.environ['FFMPEG_BINARY']
@@ -24,9 +31,9 @@ def ffmpeg():
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
+def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None, cwd=None):
     group={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {'start_new_session':True}
-    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',env=env,**group)
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',env=env,cwd=cwd,**group)
     # Backpressure bounds logs even if a child is noisy or progress persistence
     # is slow. readline's size also bounds a child that never writes a newline.
     lines=queue.Queue(maxsize=128)
@@ -49,43 +56,62 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
     started=time.monotonic()
     next_check=started
     tail=deque(maxlen=12)
+    progress=None
+    eof=False
     try:
         while True:
             now=time.monotonic()
             if now-started > timeout:
-                raise TimeoutError('Media operation timed out; shorten the interval and retry')
-            # FFmpeg writes many lines per progress report. Scan the storage
-            # budget on a time cadence rather than once per buffered line.
+                raise MediaFailure('MEDIA_TIMEOUT', 'Media operation timed out; check the source connection or shorten the interval.', True)
             if now>=next_check:
                 preflight()
                 tick(None,duration)
-                next_check=time.monotonic()+1
+                next_check=now+.5
+            if eof:
+                if process.poll() is not None:break
+                time.sleep(.1)
+                continue
             try:
                 line=lines.get(timeout=.25)
             except queue.Empty:
                 continue
             if line is None:
-                break
+                eof=True
+                continue
             tail.append(line)
             if line.startswith('out_time_us='):
                 try:
-                    tick(float(line.split('=')[1])/1e6,duration)
+                    progress=float(line.split('=')[1])/1e6
+                    tick(progress,duration)
                 except ValueError:
                     pass
             elif 'Transcribing' in line and duration:
                 import re
                 measured=re.search(r'Transcribing.*?(\d+)%',line)
-                if measured:tick(min(100,int(measured[1]))/100*duration,duration)
-        if process.wait() != 0:
+                if measured:
+                    progress=min(100,int(measured[1]))/100*duration
+                    tick(progress,duration)
+        if process.returncode != 0:
             # Do not return raw downloader logs: URLs may carry credentials.
             diagnostic=' '.join(tail).casefold()
-            if any(value in diagnostic for value in ('cuda out of memory','cuda_error_out_of_memory')):reason='GPU memory exhausted; use a smaller model or wait for GPU memory to be released'
-            elif 'out of memory' in diagnostic or 'cannot allocate memory' in diagnostic:reason='System/container memory exhausted; shorten the chunk or choose a smaller model'
-            elif 'no space left on device' in diagnostic:reason='Disk space exhausted; free scratch storage and retry'
-            elif any(value in diagnostic for value in ('downloaded range is empty', 'downloaded range is not decodable', 'downloaded range contains no decodable media')):reason='Source interval returned empty or incomplete media; retry the interval or check VOD availability'
-            elif process.returncode in (-9,137):reason='Process killed; inspect container OOM diagnostics and available RAM before retrying'
-            else:reason='Check codec support, source accessibility and available disk space'
-            raise RuntimeError(f'Media process failed (exit {process.returncode}). {reason}. Checkpoints preserved.')
+            code='MEDIA_PROCESS_FAILED';retryable=False
+            if any(value in diagnostic for value in ('cuda out of memory','cuda_error_out_of_memory')):
+                code,reason='GPU_MEMORY', 'GPU memory exhausted; use a smaller model or wait for GPU memory to be released'
+            elif 'out of memory' in diagnostic or 'cannot allocate memory' in diagnostic:
+                code,reason='SYSTEM_MEMORY', 'System/container memory exhausted; shorten the chunk or choose a smaller model'
+            elif 'no space left on device' in diagnostic:
+                code,reason='DISK_SPACE', 'Disk space exhausted; free scratch storage and retry'
+            elif any(value in diagnostic for value in ('http error 429','429 too many requests','server returned 429')):
+                code,reason,retryable='DOWNLOAD_RATE_LIMITED','Source rate limited the request; wait before retrying',True
+            elif any(value in diagnostic for value in ('connection timed out','connection reset','temporarily unavailable','http error 503','server returned 5')):
+                code,reason,retryable='SOURCE_UNAVAILABLE','Source connection was interrupted; verify the connection if retries fail',True
+            elif any(value in diagnostic for value in ('downloaded range is empty', 'downloaded range is not decodable', 'downloaded range contains no decodable media')):
+                code,reason,retryable='SOURCE_RANGE_INCOMPLETE','Source interval returned empty or incomplete media; check VOD availability',True
+            elif process.returncode in (-9,137):
+                code,reason='MEDIA_PROCESS_KILLED','Process killed; inspect container OOM diagnostics and available RAM before retrying'
+            else:
+                reason='Check codec support, source accessibility and available disk space'
+            raise MediaFailure(code, f'Media process failed (exit {process.returncode}). {reason}. Checkpoints preserved.', retryable)
         preflight()
         tick(None,duration)
     finally:
@@ -106,6 +132,8 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None):
 
 
 def local_source(source):
+    if isinstance(source, Path):
+        return source if source.is_file() else None
     if source.startswith('job-local:'):
         import re
         jid=source.split(':',1)[1]
@@ -171,8 +199,16 @@ def probe(source):
     validate_url(source)
     import yt_dlp
     import ssrf_guard
-    with ssrf_guard.guarded(), yt_dlp.YoutubeDL({'quiet':True,'noplaylist':True,'socket_timeout':20,'skip_download':True}) as ydl:
-        item=ydl.extract_info(source,download=False)
+    try:
+        with ssrf_guard.guarded(), yt_dlp.YoutubeDL({'quiet':True,'noplaylist':True,'socket_timeout':20,'skip_download':True}) as ydl:
+            item=ydl.extract_info(source,download=False)
+    except yt_dlp.utils.DownloadError as error:
+        detail=str(error).casefold()
+        if '429' in detail and ('http' in detail or 'too many requests' in detail):
+            raise MediaFailure('DOWNLOAD_RATE_LIMITED','Source rate limited the request; wait before retrying.',True) from None
+        if any(word in detail for word in ('timed out','connection reset','http error 503')):
+            raise MediaFailure('SOURCE_UNAVAILABLE','Could not reach the source. Check the connection.',True) from None
+        raise MediaFailure('SOURCE_ACCESS_FAILED','Could not access the media. Verify the URL, privacy and source availability.') from None
     if item.get('is_live') or item.get('live_status') in ('is_live','is_upcoming'):
         raise ValueError('Only completed VODs are supported')
     if not item.get('duration'):
@@ -217,6 +253,11 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     # synthetic speech. Limit at the final sample rate with makeup gain disabled.
     audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
     duration=end-start
+    transcript={
+        'language':transcript.get('language'),
+        'segments':[segment for segment in transcript['segments']
+                    if segment['end']>start and segment['start']<end],
+    }
     import av
     with av.open(str(source)) as container:
         has_audio=bool(container.streams.audio)
@@ -445,6 +486,14 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         audio_map='[audio]'
     elif has_audio and request.audio_mode!='silent':
         graph+=f';[0:a]{audio_filter}[audio]';audio_map='[audio]'
+    if request.transition=='fade':
+        fade_duration=min(.25,duration/4)
+        fade_end=duration-fade_duration
+        graph+=f';{video}fade=t=in:d={fade_duration},fade=t=out:st={fade_end}:d={fade_duration}[faded]'
+        video='[faded]'
+        if audio_map:
+            graph+=f';{audio_map}afade=t=in:d={fade_duration},afade=t=out:st={fade_end}:d={fade_duration}[faded_audio]'
+            audio_map='[faded_audio]'
     args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video]
     args+=['-map',audio_map,'-c:a','aac','-b:a','192k','-ar','48000'] if audio_map else ['-an']
     args+=[*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
@@ -459,7 +508,8 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         report=validate_output(temporary,duration,request=request,expected_audio=audio_map is not None)
         temporary.replace(output)
     finally:temporary.unlink(missing_ok=True)
-    output.with_suffix('.validation.json').write_text(json.dumps({**report,'framing':framing}),encoding='utf-8')
+    from jsonfile import write_json_atomic
+    write_json_atomic(output.with_suffix('.validation.json'), {**report,'framing':framing})
     return output
 
 
@@ -473,6 +523,8 @@ def validate_output(path,duration,request=None,expected_audio=None):
         if request:
             expected=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
             if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')
+            if request.destination=='youtube_shorts' and container.duration/av.time_base>config.SHORTS_MAX_SECONDS:
+                raise RuntimeError(f'Rendered output exceeds the {config.SHORTS_MAX_SECONDS}s YouTube Shorts limit')
         if expected_audio is not None and bool(container.streams.audio)!=expected_audio:
             raise RuntimeError('Rendered audio track does not match the selected audio mode')
         frames=0;black_samples=0;sampled_frames=0;video_end=None
@@ -515,4 +567,34 @@ def concatenate(paths,output,tick=lambda *_:None):
     # Only application-generated file paths, never source-supplied strings.
     manifest=output.with_suffix('.concat.txt')
     manifest.write_text(''.join("file '"+p.name+"'\n" for p in paths),encoding='utf-8')
-    run([ffmpeg(),'-y','-hide_banner','-loglevel','error','-f','concat','-safe','1','-i',str(manifest),'-c','copy','-movflags','+faststart',str(output)],tick)
+    temporary=output.with_suffix('.assembling.mp4')
+    try:
+        run([ffmpeg(),'-y','-hide_banner','-loglevel','error','-f','concat','-safe','1','-i',manifest.name,
+             '-c','copy','-movflags','+faststart',temporary.name],tick,cwd=output.parent)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def normalize_compilation(source,output,duration,height,tick):
+    """Make stream-copy assembly safe across source dimensions, frame rates and audio layouts."""
+    import av
+
+    width=height*16//9//2*2
+    with av.open(str(source)) as container:
+        has_audio=bool(container.streams.audio)
+    args=[ffmpeg(),'-y','-hide_banner','-loglevel','error','-threads','2','-i',str(source)]
+    if not has_audio:
+        args+=['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']
+    args+=['-map','0:v:0','-map','0:a:0' if has_audio else '1:a:0',
+           '-vf',f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1',
+           '-af','apad','-t',str(duration),'-r','30','-c:v','libx264','-preset','fast',
+           '-threads','2','-filter_threads','1','-pix_fmt','yuv420p','-c:a','aac',
+           '-ac','2','-ar','48000','-movflags','+faststart','-progress','pipe:1']
+    temporary=output.with_suffix('.normalizing.mp4')
+    try:
+        run([*args,str(temporary)],tick,duration)
+        validate_output(temporary,duration,expected_audio=True)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)

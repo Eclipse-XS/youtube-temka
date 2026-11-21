@@ -41,6 +41,8 @@ def identity(request, duration, transcript):
               'series_overlap', 'intervals', 'target_duration', 'llm_model', 'source_category',
               'asr_model', 'language', 'captions', 'audio_mode')
     version = (VERSION, 'connected-v8-subwindows') if request.series_mode == 'connected' else VERSION
+    if request.workflow:
+        version = (version, request.workflow_version, request.workflow, request.story_mode, request.story_count)
     value = [version, duration, request.model_dump(include=set(fields)), config.MODEL, transcript]
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
@@ -325,6 +327,7 @@ def plan_v8(
     source_title='',
     progress=lambda *_: None,
     vlm=None,
+    include_activity=False,
 ):
     """Factory 8.0 Unified Semantic Event & Multimodal Discovery Planner.
 
@@ -410,13 +413,21 @@ def plan_v8(
 
         # Independent Highlights mode
         speech_proposals = []
-        bounded = request.model_copy(update={'maximum': min(request.maximum, PLATFORM_MAXIMUM)})
+        coverage = None
+        if include_activity:
+            from .signals import from_evidence, propose
+            events, scenes, coverage = from_evidence(evidence)
+            speech_proposals.extend(
+                item.model_dump() for item in propose(events, scenes, request, duration, source_title)
+            )
+        bounded = (request.model_copy(update={'maximum': min(request.maximum, PLATFORM_MAXIMUM)})
+                   if request.mode == 'shorts' else request)
         if transcript.get('segments'):
             # Reuse speech heuristic/LLM proposals as one MAP source (subject to strict event-graph verification!)
             sp_res = analyze(transcript, bounded, duration, lambda *_: None)
-            speech_proposals = sp_res.get('candidates', [])
+            speech_proposals.extend(sp_res.get('candidates', []))
 
-        return discover_highlights(
+        result = discover_highlights(
             evidence=evidence,
             graph=graph,
             transcript=transcript,
@@ -426,6 +437,9 @@ def plan_v8(
             budget=DiscoveryBudget(max_vlm_verified=min(6, max(3, request.count * 2))),
             speech_proposals=speech_proposals,
         )
+        if coverage is not None:
+            result['signal_coverage'] = coverage
+        return result
     finally:
         if owned_vlm and vlm is not None:
             vlm.unload()
