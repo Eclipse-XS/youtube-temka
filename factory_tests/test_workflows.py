@@ -75,9 +75,25 @@ def test_compilation_reviews_and_renders_three_different_sources(owned_sources,m
     store.edit_plan(job['id'],saved['revision'],segments,None,approve=True)
     from factory import pipeline
     monkeypatch.setattr(pipeline,'transcribe_chunks',lambda *_:pytest.fail('Reran ASR after plan approval'))
+    concatenate = media.concatenate
+
+    def interrupt(*args, **kwargs):
+        raise media.MediaFailure('SOURCE_UNAVAILABLE', 'Injected compilation interruption', True)
+
+    monkeypatch.setattr(media, 'concatenate', interrupt)
+    process(store.claim('fixture'))
+    interrupted = store.get(job['id'])
+    assert interrupted['state'] == 'QUEUED'
+    assert interrupted['result']['clips_completed'] == 3
+    completed_hashes = [item['output_hash'] for item in interrupted['result']['outputs']]
+    with store.connect() as db:
+        db.execute("UPDATE jobs SET result=json_remove(result,'$.retry_at') WHERE id=?", (job['id'],))
+    monkeypatch.setattr(media, 'concatenate', concatenate)
+    monkeypatch.setattr(media, 'render', lambda *_args, **_kwargs: pytest.fail('Reran a completed segment'))
     process(store.claim('fixture'))
     done=store.get(job['id'])
     assert done['state']=='READY',done['error']
+    assert [item['segment_output_hash'] for item in done['result']['timeline']['segments']] == completed_hashes
     root=config.SCRATCH/job['id']
     assert [output['name'] for output in done['result']['outputs']]==['long.mp4']
     media.validate_output(root/'long.mp4',16.5,request,expected_audio=True)
