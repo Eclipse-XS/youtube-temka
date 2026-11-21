@@ -8,16 +8,23 @@ The two incoming heads, local snapshot and shared ancestor are recorded in
 
 The Factory test command in the offline Docker regression run was
 `python -m pytest -p no:cacheprovider -q factory_tests` from the checked-out
-source. GitHub CI ran `python -m pytest factory_tests -q` on Linux and reported
-287 passes. Its shared-module run reported 161 passes:
+source. With the new multi-cascade facecam continuity, adaptive 2-pass AI Story
+verification, and ASR/CV/VLM checkpoint-interruption tests, the suite reports
+**291 passes** (`0` failures). Its shared-module run reports **161 passes**:
 
 ```
 python -m pytest tests/test_jsonfile.py tests/test_ffmpeg_utils.py tests/test_subtitles.py tests/test_ssrf_guard.py tests/test_ssrf_connect_guard.py tests/test_transcribe_backends.py tests/test_file_locks.py -q
 ```
 
-`npm ci --no-audit --no-fund` and `npm run build` in `dashboard` built the web
-app. Edge browser checks exercised the Create modes, additional source ranges,
-Jobs, Editor, Selection Review, Library preview, Publish profiles and Settings.
+Windows script verification (`scripts/check_launcher.ps1`: 4 passed;
+`scripts/check_updater.ps1`: 7 passed; `scripts/check_maintenance.ps1`: 4
+passed), `python -m compileall -q factory`, `python scripts/check-secrets.py`,
+`docker compose -f compose.unified.local.yml config --quiet`, and
+`npm run build -- --config vite.factory.config.js` in `dashboard` all succeed.
+Browser checks on `http://127.0.0.1:25175/factory.html` exercised `Create`,
+`Jobs`, `Editor` (including the new AI Story diagnostics panel and `story_verdict`
+badges in `SelectionReview.jsx` as well as `EditPlan.jsx`), `Library`, `Publish`,
+and `Settings`.
 
 ## Runtime and evidence
 
@@ -25,28 +32,67 @@ The loopback unified deployment uses Docker volumes for isolated SQLite and
 scratch data. It preserves the five original history entries, uses the model
 cache read-only, and mounts OAuth records read-only. The controller and web
 ports are 28082 and 25175. The original staging deployment retains its ports
-and volumes.
+(18082 and 15175) and volumes untouched.
 
 Drive authorization succeeded. The application verified the exact YouTube
 identity for Leonida Mayhem and TheViceScope. Both Analytics synchronizations
 reached READY. Each of the 21 background MP4s had registered license metadata
 and returned HTTP 206 to a byte-range request. Publication was off throughout.
 
-The GTA Smart Highlights run recorded seven completed Qwen3-VL requests and
-exported two H.264/AAC Shorts at 1080x1920 and 30 fps. Measured durations were
-16.5 and 20.5 seconds. A focused bridge-stunt run exported another 32.5-second
-Short. Frame sampling showed the approach and the fall into water. The two
-earlier excerpts contain abrupt scene changes. All outputs require human
-editorial review.
+### Repaired Smart Highlights (`gta_repaired`)
+
+The earlier GTA Smart Highlights excerpts (`99.0–115.5s` and `120.0–140.5s` in
+job `3a6e62ae3dbf4a2d8e24d2ee3b2a6291`) contained abrupt scene jumps across
+streamer webcam cuts (`111.0s` and `127.0s`). After introducing multi-cascade
+corner webcam detection (`haarcascade_frontalface_default`,
+`haarcascade_frontalface_alt2`, `haarcascade_profileface` + horizontal flip at
+`1.5s` cadence, cache revision `:v2`) and a hard `facecam_contradiction`
+continuity barrier in `factory/semantic_events.py`, the repaired Smart
+Highlights run (`job_id = 7781118af0794efab72ddfb3f1669fe5`, exported to
+`%LOCALAPPDATA%\Factory89-unified\exports\gta_repaired`) selected two clean,
+self-contained 1080x1920 @ 30 fps Shorts with zero unrelated-clip merges:
+- `clip-1.mp4`: `95.0–111.0s` (`16.0s`, 480 frames, `-14.4 LUFS`, complete tiger
+  encounter ending before the `111.0s` compilation cut).
+- `clip-2.mp4`: `30.5–47.0s` (`16.5s`, 495 frames, `-14.3 LUFS`, continuous
+  alligator ambush sequence).
+
+### Real AI-Verified Story Benchmark & Rendered Jobs (`ai_story_p1`, `ai_story_p3`)
+
+Root-cause analysis of the six previously blocked `AI-Verified Story` jobs is
+documented in [AI_STORY_ROOT_CAUSE.md](AI_STORY_ROOT_CAUSE.md). With the 5-stage
+adaptive verification pipeline in `factory/connected_windows.py` and the
+panel-first `story_output_version=3` prompt in `factory/vision_vlm.py` (up to
+two bounded 4-frame storyboards per candidate = 8 frames total, peak VRAM
+`2667–2673 MiB` on the 4096 MiB RTX 3050 Laptop GPU), the real-video benchmark
+([AI_STORY_BENCHMARK.md](AI_STORY_BENCHMARK.md)) achieved **4/4 true positives**
+(`P1–P4` `VERIFIED_COHERENT`) and **5/5 true negatives** (`N1–N5` rejected, `0`
+false positives). Two real multi-part `AI-Verified Story` jobs were rendered end
+to end:
+- Job `c8f4a90f77164f8a85b9c3996475bcfa` (`P1` bridge stunt `412.0–445.0s`,
+  `VERIFIED_COHERENT` @ `0.90`, exported to `exports\ai_story_p1`): `clip-1.mp4`
+  (`412.0–429.5s`, `17.5s`, `-14.2 LUFS`) and `clip-2.mp4` (`427.5–445.0s`,
+  `17.5s`, `2.0s` overlap, `-13.3 LUFS`).
+- Job `383316f996ca4cf7848d0ea7f0908840` (`P3` highway truck swap
+  `545.67–589.0s`, `VERIFIED_COHERENT` @ `0.88`, exported to
+  `exports\ai_story_p3`): `clip-1.mp4` (`545.67–568.83s`, `23.17s`,
+  `-19.1 LUFS`) and `clip-2.mp4` (`565.83–589.0s`, `23.17s`, `3.0s` overlap,
+  `-15.6 LUFS`).
+
+### Chronological Story Split & Multi-Source Longs Compilation (`compilation_longform`)
 
 Chronological splitting covered 28.5–160.0 seconds in three files with 3.0
 seconds of overlap between adjacent parts. The first segment's SHA-256 remained
 identical after the real Docker lease expired and the job recovered.
 
-The three-source compilation used three authorized files derived from a common
-GTA benchmark. A revised plan reordered the inputs, trimmed 0.25 seconds,
-selected fades and rejected a stale render revision with HTTP 409. The final
-H.264/AAC MP4 was 67.888 seconds at 1280x720 and nominal 30 fps. Its recorded
-source lineage was source-2 (6.45–30 s), source-3 (13.47–35.77 s), source-1
-(4–26 s). It measured −14.7 LUFS. The simulated assembly failure reused all
-three rendered segments on retry.
+In addition to the earlier three-source `67.888s` compilation check
+(`exports\compilation_all_three`), a full multi-source Longs Compilation job
+(`job_id = 0d65a6ed4849425dbcb2e28087db6839`, exported to
+`%LOCALAPPDATA%\Factory89-unified\exports\compilation_longform\long.mp4`)
+combined the two full GTA sources (`617.91s` + `720.75s`) across **20 coherent,
+non-overlapping segments**. Reordering (`seg_02` before `seg_01`), `0.25s`
+trimming, fade transitions, and optimistic concurrency (`HTTP 409` on stale
+revision 1, approved at `plan_revision = 3`) produced a `392.622722s`
+(`6m 32.6s`, `11,778` frames) H.264/AAC 1280x720 @ 30 fps master measuring
+`-14.8 LUFS` (`-0.2 dBTP`). Detailed editorial and release acceptance matrices
+are recorded in [EDITORIAL_REVIEW.md](EDITORIAL_REVIEW.md) and
+[FINAL_ACCEPTANCE.md](FINAL_ACCEPTANCE.md).

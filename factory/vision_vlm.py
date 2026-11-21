@@ -639,27 +639,35 @@ class LocalVisionAdapter:
             'Return strict JSON.'
         )
         if ctx.get('connected_story'):
-            schema['required'].append('development_observed')
-            for field in ('setup_observed', 'development_observed', 'climax_observed', 'payoff_observed'):
-                schema['properties'][field] = {'type': 'string', 'maxLength': 64}
-            schema['properties']['event_summary']['maxLength'] = 84
-            schema['properties']['defects']['maxItems'] = 1
+            schema['required'].extend([
+                'development_observed',
+                'panel_1_observed', 'panel_2_observed', 'panel_3_observed', 'panel_4_observed',
+                'event_progression_observed',
+            ])
+            for field in (
+                'panel_1_observed', 'panel_2_observed', 'panel_3_observed', 'panel_4_observed',
+                'setup_observed', 'development_observed', 'climax_observed', 'payoff_observed',
+            ):
+                schema['properties'][field] = {'type': 'string', 'maxLength': 80}
+            schema['properties']['event_progression_observed'] = {'type': 'boolean'}
+            schema['properties']['event_summary']['maxLength'] = 140
+            schema['properties']['defects']['maxItems'] = 2
             prompt = (
-                f'Four chronological frames from one proposed story ({ts_str}). '
-                f'Dialogue near the start and end: "{transcript_excerpt}". '
-                'Check whether specific people or actions tie a setup, development, turning point, and outcome together. '
-                'Different viewpoints and gameplay-to-cutscene edits are allowed only when the action or conversation carries across. '
-                'A common game, driving, similar landscapes or shared HUD alone do not establish a story. '
-                'Set contains_format_break for end cards, menus, promos, title cards or black screens. '
-                'Set contains_unrelated_scene for scenes without a common narrative. '
-                'Describe concrete setup_observed, development_observed, climax_observed and payoff_observed supported by the dialogue or visible action. '
-                'A plan alone has no payoff. Leave unsupported fields empty. '
-                'Use at most six words per evidence field. Keep event_summary short and defects empty when no defect is visible. '
+                f'This 2x2 storyboard shows 4 chronological frames ({ts_str}) from one candidate video story. '
+                f'Spoken dialogue in this window: "{transcript_excerpt}". '
+                'First describe literally what is visible in each panel (panel_1_observed .. panel_4_observed): note the vehicle/characters, location, time of day, and any corner webcam. '
+                'Then evaluate: '
+                '1) contains_format_break=true ONLY if any panel shows a full-screen graphic title card (e.g. "PUMBA PRESENTS"), end card/outro logo, "moments later" card, menu, or black screen. Normal gameplay with a corner HUD or webcam is false. '
+                '2) contains_unrelated_scene=true ONLY if the panels jump between different unrelated compilation clips (e.g. different players, car interior -> ocean boat -> night street, or a streamer webcam overlay appearing/disappearing mid-clip). Camera cuts or character movement within the same continuous mission, stunt, flight, vehicle swap, or conversation are NOT unrelated scenes. '
+                '3) coherent_single_event=true if all 4 panels belong to ONE continuous gameplay event, mission scene, stunt, or conversation (with contains_format_break=false and contains_unrelated_scene=false). '
+                '4) event_progression_observed=true if the panels or dialogue show a meaningful progression (e.g. approach/preparation -> stunt/action/decision -> outcome/result). '
+                '5) Summarize the concrete progression in setup_observed (opening context/preparation), development_observed (ongoing action/escalation), climax_observed (turning point/critical action), and payoff_observed (visible outcome/reaction/escape), using specific details from the frames and dialogue. '
+                '6) confidence: 0.80-0.95 when coherent_single_event and event_progression_observed are clearly supported, or <=0.50 when uncertain or discontinuous. '
                 'Return only the JSON object.'
             )
         request_context = {'ts': ts_str, **ctx}
         if ctx.get('connected_story'):
-            request_context['story_output_version'] = 2
+            request_context['story_output_version'] = 3
         raw = self._call_ollama_vision('verify_event_continuity', prompt, [grid_img], schema, request_context)
         if raw and '_raw_text' not in raw:
             defects = [str(d)[:120] for d in (raw.get('defects') or [])[:8]]
@@ -670,15 +678,33 @@ class LocalVisionAdapter:
                 defects.append('format_break_visible_in_frames')
             if has_unrelated and not any('unrelated' in d.lower() or 'scene' in d.lower() for d in defects):
                 defects.append('unrelated_scene_change_visible')
+            p1 = str(raw.get('panel_1_observed', '')).strip()
+            p2 = str(raw.get('panel_2_observed', '')).strip()
+            p3 = str(raw.get('panel_3_observed', '')).strip()
+            p4 = str(raw.get('panel_4_observed', '')).strip()
+            setup_obs = str(raw.get('setup_observed') or p1)[:200]
+            dev_obs = str(raw.get('development_observed') or p2)[:200]
+            climax_obs = str(raw.get('climax_observed') or p3)[:200]
+            payoff_obs = str(raw.get('payoff_observed') or p4)[:200]
+            ev_sum = str(raw.get('event_summary', ''))[:400]
+            combined_text = ' '.join((ev_sum, p1, p2, p3, p4, setup_obs, dev_obs, climax_obs, payoff_obs)).lower()
+            if any(tok in combined_text for tok in ('title card', 'end card', 'black screen', 'series of credits', 'sequence of credits', 'credit screen')):
+                has_break = True
+                coherent = False
+                if not any('card' in d.lower() or 'break' in d.lower() for d in defects):
+                    defects.append('format_break_visible_in_frames')
+            # If the model repeated identical beat strings, fall back to distinct panel observations when available
+            if len({setup_obs.lower(), dev_obs.lower(), climax_obs.lower(), payoff_obs.lower()}) < 3 and len({p1.lower(), p2.lower(), p3.lower(), p4.lower()} - {''}) >= 3:
+                setup_obs, dev_obs, climax_obs, payoff_obs = p1[:200], p2[:200], p3[:200], p4[:200]
             return EventVerification(
                 coherent_single_event=coherent,
                 contains_format_break=has_break,
                 contains_unrelated_scene=has_unrelated,
                 event_summary=str(raw.get('event_summary', ''))[:400],
-                setup_observed=str(raw.get('setup_observed', ''))[:200],
-                development_observed=str(raw.get('development_observed', ''))[:200],
-                climax_observed=str(raw.get('climax_observed', ''))[:200],
-                payoff_observed=str(raw.get('payoff_observed', ''))[:200],
+                setup_observed=setup_obs,
+                development_observed=dev_obs,
+                climax_observed=climax_obs,
+                payoff_observed=payoff_obs,
                 defects=defects,
                 confidence=_clamp01(raw.get('confidence', 0.7)),
                 backend=f'ollama:{self.model}',

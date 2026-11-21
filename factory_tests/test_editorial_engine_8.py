@@ -657,3 +657,65 @@ def test_metadata_clean_phrase_truncation_and_boilerplate_cleanup():
     assert 'yellow pickup truck' in title.casefold()
     assert title.startswith('GTA 5 | ')
 
+
+def test_facecam_appearance_across_shots_prevents_false_merge():
+    # Regression test for early GTA highlight defect: streamer webcam overlay appearing/disappearing across cut
+    s_with_cam = _mk_shot(0, 0, 10, luma=90, hsv=[0.4] + [0.02] * 31, grid=[0.45] * 27, hud=[0.50] * 24, face=['bottom_right'])
+    s_without_cam = _mk_shot(1, 10, 22, luma=88, hsv=[0.38] + [0.02] * 31, grid=[0.44] * 27, hud=[0.48] * 24, face=[])
+    edge = score_adjacent_shots(s_with_cam, s_without_cam, None, None, {'segments': []}, content_category='gameplay')
+    assert edge.same_event is False
+    assert edge.severity == 'strong_semantic_contradiction'
+    assert 'Facecam layout changed' in edge.reason
+
+
+def test_adaptive_stage_c_and_transparent_story_verdicts(monkeypatch, tmp_path):
+    from factory import connected_windows
+    from factory.vision_vlm import EventVerification
+
+    shots = [_mk_shot(0, 0, 34, mot=0.14, bursts=2)]
+    evidence = _ev(shots, 34.0)
+    transcript = {'language': 'en', 'segments': []}
+    graph = build_event_graph(evidence, transcript)
+    source = tmp_path / 'stunt.mp4'
+    monkeypatch.setattr(connected_windows, 'extract_frames_at_timestamps',
+                        lambda path, times: [(t, b'frame') for t in times])
+
+    # Pass 1 returns identical panel strings (action stunt without distinct 4-beat text), Pass 2 supplies ending water outcome
+    class DummyVLM:
+        def __init__(self):
+            self.calls_made = 0
+            self.max_calls = 8
+        def verify_event_continuity(self, frames_tl, ctx):
+            self.calls_made += 1
+            if self.calls_made == 1:
+                return EventVerification(
+                    verified=True, coherent_single_event=True, confidence=0.90,
+                    event_summary='Yellow pickup truck driving on a highway toward bridge.',
+                    setup_observed='Yellow pickup truck driving on a highway.',
+                    development_observed='Yellow pickup truck driving on a highway.',
+                    climax_observed='Yellow pickup truck driving on a highway.',
+                    payoff_observed='Yellow pickup truck driving on a highway.',
+                )
+            return EventVerification(
+                verified=True, coherent_single_event=True, confidence=0.90,
+                event_summary='Yellow pickup truck flips off the bridge into water.',
+                setup_observed='Yellow pickup truck collides with red car on bridge.',
+                development_observed='Truck flips over the bridge railing.',
+                climax_observed='Truck plunges into the water below.',
+                payoff_observed='Truck lands upside down in the water.',
+            )
+        def stats(self):
+            return {'calls_made': self.calls_made}
+
+    vlm = DummyVLM()
+    req = _req(count=2, minimum=12, maximum=20, series_overlap=2, series_mode='connected')
+    parts, summary, decisions, alts, windows = connected_windows.plan_connected(
+        graph, evidence, transcript, req, source, vlm,
+    )
+    assert len(parts) == 2
+    assert vlm.calls_made == 2
+    assert decisions[0]['verdict'] == 'VERIFIED_COHERENT'
+    assert decisions[0]['adaptive_passes'] == 2
+    assert len(decisions[0]['evidence_timestamps']) == 8
+    assert parts[0]['story_verdict'] == 'VERIFIED_COHERENT'
+

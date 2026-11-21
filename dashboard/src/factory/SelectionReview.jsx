@@ -92,15 +92,34 @@ export default function SelectionReview({job,post,act,onCreated}) {
   const totalDuration=Math.max(1,(evidence?.duration)||(job.result.processing_end??sourceStart)-sourceStart||1);
   const formatBreaks=evidence?.format_breaks||job.result.format_breaks||[];
   const semanticEvents=evidence?.events||job.result.events_summary||[];
+  const diag=job.result.analysis_diagnostics||{};
+  const vlmStats=diag.vlm_stats||{};
+  const decisions=diag.decisions||[];
+  const discoveredCount=job.result.discovered_candidates??diag.windows??semanticEvents.length;
+  const verifiedCount=job.result.vlm_verified_count??(decisions.filter(d=>d.verified).length||diag.vlm_verified||0);
   const workflowState=job.editorial_workflow_state||evidence?.editorial_workflow_state||(job.result.planning_only?'CANDIDATES_READY':'NEEDS_EDITORIAL_REVIEW');
 
-  return <details open={job.request.plan_only||undefined}>
+  return <details open={job.request.plan_only||job.state==='BLOCKED'||undefined}>
     <summary>План відбору Shorts · {WORKFLOW_LABELS[workflowState]||workflowState}</summary>
     <p className="muted">
       Статус редакторської перевірки: <b>{WORKFLOW_LABELS[workflowState]||workflowState}</b>.
-      Оцінки — це редакторські евристики на основі доказів, а не прогноз віральності.
+      {' '}Кандидатів проаналізовано: <b>{discoveredCount}</b> · перевірено VLM: <b>{verifiedCount}</b> · вибрано: <b>{parts.length}</b>
+      {vlmStats.model?` · модель ${vlmStats.model} (викликів: ${vlmStats.calls_made||0}, кеш: ${vlmStats.cache_hits||0})`:''}.
+      {' '}Оцінки — це редакторські евристики на основі доказів, а не прогноз віральності.
       Редагування та субтитри не надають авторських прав чи гарантії монетизації для стороннього контенту.
     </p>
+    {decisions.length>0&&<details className="stage-panel">
+      <summary>Діагностика ШІ-верифікації сюжету ({decisions.length} перевірених вікон)</summary>
+      <ul>
+        {decisions.map((d,i)=><li key={i}>
+          <b>{(sourceStart+(d.start||0)).toFixed(1)}–{(sourceStart+(d.end||0)).toFixed(1)} с</b>
+          {' '}({d.event_id||'event'}) · вердикт: <code>{d.verdict||(d.verified?'VERIFIED':'INSUFFICIENT_EVIDENCE')}</code>
+          {d.confidence!=null?` · впевненість: ${(d.confidence*100).toFixed(0)}% (невизначеність: ${((1-d.confidence)*100).toFixed(0)}%)`:''}
+          {d.adaptive_passes?` · проходів: ${d.adaptive_passes} (${d.evidence_timestamps?.length||4} кадрів)`:''}
+          {' '}— {d.reason}
+        </li>)}
+      </ul>
+    </details>}
 
     {(formatBreaks.length>0||semanticEvents.length>0)&&<div className="editorial-timeline" aria-label="Візуальний таймлайн подій і форматних розривів">
       <div className="timeline-legend">
@@ -127,6 +146,8 @@ export default function SelectionReview({job,post,act,onCreated}) {
       <div className="evidence-badges">
         <span>{(part.end-part.start).toFixed(2)} с</span>
         {part.shot_count!=null&&<span>{part.shot_count} шот(ів)</span>}
+        {part.story_verdict&&<span>Вердикт: {part.story_verdict}</span>}
+        {part.confidence!=null&&<span>Впевненість: {(part.confidence*100).toFixed(0)}%</span>}
         {part.semantic_verification&&<span>{part.semantic_verification}</span>}
         {part.semantic_decision&&<span>Рішення: {part.semantic_decision}</span>}
         {part.face_corners?.length>0&&<span>Facecam: {part.face_corners.join(', ')}</span>}
@@ -162,7 +183,7 @@ export default function SelectionReview({job,post,act,onCreated}) {
     {available&&job.result.review_alternatives?.map((item,index)=>{
       const id=`alternative-${index}`;
       return <article key={id} className="candidate-card alt-card">
-        <b>{item.title} · альтернатива на перевірку</b><p>{item.reason}</p>
+        <b>{item.title} · альтернатива на перевірку {item.story_verdict?`(${item.story_verdict})`:''}</b><p>{item.reason}</p>
         <p>{(sourceStart+item.start_seconds).toFixed(2)}–{(sourceStart+item.end_seconds).toFixed(2)} с ({(item.end_seconds-item.start_seconds).toFixed(1)} с)</p>
         {item.duration_conflict&&<small>Коротша цілісна подія ({item.duration_conflict.event_duration}s &lt; {item.duration_conflict.requested_minimum}s мінімум) збережена без доповнення стороннім відео.</small>}
         <button type="button" disabled={parts.length>=20||parts.some(part=>part.id===id)} onClick={()=>setEdited([...parts,{

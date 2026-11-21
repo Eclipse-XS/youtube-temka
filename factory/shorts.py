@@ -371,7 +371,7 @@ def plan_v8(
     if vlm is None and local_path is not None:
         vlm = LocalVisionAdapter(
             cache_path=(root / 'vlm-cache.json') if root else None,
-            max_calls=12,
+            max_calls=18 if mode == 'connected' else 12,
         )
         owned_vlm = True
 

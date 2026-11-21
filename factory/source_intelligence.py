@@ -23,6 +23,7 @@ from jsonfile import write_json_atomic
 from . import media
 
 SCHEMA_VERSION = 1
+CACHE_REVISION = 2
 
 REACTION_PATTERNS = re.compile(
     r'\b(oh my god|omg|what the|no way|bro|wait|holy|insane|wasted|mission failed|'
@@ -339,28 +340,41 @@ def _get_rapidocr_instance(cls):
     return _RAPIDOCR_SINGLETON
 
 
-def _detect_corner_faces(rgb: np.ndarray, detector) -> list[str]:
-    """Detect whether a facecam appears in one of the 4 frame corners."""
+def _detect_corner_faces(rgb: np.ndarray, detectors) -> list[str]:
+    """Detect whether a facecam appears in one of the 4 frame corners using frontal + profile cascades."""
     import cv2
 
-    if detector is None or detector.empty():
+    if not detectors:
         return []
+    if not isinstance(detectors, (list, tuple)):
+        detectors = [detectors]
     h, w = rgb.shape[:2]
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    ch, cw = int(h * 0.38), int(w * 0.34)
     boxes = {
-        'bottom_left': (h - ch, h, 0, cw),
-        'top_left': (0, ch, 0, cw),
-        'top_right': (0, ch, w - cw, w),
-        'bottom_right': (h - ch, h, w - cw, w),
+        'bottom_left': (int(h * 0.38), h, 0, int(w * 0.35)),
+        'top_left': (0, int(h * 0.38), 0, int(w * 0.35)),
+        'top_right': (0, int(h * 0.38), int(w * 0.65), w),
+        'bottom_right': (int(h * 0.45), h, int(w * 0.58), w),
     }
     found = []
     for name, (y0, y1, x0, x1) in boxes.items():
         patch = gray[y0:y1, x0:x1]
         if patch.shape[0] < 24 or patch.shape[1] < 24:
             continue
-        faces = detector.detectMultiScale(patch, 1.12, 4, minSize=(18, 18))
-        if len(faces) > 0:
+        hit = False
+        for det, check_flip in detectors:
+            if det is None or det.empty():
+                continue
+            faces = det.detectMultiScale(patch, 1.08, 3, minSize=(14, 14))
+            if len(faces) > 0:
+                hit = True
+                break
+            if check_flip:
+                faces_flip = det.detectMultiScale(cv2.flip(patch, 1), 1.08, 3, minSize=(14, 14))
+                if len(faces_flip) > 0:
+                    hit = True
+                    break
+        if hit:
             found.append(name)
     return found
 
@@ -417,6 +431,7 @@ def analyze_source(
             if (
                 cached.get('schema_version') == SCHEMA_VERSION
                 and ctx.get('source_fingerprint') == fp
+                and ctx.get('ocr_backend', '').endswith(':v2')
                 and abs(float(ctx.get('start', -1)) - start) < 1e-3
                 and abs(float(ctx.get('end', -1)) - end) < 1e-3
             ):
@@ -441,7 +456,11 @@ def analyze_source(
     width = height = 0
     fps = 30.0
     has_audio = bool(audio_events)
-    face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    face_detectors = [
+        (cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'), False),
+        (cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml'), False),
+        (cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml'), True),
+    ]
     ocr_backend_used = 'opencv_text_band_fallback'
     text_observations: list[ScreenTextObservation] = []
 
@@ -491,11 +510,12 @@ def analyze_source(
             else:
                 hist_diff = grid_diff = hud_diff = static_diff = 0.0
 
-            # Periodic facecam check on corner quadrants (every ~2.5s at low cost)
+            # Periodic facecam check on corner quadrants (every ~1.5s at low cost)
             face_corners: list[str] = []
-            if sample_idx % max(1, int(round(2.5 / step))) == 0:
-                rgb_mid = frame.reformat(320, 180, format='rgb24').to_ndarray()
-                face_corners = _detect_corner_faces(rgb_mid, face_detector)
+            face_checked = sample_idx % max(1, int(round(1.5 / step))) == 0
+            if face_checked:
+                rgb_mid = frame.reformat(480, 270, format='rgb24').to_ndarray()
+                face_corners = _detect_corner_faces(rgb_mid, face_detectors)
 
             # Optional OCR only on high text-band / suspected card frames (bounded budget)
             ocr_text = ''
@@ -566,6 +586,7 @@ def analyze_source(
                 'cut': is_cut,
                 'boundary_type': btype,
                 'face_corners': face_corners,
+                'face_checked': face_checked,
                 'ocr_text': ocr_text,
                 'audio_rms': a_ev.rms if a_ev else 0.0,
                 'audio_change': a_ev.delta_rms if a_ev else 0.0,
@@ -622,7 +643,7 @@ def analyze_source(
             confirmed_subject=confirmed_subject,
             source_title=source_title,
             detected_facecam_corners=detected_facecams,
-            ocr_backend=ocr_backend_used,
+            ocr_backend=f'{ocr_backend_used}:v2',
         ),
         shots=shots,
         audio_events=audio_events,
@@ -707,8 +728,14 @@ def _build_shots(
         sh_words = len(sh_text.split()) if sh_text else 0
         has_reaction = bool(sh_text and (REACTION_PATTERNS.search(sh_text) or '!' in sh_text or '?' in sh_text))
 
-        # Face corners & OCR texts inside shot
-        corners = sorted({c for x in g for c in x['face_corners']})
+        # Face corners & OCR texts inside shot (require majority persistence when >=2 checked frames exist)
+        checked_count = sum(1 for x in g if x.get('face_checked'))
+        corner_hits: dict[str, int] = {}
+        for x in g:
+            for c in x['face_corners']:
+                corner_hits[c] = corner_hits.get(c, 0) + 1
+        min_face_hits = 2 if checked_count >= 2 else 1
+        corners = sorted(c for c, cnt in corner_hits.items() if cnt >= min_face_hits)
         ocr_texts = [x['ocr_text'] for x in g if x['ocr_text']]
         ocr_joined = ' | '.join(dict.fromkeys(ocr_texts))[:200]
 

@@ -245,12 +245,13 @@ def classify_format_break(
             evidence=reasons,
         )
 
-    # 5. Menu / static loading screen (non-podcast, long frozen frame with no speech/action)
+    # 5. Menu / static loading / scrolling credits screen (non-podcast, long frozen frame with no speech/action)
     if (
         content_category not in ('podcast',)
         and shot.duration >= 4.0
         and shot.static_fraction >= 0.85
         and shot.mean_motion <= 0.012
+        and (shot.peak_motion <= 0.018 or (shot.mean_luma <= 42.0 and shot.static_fraction >= 0.88))
         and shot.speech_word_count == 0
         and shot.audio_burst_count == 0
     ):
@@ -353,11 +354,17 @@ def score_adjacent_shots(
     # Facecam consistency signal
     fc_a, fc_b = set(shot_a.face_corners), set(shot_b.face_corners)
     facecam_delta = 0.0
+    facecam_contradiction = False
     if fc_a and fc_b:
-        facecam_delta = 0.14 if (fc_a & fc_b) else -0.25
-    elif bool(fc_a) != bool(fc_b) and max(shot_a.duration, shot_b.duration) >= 4.0:
-        # Streamer facecam appearing or disappearing between long shots suggests compilation cut
-        facecam_delta = -0.10
+        if fc_a & fc_b:
+            facecam_delta = 0.14
+        else:
+            facecam_delta = -0.25
+            facecam_contradiction = True
+    elif bool(fc_a) != bool(fc_b) and min(shot_a.duration, shot_b.duration) >= 3.0 and max(shot_a.duration, shot_b.duration) >= 4.0:
+        # Streamer facecam appearing or disappearing between substantial shots indicates compilation cut
+        facecam_delta = -0.20
+        facecam_contradiction = True
 
     # Audio continuity is supportive ONLY, never overrides strong visual contradiction
     audio_delta = 0.0
@@ -397,14 +404,20 @@ def score_adjacent_shots(
 
     # Strong contradiction check: abrupt lighting + visual + HUD jump (e.g. car -> ocean -> night street)
     strong_visual_contradiction = (
-        (visual_sim < 0.48 and hud_sim < 0.62)
+        facecam_contradiction
+        or (visual_sim < 0.48 and hud_sim < 0.62)
         or (luma_shift >= 0.35 and visual_sim < 0.62)
         or (hud_sim < 0.50 and visual_sim < 0.68)
         or (shot_b.boundary_type in ('fade_black', 'graphic_transition'))
     )
 
     if strong_visual_contradiction or score < 0.70:
-        severity: BreakSeverity = 'strong_semantic_contradiction' if (visual_sim < 0.45 or luma_shift >= 0.35) else 'weak_discontinuity'
+        severity: BreakSeverity = 'strong_semantic_contradiction' if (facecam_contradiction or visual_sim < 0.45 or luma_shift >= 0.35) else 'weak_discontinuity'
+        reason_msg = (
+            f'Facecam layout changed across cut ({sorted(fc_a)} -> {sorted(fc_b)})'
+            if facecam_contradiction
+            else f'Visual/HUD/lighting shift (vis={visual_sim:.2f}, hud={hud_sim:.2f}, luma_shift={luma_shift:.2f})'
+        )
         return ShotEdge(
             from_shot=shot_a.shot_id,
             to_shot=shot_b.shot_id,
@@ -417,7 +430,7 @@ def score_adjacent_shots(
             hud_similarity=round(hud_sim, 4),
             luma_shift=round(luma_shift, 4),
             speech_crosses_cut=speech_crosses,
-            reason=f'Visual/HUD/lighting shift (vis={visual_sim:.2f}, hud={hud_sim:.2f}, luma_shift={luma_shift:.2f})',
+            reason=reason_msg,
         )
 
     relation: EdgeRelation = 'same_action_continuation' if score >= 0.70 else 'same_scene_camera_cut'
@@ -500,6 +513,7 @@ def build_event_graph(
             sa.shot_id not in breaks_by_shot
             and sb.shot_id not in breaks_by_shot
             and sb.boundary_type not in ('fade_black', 'graphic_transition')
+            and not edge.reason.startswith('Facecam layout changed')
             and (
                 (sa.duration >= 4 and sb.duration >= 4 and 0.62 <= edge.continuity_score <= 0.80)
                 or (edge.speech_crosses_cut and min(sa.duration, sb.duration) >= 1
