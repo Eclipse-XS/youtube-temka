@@ -1,9 +1,10 @@
 import React,{useEffect,useState} from 'react';
 
 const categories={
-  satisfying:'Satisfying','soap-cutting':'Soap Cutting','bouncing-balls':'Bouncing Balls','obstacle-courses':'Obstacle Courses',
-  'abstract-motion':'Abstract Motion',parkour:'Parkour',minecraft:'Minecraft-style Gameplay',
-  subway:'Subway Surfers-style Gameplay',custom:'Custom'
+  satisfying:'Satisfying / ASMR','soap-cutting':'Soap Cutting','kinetic-sand':'Kinetic Sand',
+  'bouncing-balls':'Bouncing Ball','obstacle-courses':'Obstacle Courses','abstract-motion':'Abstract Motion',
+  'minecraft-parkour':'Minecraft Parkour','subway-surfers':'Subway Surfers','platformer-gameplay':'Platformer Gameplay',
+  parkour:'Parkour',minecraft:'Minecraft-style Gameplay',subway:'Subway Surfers-style Gameplay',custom:'Custom'
 };
 const starterCategories={
   'bouncing-ball':'bouncing-balls','geometric-shapes':'abstract-motion','obstacle-rings':'obstacle-courses',
@@ -67,6 +68,7 @@ export default function AssetLibrary({api,post,act}) {
       <label className="check"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>Вилучені з вибору</label>
     </div>
     <label>Пошук у бібліотеці<input value={search} onChange={e=>setSearch(e.target.value)}/></label>
+    {visible.length===0&&<p>У цій категорії немає доступних матеріалів. Додайте власний запис або матеріал із перевіреною ліцензією.</p>}
     <div className="outputs">{visible.map(item=>{
       const url=`/api/library/${item.kind}/${item.name}`;
       const poster=item.kind==='backgrounds'?`${url}/frame`:undefined;
@@ -77,7 +79,7 @@ export default function AssetLibrary({api,post,act}) {
         {poster&&<img src={poster} loading="lazy" width="180" alt="Кадр фонового відео"/>}
         <details><summary>Прев’ю та походження</summary>
           {item.kind==='logos'?<img loading="lazy" src={url} alt={item.name}/>:<video controls muted preload="none" poster={poster} src={url}/>}
-          <p>{item.author} {item.source}</p><p>{item.fps||0} FPS · {(item.size_bytes/1048576).toFixed(2)} MiB · {item.attribution_required==null?'Атрибуція потребує перевірки':item.attribution_required?'Потрібна атрибуція':'Атрибуція не обов’язкова'}</p><p>Завдань із матеріалом: {item.job_references??0}</p><code>{item.sha256}</code>
+          <p>{item.author} {item.source?.startsWith('https://')?<a href={item.source} target="_blank" rel="noreferrer">Джерело</a>:item.source}</p><p>{item.fps||0} FPS · {(item.size_bytes/1048576).toFixed(2)} MiB · {item.attribution_required==null?'Атрибуція потребує перевірки':item.attribution_required?'Потрібна атрибуція':'Атрибуція не обов’язкова'}</p><p>Завдань із матеріалом: {item.job_references??0}</p><code>{item.sha256}</code>
         </details>
         {item.kind==='backgrounds'&&<>
           <button onClick={()=>{const label=window.prompt('Назва матеріалу',item.display_name||'');if(label!==null)update(item,{label});}}>Перейменувати</button>

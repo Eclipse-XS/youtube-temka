@@ -23,8 +23,8 @@ export default function AnalyticsPanel({ api, post, act }) {
     data.channels[0];
   const videos = current?.videos || [];
   const daily = current?.report?.daily || [];
-  const totalViews = sum(daily, "views");
-  const watch = sum(daily, "estimatedMinutesWatched");
+  const totalViews = current?.report?.totals?.views ?? sum(daily, "views");
+  const watch = current?.report?.totals?.estimatedMinutesWatched ?? sum(daily, "estimatedMinutesWatched");
   const weighted = videos.filter(
     (v) => (v.metrics.views || 0) > 0 && v.metrics.averageViewDuration != null,
   );
@@ -136,6 +136,9 @@ export default function AnalyticsPanel({ api, post, act }) {
                 затримкою. Вік кешу: {Math.floor(current.data_age_seconds / 60)}{" "}
                 хв.
               </p>
+              {current.report.credential_strategy === "verified_publishing_readonly" && (
+                <p>Немонетарний звіт · чинний дозвіл YouTube на читання.</p>
+              )}
               <div className="stats">
                 <div>
                   <small>Перегляди каналу за період</small>

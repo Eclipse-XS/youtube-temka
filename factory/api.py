@@ -1,5 +1,6 @@
 import asyncio
 from typing import Literal
+from .composition import GeometryRequest, geometry
 from contextlib import asynccontextmanager
 import hmac
 import json
@@ -106,9 +107,10 @@ def logout():
 @app.get('/api/settings')
 def settings():
     from .model_setup import status
+    from .youtube_channels import profiles
     from .publisher import channels
     from .tts import status as tts_status
-    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':config.AUDIO_CHUNK_SECONDS/60,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'youtube_profiles':profiles(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':config.AUDIO_CHUNK_SECONDS/60,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
 
 
 @app.post('/api/settings/check-ollama')
@@ -325,6 +327,59 @@ def library_frame(kind:str,name:str):
     return FileResponse(target)
 
 
+@app.post('/api/composition/geometry')
+def composition_geometry(body:GeometryRequest):
+    return geometry(body)
+
+
+class ManifestPreviewRequest(BaseModel):
+    source_start: float = Field(default=0.0, ge=0.0)
+    source_end: float = Field(default=45.0, gt=0.0)
+    source_width: int = Field(default=1280, gt=0)
+    source_height: int = Field(default=720, gt=0)
+    mode: Literal['shorts', 'longs'] = 'shorts'
+    preset: Literal['auto', 'smart', 'crop', 'blur', 'gameplay'] = 'auto'
+    source_category: Literal['auto', 'podcast', 'stream', 'gameplay', 'visual'] = 'auto'
+    split_ratio: float = Field(default=0.65, ge=0.2, le=0.8)
+    background_position: Literal['top', 'bottom'] = 'bottom'
+    background: str | None = None
+    split_crop: Literal['fill', 'fit', 'blurred'] = 'blurred'
+    hook: str = Field(default='', max_length=120)
+    hook_mode: Literal['persistent', 'timed', 'intro', 'none'] | None = 'persistent'
+    hook_position: Literal['top', 'center', 'bottom'] = 'top'
+    hook_font: Literal['sans', 'serif', 'mono'] = 'sans'
+    hook_font_size: int = Field(default=54, ge=18, le=96)
+    hook_color: str = Field(default='#FFFFFF', pattern=r'^#[0-9A-Fa-f]{6}$')
+    hook_outline: int = Field(default=3, ge=0, le=8)
+    hook_shadow: bool = True
+    hook_box: bool = False
+    captions: bool = True
+    caption_style: Literal['pop', 'karaoke', 'clean'] = 'pop'
+    caption_margin: float | None = Field(default=None, ge=0.07, le=0.75)
+    facecam_corners: list[str] = Field(default_factory=list)
+    has_center_face: bool = False
+    two_speakers_detected: bool = False
+    design_preset: Literal['gaming_clean', 'gaming_dynamic', 'streamer_reaction', 'podcast_premium', 'satisfying_visual'] | None = None
+
+
+@app.post('/api/composition/manifest')
+def composition_manifest(body: ManifestPreviewRequest):
+    from .edit_manifest import DESIGN_PRESETS, build_edit_manifest
+    manifest = build_edit_manifest(
+        source_start=body.source_start,
+        source_end=body.source_end,
+        request=body,
+        source_width=body.source_width,
+        source_height=body.source_height,
+        facecam_corners=body.facecam_corners,
+        has_center_face=body.has_center_face,
+        two_speakers_detected=body.two_speakers_detected,
+        design_preset=body.design_preset,
+        has_explicit_background=bool(body.background),
+    )
+    return {'manifest': manifest.model_dump(), 'design_presets': DESIGN_PRESETS}
+
+
 @app.get('/api/backgrounds')
 def backgrounds():
     from .library import entries
@@ -345,9 +400,47 @@ def music_assets():
     return [p.name for p in (config.DATA/'music').glob('*') if p.suffix in ('.mp3','.wav','.mp4')]
 
 
+@app.post('/api/preflight')
+def preflight_job(body: JobRequest):
+    from .models import CompilationSource
+    from .timeline import story_part_count
+
+    sources = body.sources or [CompilationSource(source=body.source,start=body.start,end=body.end)]
+    checked = []
+    for index, item in enumerate(sources,1):
+        record = {'source_id':f'source-{index}'}
+        try:
+            data = media.probe(item.source)
+            end = min(data['duration'], item.end or data['duration'])
+            span = end-item.start
+            if not 0 < span <= 86400:
+                raise ValueError('Choose a selected range of up to 24 hours inside the source')
+            if body.resolution != 'best' and data['platform']!='local' and not any(r<=body.resolution for r in data['resolutions']):
+                raise ValueError('No source format matches the selected input resolution')
+            if body.workflow=='story' and body.story_mode=='chronological':
+                record['story_count'] = story_part_count(body,span)
+            if any(b>end for _,b in body.intervals):
+                raise ValueError('A manual interval extends beyond the source')
+            record.update(title=data['title'],duration=data['duration'],selected_seconds=span)
+        except (ValueError, media.MediaFailure) as error:
+            record['error'] = str(error)[:500]
+        except Exception:
+            record['error'] = 'Media is unavailable. Check access, format or connection.'
+        checked.append(record)
+    return {'sources':checked,'ready':all('error' not in item for item in checked),
+            'shorts_max_seconds':config.SHORTS_MAX_SECONDS}
+
+
 @app.post('/api/jobs',status_code=201)
 def create(body:JobRequest):
-    if body.mode == 'shorts':
+    if body.youtube_channel_key:
+        from .youtube_channels import PROFILES
+        profile = PROFILES[body.youtube_channel_key]
+        if 'mode' not in body.model_fields_set:
+            body.mode = profile['mode']
+        if not body.metadata_language:
+            body.metadata_language = profile['language']
+    if body.mode == 'shorts' and not (body.workflow == 'highlights' and body.workflow_version == 1):
         body.selection_version = 2
         if 'minimum' not in body.model_fields_set:
             body.minimum=min(35,body.maximum)
@@ -356,6 +449,14 @@ def create(body:JobRequest):
 
 
 def create_job(body, seed=None, approved=None):
+    if body.youtube_channel_key:
+        from .youtube_channels import profiles
+        profile = next(row for row in profiles() if row['channel_key'] == body.youtube_channel_key)
+        if body.publish_channel and body.publish_channel != profile['channel_id']:
+            raise HTTPException(409,'The selected YouTube channel does not match the content profile')
+        if body.publish_automatic:
+            raise HTTPException(422,'Managed channels require manual approval and private visibility')
+        body.publish_channel = profile['channel_id']
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
@@ -375,16 +476,39 @@ def create_job(body, seed=None, approved=None):
         raise HTTPException(422,'Timed hook must start within the clip')
     if body.background and body.background_mode!='none' and body.background not in backgrounds():
         raise HTTPException(409,'Selected secondary asset is unavailable')
+    if body.background and body.background_mode != 'none':
+        from .library import entries
+        asset = next((item for item in entries() if item['kind'] == 'backgrounds' and item['name'] == body.background), {})
+        credit = asset.get('required_credit')
+        if credit:
+            existing_credit = body.source_attribution.strip()
+            if credit not in existing_credit:
+                combined = '\n'.join(filter(None, (existing_credit, credit)))
+                if len(combined) > 1000:
+                    raise HTTPException(422, 'Shorten source attribution to make room for the required background credit')
+                body.source_attribution = combined
+            body.attribution_required = True
     if body.publish_automatic:
+        if not config.AUTOMATIC_PUBLISHING:raise HTTPException(422,'Automatic publishing is disabled')
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
         if not policy or not policy['public_allowed'] or not policy['automatic']:
             raise HTTPException(409,'Explicitly enable automatic public publishing for this authenticated channel first')
     try:
-        if body.source.startswith('edit:'):
+        if body.workflow=='compilation':
+            for index, item in enumerate(body.sources,1):
+                try:
+                    if not media.local_source(item.source):
+                        media.validate_url(item.source)
+                except ValueError as error:
+                    raise ValueError(f'Source {index}: {error}') from error
+        elif body.source.startswith('edit:'):
             _,origin,index=body.source.split(':')
             original=store.get(origin)
             if not original or original['state']!='READY' or not original['result']['outputs'][int(index)].get('edit_source'):raise ValueError('Editable source unavailable; re-upload this older source once')
+            original_request=original['request']
+            if original_request.get('youtube_channel_key') and body.youtube_channel_key != original_request['youtube_channel_key']:
+                raise ValueError('An edited version must keep its original YouTube profile')
         elif not media.local_source(body.source):
             media.validate_url(body.source)
     except (ValueError,IndexError,KeyError) as error:
@@ -393,7 +517,15 @@ def create_job(body, seed=None, approved=None):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    try:return store.create(body.model_dump(), seed=seed, approved=approved)
+    try:
+        created = store.create(body.model_dump(), seed=seed, approved=approved)
+        store.save_source_rights(created['id'], {
+            'source_url': body.source if body.source.startswith('https://') else None,
+            'permission_status': 'operator_confirmed',
+            'attribution_required': body.attribution_required,
+            'license': body.source_attribution[:300] if body.source_attribution else 'Operator-confirmed rights',
+        })
+        return created
     except ValueError as error:raise HTTPException(409,str(error)) from None
 
 
@@ -415,6 +547,7 @@ def replan(jid:str, body:Replan):
     if original['mode']!='shorts' or job['state'] not in ('READY','BLOCKED','FAILED'):
         raise HTTPException(409,'Wait for Shorts analysis to finish')
     values={**original,'selection_version':2,'publish_automatic':False,
+            'workflow':None,'story_mode':None,'review_before_render':False,
             'plan_only':body.intervals is None,'intervals':body.intervals or []}
     for target, value in (('series_mode',body.mode),('count',body.count),
                           ('minimum',body.minimum),('maximum',body.maximum),('series_overlap',body.overlap)):
@@ -460,6 +593,33 @@ def replan(jid:str, body:Replan):
 def jobs(limit:int=50,offset:int=0):
     if not 1<=limit<=200 or offset<0:raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
     return store.list_jobs(limit,offset)
+
+
+@app.get('/api/job-history')
+def job_history(scope:Literal['recent','all','archived','trash']='recent',
+                state:Literal['','active','READY','FAILED','BLOCKED','CANCELLED']='',
+                search:str='',after:float=0,sort:Literal['newest','oldest']='newest',
+                limit:int=10,offset:int=0):
+    if not 1<=limit<=50 or not 0<=offset or len(search)>150:
+        raise HTTPException(422,'Invalid history filter or page size')
+    terminal=('READY','FAILED','BLOCKED','CANCELLED')
+    where=['j.created>=?'];params=[after]
+    if scope!='all':
+        where.append("coalesce(v.status,'recent')=?");params.append(scope)
+    if state=='active':
+        where.append('j.state NOT IN (?,?,?,?)');params.extend(terminal)
+    elif state:
+        where.append('j.state=?');params.append(state)
+    if search:
+        where.append("instr(fold(coalesce(json_extract(j.result,'$.source.title'),json_extract(j.request,'$.source'),j.id)),?)>0")
+        params.append(search.casefold())
+    order='DESC' if sort=='newest' else 'ASC'
+    with store.connect() as db:
+        db.create_function('fold',1,str.casefold,deterministic=True)
+        rows=db.execute('SELECT j.* FROM jobs j LEFT JOIN job_visibility v ON v.job=j.id WHERE '+
+                        ' AND '.join(where)+f' ORDER BY j.created {order},j.id {order} LIMIT ? OFFSET ?',
+                        (*params,limit+1,offset)).fetchall()
+        return {'items':[store.decode(row,db) for row in rows[:limit]],'has_more':len(rows)>limit}
 
 
 class JobVisibility(BaseModel):
@@ -525,7 +685,92 @@ def get_job(jid:str):
     value=store.get(jid)
     if not value:
         raise HTTPException(404,'Job not found')
+    value['editorial_workflow_state'] = store.editorial_workflow_state(value)
+    value['source_rights'] = store.get_source_rights(jid)
     return value
+
+
+@app.get('/api/jobs/{jid}/evidence')
+def job_evidence(jid:str):
+    job = get_job(jid)
+    root = config.SCRATCH / jid
+    graph_path = root / 'event-graph.json'
+    ev_path = root / 'source-evidence-v1.json'
+    graph_data = json.loads(graph_path.read_text(encoding='utf-8')) if graph_path.is_file() else {}
+    shots = []
+    duration = job['result'].get('source', {}).get('duration') or job['result'].get('processing_end') or 0
+    if ev_path.is_file():
+        ev_data = json.loads(ev_path.read_text(encoding='utf-8'))
+        duration = ev_data.get('context', {}).get('duration', duration)
+        shots = [
+            {
+                'shot_id': s['shot_id'],
+                'start': s['start'],
+                'end': s['end'],
+                'duration': s['duration'],
+                'boundary_type': s.get('boundary_type', 'hard_cut'),
+                'mean_motion': s.get('mean_motion', 0),
+                'speech_word_count': s.get('speech_word_count', 0),
+                'face_corners': s.get('face_corners', []),
+            }
+            for s in ev_data.get('shots', [])
+        ]
+    return {
+        'job_id': jid,
+        'duration': duration,
+        'shots': shots,
+        'format_breaks': graph_data.get('format_breaks') or job['result'].get('format_breaks', []),
+        'events': graph_data.get('events') or job['result'].get('events_summary', []),
+        'candidates': job['result'].get('candidates', []),
+        'review_alternatives': job['result'].get('review_alternatives', []),
+        'rejected_candidates': job['result'].get('rejected_candidates', []),
+        'editorial_workflow_state': job['editorial_workflow_state'],
+    }
+
+
+class EditorialFeedbackRequest(BaseModel):
+    candidate_index: int | None = Field(default=None, ge=0, le=100)
+    decision: Literal[
+        'approved',
+        'needs_trim',
+        'needs_different_layout',
+        'incorrect_event',
+        'unrelated_scenes',
+        'missing_payoff',
+        'weak_hook',
+        'reject',
+    ]
+    rejection_reasons: list[str] = Field(default_factory=list, max_length=10)
+    original_start: float | None = None
+    original_end: float | None = None
+    corrected_start: float | None = None
+    corrected_end: float | None = None
+    original_score: float | None = None
+    selected_layout: str | None = Field(default=None, max_length=60)
+    edited_hook: str | None = Field(default=None, max_length=150)
+    notes: str = Field(default='', max_length=500)
+
+
+@app.post('/api/jobs/{jid}/feedback', status_code=201)
+def post_feedback(jid: str, body: EditorialFeedbackRequest):
+    get_job(jid)
+    return store.record_feedback(jid, body.model_dump())
+
+
+@app.get('/api/jobs/{jid}/feedback')
+def get_job_feedback(jid: str):
+    get_job(jid)
+    return store.list_feedback(jid)
+
+
+@app.get('/api/feedback/summary')
+def get_feedback_summary():
+    return store.feedback_summary()
+
+
+@app.get('/api/production/metrics')
+def get_production_metrics():
+    return store.production_summary()
 
 
 @app.get('/api/jobs/{jid}/events')
@@ -547,6 +792,49 @@ def retry(jid:str):
     return get_job(jid)
 
 
+class EditSegment(BaseModel):
+    id: int = Field(ge=1, le=30)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    transition: Literal['cut','fade'] = 'cut'
+
+
+class EditPlanUpdate(BaseModel):
+    revision: int = Field(ge=1)
+    segments: list[EditSegment] = Field(min_length=1, max_length=30)
+    target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
+
+
+@app.get('/api/jobs/{jid}/edit-plan')
+def get_edit_plan(jid: str):
+    plan = get_job(jid)['result'].get('edit_plan')
+    if not plan:
+        raise HTTPException(404,'No edit plan available')
+    return plan
+
+
+def save_edit_plan(jid, body, approve=False):
+    try:
+        return store.edit_plan(jid,body.revision,[item.model_dump() for item in body.segments],
+                               body.target_duration,approve)
+    except KeyError:
+        raise HTTPException(404,'Job not found') from None
+    except InterruptedError as error:
+        raise HTTPException(409,str(error)) from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
+
+
+@app.patch('/api/jobs/{jid}/edit-plan')
+def revise_edit_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body)
+
+
+@app.post('/api/jobs/{jid}/render')
+def render_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body,approve=True)
+
+
 class Approval(BaseModel):
     approved:bool
 
@@ -563,11 +851,11 @@ def approve(jid:str,index:int,body:Approval):
 
 
 @app.post('/api/jobs/{jid}/metadata')
-def generate_metadata(jid:str):
+def generate_metadata(jid:str, force_overwrite:bool=False):
     from .drafts import regenerate
     from .inference import HEAVY_LOCK
     if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'The processing slot is busy. Metadata regeneration can run after the current GPU task finishes.')
-    try:return regenerate(jid)
+    try:return regenerate(jid, force_overwrite=force_overwrite)
     except (ValueError,KeyError,IndexError) as error:raise HTTPException(409,str(error)) from None
     finally:HEAVY_LOCK.release()
 
@@ -619,7 +907,9 @@ def output(jid:str,name:str,request:Request):
         if item.get('thumbnail'):
             manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
     manifests.update(job['result'].get('artifacts',{}))
-    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
+    edit_manifests = {segment['edit_manifest'] for segment in job['result'].get('timeline', {}).get('segments', [])
+                      if re.fullmatch(r'clip-\d+\.manifest\.json', segment.get('edit_manifest', ''))}
+    allowed=set(manifests)|edit_manifests|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
     if name not in allowed:
         raise HTTPException(404,'Artifact not found')
     root=config.SCRATCH/jid
@@ -718,13 +1008,15 @@ class Checkpoint(BaseModel):
 
 @app.post('/api/workers/jobs/{jid}')
 def checkpoint(jid:str,body:Checkpoint):
-    states={'PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED'}
+    states={'QUEUED','PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED','REVIEW'}
     if body.state and body.state not in states:
         raise HTTPException(422,'Invalid worker state')
     try:
         store.update(jid,**body.model_dump())
     except InterruptedError:
         raise HTTPException(409,'Worker lease lost or job cancelled') from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
     if body.state=='READY':
         from .retention import register
         register(store.get(jid))
@@ -734,13 +1026,64 @@ def checkpoint(jid:str,body:Checkpoint):
 @app.get('/api/publisher')
 def publisher():
     from .publisher import channels, history
-    return {'channels':channels(),'publications':history()}
+    from .youtube_channels import profiles
+    return {'channels':channels(),'publications':history(),'profiles':profiles()}
 
 
 @app.post('/api/publisher/discover')
 def discover_channels():
     from .publisher import discover_channels
     return discover_channels()
+
+
+@app.get('/api/youtube/profiles')
+def youtube_profiles():
+    from .youtube_channels import profiles
+    return profiles()
+
+
+@app.post('/api/youtube/profiles/{key}/verify')
+def youtube_verify(key: str):
+    from .youtube_channels import PROFILES, discover, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    discover(key)
+    return next(row for row in profiles() if row['channel_key'] == key)
+
+
+class YouTubeProfileState(BaseModel):
+    enabled: bool
+
+
+@app.post('/api/youtube/profiles/{key}/state')
+def youtube_profile_state(key: str, body: YouTubeProfileState):
+    from .youtube_channels import PROFILES, enable, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    try:
+        enable(key,body.enabled)
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+    return next(row for row in profiles() if row['channel_key'] == key)
+
+
+class YouTubeLegacyBinding(BaseModel):
+    alias: str = Field(pattern=r'^[A-Za-z0-9_-]{1,100}$')
+
+
+@app.post('/api/youtube/profiles/{key}/legacy-binding')
+def youtube_legacy_binding(key: str, body: YouTubeLegacyBinding):
+    from .youtube_channels import PROFILES, discover, profiles
+    if key not in PROFILES:
+        raise HTTPException(404,'Unknown managed YouTube profile')
+    try:
+        discover(key,legacy_alias=body.alias)
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from None
+    profile = next(row for row in profiles() if row['channel_key'] == key)
+    if profile['status'] != 'CONNECTED':
+        raise HTTPException(409,profile['error'] or 'Verified legacy channel binding failed')
+    return profile
 
 
 @app.get('/api/analytics')
@@ -750,9 +1093,9 @@ def analytics_dashboard():
 
 
 @app.post('/api/analytics/discover')
-def discover_analytics():
+def discover_analytics(profile_key: Literal['leonida_mayhem', 'thevicescope'] | None = None):
     from .analytics import discover
-    return discover()
+    return discover(profile_key)
 
 
 @app.post('/api/analytics/{channel}/sync')

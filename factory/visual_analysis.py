@@ -110,3 +110,110 @@ def sample(source, start, end, root, tick):
     if samples:
         write_json_atomic(path, {'start': start, 'end': end, 'samples': samples})
     return samples
+
+
+def inspect_local_interval(path, start, end):
+    """Bounded follow-up seeks; histogram change is not semantic evidence."""
+    import av
+    import numpy as np
+
+    probes = min(32,max(3,math.ceil((end-start)/1.5)))
+    boundaries = []
+    previous = None
+    previous_pixels = None
+    observations = []
+    step=(end-start)/probes
+    audio=audio_samples(path,start,end,step,seek=True)
+    count = 0
+    with av.open(str(path)) as container:
+        if not container.streams.video:
+            return {'schema_version':2,'frames':0,'possible_cuts':[],'observations':[],
+                    'semantic_verification':'unverified'}
+        stream=container.streams.video[0]
+        stream.thread_count=2
+        origin=float((stream.start_time or 0)*stream.time_base)
+        for index in range(probes):
+            target=start+index*(end-start)/probes
+            timestamp=origin+target
+            container.seek(int(timestamp/stream.time_base),stream=stream)
+            frame=next((item for item in container.decode(stream)
+                        if item.time is not None and item.time>=timestamp-.08),None)
+            if frame is None:continue
+            pixels=frame.reformat(48,28,format='rgb24').to_ndarray()
+            histogram=np.concatenate([np.bincount(ch.reshape(-1)//16,minlength=16)
+                                      for ch in pixels.transpose((2,0,1))])/pixels.size
+            if previous is not None and float(np.abs(histogram-previous).sum())>.8:
+                boundaries.append(round(target,3))
+            motion=float(np.abs(pixels.astype('int16')-previous_pixels).mean()/255) if previous_pixels is not None else None
+            observations.append({'time':target,'motion':motion,'audio_rms':audio.get(index,{}).get('audio_rms')})
+            previous_pixels=pixels.astype('int16')
+            previous=histogram
+            count+=1
+    return {'schema_version':2,'frames':count,'possible_cuts':boundaries,'observations':observations,
+            'semantic_verification':'unverified'}
+
+
+def discontinuities(inspection, transcript, source_start):
+    """Flag strong format breaks only when sampled inactivity and a cut agree."""
+    quiet=[]
+    breaks=[]
+    for item in inspection.get('observations',[]):
+        motion,rms=item['motion'],item['audio_rms']
+        if quiet and item['time']-quiet[-1]>3:
+            quiet=[]
+        if motion is not None and rms is not None and motion<.015 and rms<.003:
+            quiet.append(item['time'])
+            continue
+        if quiet and quiet[-1]-quiet[0]>=4 and item['motion'] is not None and item['motion']>.08:
+            restart=item['time']
+            if any(abs(restart-cut)<=2 for cut in inspection['possible_cuts']) and not any(
+                seg['end']>quiet[0]-source_start and seg['start']<restart-source_start
+                for seg in transcript.get('segments',[])
+            ):
+                breaks.append(round(restart-source_start,3))
+        quiet=[]
+    return breaks
+
+
+def refine_local_plan(path, start, request, result, transcript=None, duration=None):
+    """Preserve event windows across cuts unless independent evidence requires correction."""
+    candidates=[]
+    alternatives=[]
+    decisions=[]
+    attempts=0
+    for clip in result['candidates']:
+        a,b=clip['start_seconds'],clip['end_seconds']
+        if not (math.isfinite(a) and math.isfinite(b) and 0<=a<b
+                and request.minimum-1e-7<=b-a<=min(180,request.maximum)+1e-7
+                and (duration is None or b<=duration+1e-7)):
+            decisions.append({'start':a,'end':b,'status':'rejected','reason':'Invalid timestamps or duration'})
+            continue
+        if attempts>=6:
+            candidates.append(clip|{'fine_review':'budget_exhausted','editorial_review_required':True})
+            decisions.append({'start':a,'end':b,'status':'review_required','reason':'Fine inspection budget exhausted'})
+            continue
+        attempts+=1
+        try:
+            inspected=inspect_local_interval(path,start+a,start+b)
+        except (OSError,ValueError,RuntimeError):
+            decisions.append({'start':a,'end':b,'status':'rejected','reason':'Unable to decode inspection media'})
+            continue
+        if not inspected['frames']:
+            decisions.append({'start':a,'end':b,'status':'rejected','reason':'No decodable inspection frames'})
+            continue
+        breaks=discontinuities(inspected,transcript or {},start)
+        if breaks:
+            alternatives.append(clip|{'fine_review':inspected,
+                'reason':'A cut following sustained audiovisual inactivity suggests unrelated scenes. Review and trim manually.'})
+            decisions.append({'start':a,'end':b,'status':'rejected','reason':'Audiovisual discontinuity','boundaries':breaks})
+            continue
+        reactions=sum(seg['end']>a and seg['start']<b for seg in (transcript or {}).get('segments',[]))
+        inspected.update(speech_segments=reactions)
+        candidates.append(clip|{'fine_review':inspected,'editorial_review_required':True,
+                                'reason':clip.get('reason','')+' Fine inspection found no corroborated break. Event continuity requires review.'})
+        decisions.append({'start':a,'end':b,'status':'review_required','reason':'Multi-shot interval retained; continuity unverified',
+                          'sampled_cuts':len(inspected['possible_cuts'])})
+    rejected=len(result['candidates'])-len(candidates)
+    notice=f' Fine inspection retained {len(candidates)}/{request.count}; rejected {rejected}.'
+    return result|{'candidates':candidates,'review_alternatives':alternatives,
+                  'fine_decisions':decisions,'selection_summary':result['selection_summary']+notice}

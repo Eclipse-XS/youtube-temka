@@ -15,6 +15,7 @@ import CreatePage from "./factory/CreatePage.jsx";
 import StageProgress from "./factory/StageProgress.jsx";
 import VoiceSettings from "./factory/VoiceSettings.jsx";
 import OutputEditor from "./factory/OutputEditor.jsx";
+import EditPlan from "./factory/EditPlan.jsx";
 import PublisherPanel from "./factory/PublisherPanel.jsx";
 import MetadataEditor from "./factory/MetadataEditor.jsx";
 import AnalyticsPanel from "./factory/AnalyticsPanel.jsx";
@@ -209,7 +210,7 @@ function App() {
           </>
         ) : (
           <small>
-            {["READY", "FAILED", "BLOCKED", "CANCELLED", "QUEUED"].includes(
+            {["READY", "FAILED", "BLOCKED", "CANCELLED", "QUEUED", "REVIEW"].includes(
               j.state,
             )
               ? ""
@@ -419,12 +420,18 @@ function App() {
                     : chosen.result.analysis}
                 </p>
                 {chosen.result.selection_summary && <p className="muted">{chosen.result.selection_summary}</p>}
+                {chosen.result.signal_coverage && <small>
+                  Візуальний і звуковий аналіз охопив {chosen.result.signal_coverage.scanned_seconds} з {chosen.result.signal_coverage.source_seconds} сек.
+                </small>}
                 {(chosen.result.candidates || []).some((c) => c.editorial_review_required || c.selection_method === "heuristic" || c.score < 50 || c.confidence < .6) && (
                   <p className="warning">Відбір або назва потребує редакторської перевірки. Перевірте уривок і назву перед схваленням; автоматична публікація таких уривків очікує схвалення.</p>
                 )}
                 {chosen.request.mode==='shorts' && <SelectionReview key={chosen.id+':' +(chosen.result.selection_id||'legacy')} job={chosen} post={post} act={act} onCreated={async j=>{setSelected(j.id);setOutputIndex(0);await refresh();}}/>}
                 {chosen.error && <p className="error">{chosen.error}</p>}
-                <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>
+                {chosen.state==='REVIEW' && chosen.result.edit_plan && <EditPlan
+                  key={chosen.id+':'+chosen.result.edit_plan.revision}
+                  job={chosen} api={api} post={post} act={act} onSaved={refresh}/>}
+                {!!chosen.result.outputs?.length && <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>}
                 <div className="outputs">
                   {(chosen.result.outputs || []).map((o, i) => i===Math.min(outputIndex,(chosen.result.outputs||[]).length-1) && (
                     <section key={`${chosen.id}:${o.name}`}>
@@ -496,8 +503,8 @@ function App() {
                     </section>
                   ))}
                 </div>
-                {!chosen.result.selection_id && <h2>Кандидати та повторний монтаж</h2>}
-                {!chosen.result.selection_id && (chosen.result.candidates || []).map((c, i) => (
+                {chosen.state!=='REVIEW' && !['compilation','story'].includes(chosen.request.workflow) && !chosen.result.selection_id && <h2>Кандидати та повторний монтаж</h2>}
+                {chosen.state!=='REVIEW' && !['compilation','story'].includes(chosen.request.workflow) && !chosen.result.selection_id && (chosen.result.candidates || []).map((c, i) => (
                   <section className="candidate" key={i}>
                     <b>{c.title}</b>
                     <small>
@@ -558,6 +565,7 @@ function App() {
                           ];
                           const j = await post("/jobs", {
                             ...chosen.request,
+                            review_before_render: false,
                             intervals: [
                               [
                                 range[0] + chosen.request.start,
