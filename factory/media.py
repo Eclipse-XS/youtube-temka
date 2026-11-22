@@ -249,9 +249,11 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     from .edit_manifest import build_edit_manifest, facecam_crop_filter
-    # Loudnorm alone can overshoot after AAC encoding, especially for transient
-    # synthetic speech. Limit at the final sample rate with makeup gain disabled.
-    audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
+    # Single-pass loudnorm ramps up slowly when a clip starts with quiet speech or ambient
+    # dialogue (leaving Part 1 ~4 LU quieter than Part 2). A gentle dynaudnorm pre-stage
+    # levels speech/action dynamics before loudnorm, and the final alimiter prevents AAC
+    # inter-sample peak overshoot with makeup gain disabled.
+    audio_filter=f'dynaudnorm=f=250:g=15:p=0.9:m=10.0,{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
     duration=end-start
     transcript={
         'language':transcript.get('language'),
