@@ -69,6 +69,72 @@ function loadDefaults(settings) {
   }
 }
 
+function parseRanges(text) {
+  return text.trim() ? text.trim().split("\n").map((line) => {
+    const pair = line.split(",").map((value) => value.trim() === "" ? NaN : Number(value));
+    if (pair.length !== 2 || pair.some((value) => !Number.isFinite(value))) {
+      throw new Error("Інтервал має вигляд start,end у секундах.");
+    }
+    return pair;
+  }) : [];
+}
+
+function AdditionalSource({item, index, api, act, onChange, onUpload, onEarlier, onRemove}) {
+  const [probe, setProbe] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const source = item.source.trim();
+  const metadata = probe?.source === source ? probe.data : null;
+  const preview = source.startsWith("upload:")
+    ? `/api/source-preview/${encodeURIComponent(source.slice(7))}#t=${item.start}${item.end == null ? "" : `,${item.end}`}`
+    : null;
+  async function inspect() {
+    setLoading(true);
+    try {
+      await act(async () => setProbe({source, data: await api("/probe", {
+        method: "POST", body: JSON.stringify({source}),
+      })}));
+    } finally {
+      setLoading(false);
+    }
+  }
+  return (
+    <fieldset>
+      <legend>Джерело {index + 2}</legend>
+      <div className="grid">
+        <label>URL або завантажене відео
+          <input value={item.source} required onChange={(e) => onChange({source:e.target.value})}
+            placeholder="https://www.twitch.tv/videos/…" />
+        </label>
+        <label>Локальний файл
+          <input type="file" accept=".mp4,.mkv,.mov" onChange={(e) => e.target.files[0] && onUpload(e.target.files[0])} />
+        </label>
+        <label>Початок, сек
+          <input type="number" step=".1" min="0" value={item.start} onChange={(e) => onChange({start:+e.target.value})} />
+        </label>
+        <label>Кінець, сек
+          <input type="number" step=".1" min=".1" max={metadata?.duration} value={item.end ?? ""} placeholder="До кінця джерела"
+            onChange={(e) => onChange({end:e.target.value ? +e.target.value : null})} />
+        </label>
+        <label>Пріоритет
+          <input type="number" step=".1" min=".5" max="2" value={item.priority} onChange={(e) => onChange({priority:+e.target.value})} />
+        </label>
+        <label>Максимум у фінальному відео, сек
+          <input type="number" step="1" min="5" max="3600" value={item.max_contribution ?? ""} placeholder="Без окремого ліміту"
+            onChange={(e) => onChange({max_contribution:e.target.value ? +e.target.value : null})} />
+        </label>
+        <label>Виключені інтервали, сек
+          <textarea value={item.exclusions} placeholder="30,45" onChange={(e) => onChange({exclusions:e.target.value})} />
+        </label>
+      </div>
+      <button type="button" disabled={!source || loading} onClick={inspect}>{loading ? "Перевіряю…" : "Перевірити джерело"}</button>
+      <button type="button" disabled={index === 0} onClick={onEarlier}>Вище</button>
+      <button type="button" onClick={onRemove}>Прибрати</button>
+      {metadata && <p>{metadata.title} · {Math.max(0, Math.min(item.end ?? metadata.duration, metadata.duration) - item.start).toFixed(1)} сек · {metadata.resolutions.join(', ')}p</p>}
+      {preview && metadata && <video key={preview} src={preview} controls preload="none" />}
+    </fieldset>
+  );
+}
+
 export default function CreatePage({
   api,
   post,
@@ -87,8 +153,10 @@ export default function CreatePage({
     [additional, setAdditional] = useState([]),
     [plan, setPlan] = useState(null);
   const submission = useRef(false);
+  const nextSource = useRef(2);
   const compilation = form.workflow === 'compilation';
   const story = form.workflow === 'story';
+  const gameplay = !story && form.ranking_profile === 'gameplay_only';
   const set = (key, value) => {
     setPlan(null);
     setForm((v) => ({ ...v, [key]: value }));
@@ -115,6 +183,9 @@ export default function CreatePage({
     setPlan(null);
     setAdditional(update);
   };
+  const updateSource = (id, changes) => setSources((items) => items.map((item) =>
+    item.source_id === id ? {...item, ...changes} : item));
+  const incompleteSources = additional.length === 0 || additional.some((item) => !item.source.trim());
   useEffect(() => {
     api("/assets/music")
       .then(setMusic)
@@ -160,7 +231,7 @@ export default function CreatePage({
       : metadata?.resolutions
           .filter((r) => form.resolution === "best" || r <= form.resolution)
           .sort((a, b) => b - a)[0];
-  const upload = async (file, kind, index = null) => {
+  const upload = async (file, kind, sourceId = null) => {
     if (!form.rights_confirmed)
       throw new Error(
         "Спершу підтвердьте права на джерело та вибрані матеріали.",
@@ -172,8 +243,8 @@ export default function CreatePage({
     body.append("music", String(kind === "music"));
     const result = await api("/uploads", { method: "POST", body });
     if (kind === "source") {
-      if (index === null) set("source", result.source);
-      else setSources(items=>items.map((item,i)=>i===index?result.source:item));
+      if (sourceId === null) set("source", result.source);
+      else updateSource(sourceId, {source:result.source});
     }
     if (kind === "background") set("background", result.name);
     if (kind === "music") {
@@ -182,18 +253,11 @@ export default function CreatePage({
     }
   };
   const buildRequest = () => {
-    const ranges = !story && !compilation && intervals.trim()
-      ? intervals.trim().split("\n").map(line => {
-          const pair = line.split(",").map(Number);
-          if (pair.length !== 2 || pair.some(n => !Number.isFinite(n))) {
-            throw new Error("Інтервал має вигляд start,end у секундах.");
-          }
-          return pair;
-        })
-      : [];
+    const ranges = !story && !compilation ? parseRanges(intervals) : [];
     const source = form.source.trim();
     const sources = compilation
-      ? [{source,start:form.start,end:form.end}, ...additional.map(url=>({source:url.trim()}))]
+      ? [{source,source_id:'source-1',start:form.start,end:form.end}, ...additional.map(({exclusions,...item})=>
+        ({...item,source:item.source.trim(),exclude:parseRanges(exclusions)}))]
       : [];
     return {...form,source,sources,intervals:ranges,
       background:compilation||form.background_mode==='none'?null:background,
@@ -201,7 +265,7 @@ export default function CreatePage({
   };
   const checkPlan = async (request) => {
     const result = await post("/preflight", request);
-    setPlan(result);
+    setPlan({...result, requestKey:JSON.stringify(request)});
     return result;
   };
   const generate = async (e) => {
@@ -212,7 +276,8 @@ export default function CreatePage({
     try {
       await act(async () => {
         const request = buildRequest();
-        if ((story || compilation) && !plan?.ready && !(await checkPlan(request)).ready) return;
+        const checked = plan?.ready && plan.requestKey === JSON.stringify(request);
+        if ((story || compilation || gameplay) && !checked && !(await checkPlan(request)).ready) return;
         const {
           source,
           rights_confirmed,
@@ -280,25 +345,17 @@ export default function CreatePage({
             />
           </label>
         {compilation && <section aria-label="Додаткові джерела">
-          {additional.map((source,index)=><div className="grid" key={index}>
-            <label>Джерело {index+2} · URL
-              <input value={source} required onChange={e=>setSources(items=>items.map((item,i)=>i===index?e.target.value:item))}
-                placeholder="https://www.twitch.tv/videos/…" />
-            </label>
-            <label>Локальний файл
-              <input type="file" accept=".mp4,.mkv,.mov"
-                onChange={e=>e.target.files[0]&&act(()=>upload(e.target.files[0],"source",index))}/>
-            </label>
-            <div>
-              <button type="button" disabled={index===0} onClick={()=>setSources(items=>{
-                const ordered=[...items];
-                [ordered[index-1],ordered[index]]=[ordered[index],ordered[index-1]];
-                return ordered;
-              })}>Вище</button>
-              <button type="button" onClick={()=>setSources(items=>items.filter((_,i)=>i!==index))}>Прибрати</button>
-            </div>
-          </div>)}
-          <button type="button" disabled={additional.length>=11} onClick={()=>setSources(items=>[...items,""])}>Додати джерело</button>
+          {additional.map((item,index)=><AdditionalSource key={item.source_id} item={item} index={index} api={api} act={act}
+            onChange={(changes)=>updateSource(item.source_id,changes)} onUpload={(file)=>act(()=>upload(file,"source",item.source_id))}
+            onEarlier={()=>setSources((items)=>{
+              const ordered=[...items];
+              [ordered[index-1],ordered[index]]=[ordered[index],ordered[index-1]];
+              return ordered;
+            })} onRemove={()=>setSources((items)=>items.filter((source)=>source.source_id!==item.source_id))}/>)}
+          <button type="button" disabled={additional.length>=11} onClick={()=>{
+            const source_id=`source-${nextSource.current++}`;
+            setSources((items)=>[...items,{source_id,source:'',start:0,end:null,priority:1,max_contribution:null,exclusions:''}]);
+          }}>Додати джерело</button>
         </section>}
         {probing && (
           <div role="status" className="source-skeleton">
@@ -362,6 +419,25 @@ export default function CreatePage({
           </label>}
         </div>}
         <CompositionControls form={form} set={set} backgrounds={backgrounds} channels={settings?.channels||[]} thumbnail={metadata?.thumbnail} video={form.source.startsWith('upload:')?'/api/source-preview/'+form.source.slice(7):null}/>
+        {!story && <div className="grid">
+          <label>Відбір фрагментів
+            <select value={form.ranking_profile || 'general_highlights'} onChange={(e)=>set('ranking_profile',e.target.value)}>
+              <option value="general_highlights">Загальні хайлайти</option>
+              <option value="gameplay_only">Gameplay Only</option>
+            </select>
+          </label>
+          {gameplay && <>
+            <label>Кадрів для аналізу за секунду
+              <select value={form.gameplay_scan_fps || 2} onChange={(e)=>set('gameplay_scan_fps',+e.target.value)}>
+                {[1,2,4].map((fps)=><option key={fps} value={fps}>{fps}</option>)}
+              </select>
+            </label>
+            <label>Встановлена візуальна модель Ollama
+              <input value={form.visual_model || ''} placeholder="Необов’язково, наприклад qwen3-vl:2b"
+                onChange={(e)=>set('visual_model',e.target.value.trim() || null)}/>
+            </label>
+          </>}
+        </div>}
         {!story && <label className="check">
           <input type="checkbox" checked={!!form.review_before_render}
             onChange={e=>set('review_before_render',e.target.checked)}/>
@@ -375,15 +451,20 @@ export default function CreatePage({
           />
           Я маю права на джерело, фон і вибрану музику
         </label>
-        {(story || compilation) && <button type="button" disabled={submitting || !metadata ||
-          !form.rights_confirmed || (compilation && (!additional.length || additional.some(s=>!s.trim())))}
+        {(story || compilation || gameplay) && <button type="button" disabled={submitting || !metadata ||
+          !form.rights_confirmed || (compilation && incompleteSources)}
           onClick={()=>act(()=>checkPlan(buildRequest()))}>Перевірити план</button>}
-        {plan && <ul aria-label="Результат перевірки">
+        {plan && <section aria-label="Результат перевірки">
+          <ul>
           {plan.sources.map((item,index)=><li key={item.source_id}>
             {item.error ? 'Джерело '+(index+1)+' — '+item.error :
-              item.title+' · '+Math.round(item.selected_seconds)+' сек'+(item.story_count?' · '+item.story_count+' частин':'')}
+              item.title+' · '+Math.round(item.selected_seconds)+' сек · '+item.input_resolution+'p'+(item.story_count?' · '+item.story_count+' частин':'')}
           </li>)}
-        </ul>}
+          </ul>
+          {plan.ready && plan.estimate && <p>
+            Оцінка роботи · {(plan.estimate.selected_seconds/60).toFixed(1)} хв відео · до {(plan.estimate.audio_seconds_upper_bound/60).toFixed(1)} хв ASR · {plan.estimate.signal_windows} вікон, {plan.estimate.signal_fps} кадр/с · до {plan.estimate.text_call_limit} текстових і {plan.estimate.visual_call_limit} візуальних запитів
+          </p>}
+        </section>}
         <button
           className="primary generate"
           disabled={
@@ -391,7 +472,7 @@ export default function CreatePage({
             probing ||
             !metadata ||
             !form.rights_confirmed ||
-            (compilation && (!additional.length || additional.some(s=>!s.trim()))) ||
+            (compilation && incompleteSources) ||
             (!compilation && form.preset === "gameplay" && !background)
           }
         >
@@ -624,17 +705,6 @@ export default function CreatePage({
           </label>
 
           <div className="grid">
-            <label>
-              Стиль субтитрів
-              <select
-                value={form.caption_style}
-                onChange={(e) => set("caption_style", e.target.value)}
-              >
-                {["pop", "karaoke", "clean"].map((v) => (
-                  <option key={v}>{v}</option>
-                ))}
-              </select>
-            </label>
             <label>
               Бітрейт, Mbps
               <input

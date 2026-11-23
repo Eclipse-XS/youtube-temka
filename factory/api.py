@@ -304,13 +304,15 @@ def music_assets():
 
 @app.post('/api/preflight')
 def preflight_job(body: JobRequest):
+    import math
     from .models import CompilationSource
+    from .signals import MAX_WINDOWS, WINDOW_SECONDS
     from .timeline import story_part_count
 
     sources = body.sources or [CompilationSource(source=body.source,start=body.start,end=body.end)]
     checked = []
     for index, item in enumerate(sources,1):
-        record = {'source_id':f'source-{index}'}
+        record = {'source_id':item.source_id or f'source-{index}'}
         try:
             data = media.probe(item.source)
             end = min(data['duration'], item.end or data['duration'])
@@ -323,14 +325,42 @@ def preflight_job(body: JobRequest):
                 record['story_count'] = story_part_count(body,span)
             if any(b>end for _,b in body.intervals):
                 raise ValueError('A manual interval extends beyond the source')
-            record.update(title=data['title'],duration=data['duration'],selected_seconds=span)
+            if any(b>end for _,b in item.exclude):
+                raise ValueError('An excluded interval extends beyond the source')
+            windows=math.ceil(span/WINDOW_SECONDS)
+            if not body.gameplay_only:
+                windows=min(windows,MAX_WINDOWS)
+            if body.intervals:
+                windows=0
+            audio=span if data.get('has_audio',True) else 0
+            if body.gameplay_only:
+                audio=min(audio,body.maximum*body.count) if body.captions or (body.audio_mode=='voiceover' and not body.tts_text) else 0
+            resolutions=data['resolutions']
+            limit=max(resolutions) if body.resolution=='best' else body.resolution
+            resolution=min(max(resolutions),limit) if data['platform']=='local' else max(r for r in resolutions if r<=limit)
+            record.update(title=data['title'],duration=data['duration'],selected_seconds=span,
+                          selected_start=item.start,selected_end=end,audio_seconds_upper_bound=audio,
+                          signal_windows=windows,input_resolution=resolution)
         except (ValueError, media.MediaFailure) as error:
             record['error'] = str(error)[:500]
         except Exception:
             record['error'] = 'Media is unavailable. Check access, format or connection.'
         checked.append(record)
+    audio=sum(item.get('audio_seconds_upper_bound',0) for item in checked)
+    if body.gameplay_only:
+        audio=min(audio,body.maximum*body.count)
+    target=body.target_duration or (900 if body.workflow=='compilation' else body.maximum*body.count)
     return {'sources':checked,'ready':all('error' not in item for item in checked),
-            'shorts_max_seconds':config.SHORTS_MAX_SECONDS}
+            'shorts_max_seconds':config.SHORTS_MAX_SECONDS,
+            'estimate':{'selected_seconds':sum(item.get('selected_seconds',0) for item in checked),
+                        'audio_seconds_upper_bound':audio,
+                        'asr_blocks':body.count*math.ceil(body.maximum/config.AUDIO_CHUNK_SECONDS)
+                                     if body.gameplay_only and audio else math.ceil(audio/config.AUDIO_CHUNK_SECONDS),
+                        'signal_windows':sum(item.get('signal_windows',0) for item in checked),
+                        'signal_fps':body.gameplay_scan_fps if body.gameplay_only else 2,
+                        'text_call_limit':body.max_text_model_calls,
+                        'visual_call_limit':body.max_visual_model_calls if body.gameplay_only and body.visual_model else 0,
+                        'output_target_seconds':target,'output_fps':None if body.preserve_fps else 30}}
 
 
 @app.post('/api/jobs',status_code=201)
@@ -392,6 +422,14 @@ def get_job(jid:str):
 def events(jid:str):
     get_job(jid)
     return store.events(jid)
+
+
+@app.get('/api/jobs/{jid}/operations')
+def job_operations(jid:str,limit:int=200,offset:int=0):
+    if not 1<=limit<=200 or offset<0:
+        raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
+    get_job(jid)
+    return store.operations(jid,limit,offset)
 
 
 @app.post('/api/jobs/{jid}/cancel')

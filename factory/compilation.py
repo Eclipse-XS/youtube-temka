@@ -3,9 +3,11 @@ from collections import defaultdict
 
 
 def select(groups, count, target):
-    ordered = [sorted(group, key=lambda c: -c.get('score',0)) for group in groups]
+    ordered = [sorted(group, key=lambda c: -c.get('score',0)) for group in groups if group]
+    ordered.sort(key=lambda group: -group[0].get('source_priority',1))
     selected = []
     duration = 0
+    contributions = defaultdict(float)
     # Give each source with qualifying material a chance before taking seconds.
     while len(selected) < count and duration < target*.95:
         accepted = False
@@ -13,9 +15,12 @@ def select(groups, count, target):
             while group:
                 candidate = group.pop(0)
                 length = candidate['end_seconds'] - candidate['start_seconds']
-                if duration + length <= target*1.05:
+                source = candidate['source_id']
+                maximum = candidate.get('source_max_contribution')
+                if duration + length <= target*1.05 and (maximum is None or contributions[source]+length <= maximum):
                     selected.append(candidate)
                     duration += length
+                    contributions[source] += length
                     accepted = True
                     break
             if len(selected) == count or duration >= target*.95:

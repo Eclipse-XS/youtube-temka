@@ -80,3 +80,41 @@ def manifest(candidates,request):
                          'overlay_assets':[request.logo_asset] if request.logo_asset else [],'audio_settings':{'mode':request.audio_mode}})
         position+=length
     return {'schema_version':1,'segments':segments,'duration_ms':round(position*1000)}
+
+
+def rendered_tracks(timeline,candidates,outputs,request):
+    """Describe the tracks and timing applied by the clip renderer."""
+    tracks={name:[] for name in ('video','audio','captions','overlays','transitions')}
+    for segment,candidate,output in zip(timeline['segments'],candidates,outputs):
+        start,end=segment['output_start_ms'],segment['output_end_ms']
+        bounds={'segment_id':segment['segment_id'],'start_ms':start,'end_ms':end}
+        video={**bounds,'source_id':segment['source_id'],'source_start_ms':segment['source_start_ms'],
+               'source_end_ms':segment['source_end_ms']}
+        if candidate.get('event_seconds') is not None:
+            offset=candidate.get('source_offset',request.start)
+            beats=[{'kind':'context','source_start_ms':video['source_start_ms'],
+                    'source_end_ms':round((offset+candidate['event_seconds'])*1000)},
+                   {'kind':'possible_trigger','source_ms':round((offset+candidate['event_seconds'])*1000)}]
+            if candidate.get('payoff_seconds') is not None:
+                beats.append({'kind':'possible_payoff','source_ms':round((offset+candidate['payoff_seconds'])*1000)})
+            video.update(gameplay_beats=beats,editorial_review_required=True)
+        tracks['video'].append(video)
+        if output['validation'].get('audio'):
+            tracks['audio'].append({**bounds,'mode':request.audio_mode,'music_asset':request.music_asset})
+        if output.get('caption_artifact'):
+            tracks['captions'].append({**bounds,'artifact':output['caption_artifact'],'style':request.caption_style})
+        if request.logo_asset:
+            tracks['overlays'].append({**bounds,'kind':'logo','asset':request.logo_asset})
+        hook_start=start+round(request.hook_start*1000)
+        hook_end=end if request.hook_pinned else min(end,hook_start+round(request.hook_duration*1000))
+        if output.get('hook') and hook_start<hook_end:
+            tracks['overlays'].append({**bounds,'kind':'hook','text':output['hook'],'start_ms':hook_start,
+                                      'end_ms':hook_end,'position':request.hook_position,
+                                      'x_offset':request.hook_x,'y_offset':request.hook_y})
+        if output.get('cta'):
+            tracks['overlays'].append({**bounds,'kind':'cta','text':output['cta'],'start_ms':max(start,end-4000)})
+        if segment['transition']=='fade':
+            duration=min(250,round((end-start)/4))
+            tracks['transitions'].extend([{**bounds,'kind':'fade_in','end_ms':start+duration},
+                                          {**bounds,'kind':'fade_out','start_ms':end-duration}])
+    return tracks

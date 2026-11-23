@@ -3,6 +3,7 @@ import json
 import sqlite3
 import time
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from . import config
 
@@ -38,6 +39,13 @@ def connect():
             job TEXT NOT NULL, key TEXT NOT NULL, status TEXT NOT NULL,
             started REAL, finished REAL, current REAL, total REAL, unit TEXT,
             message TEXT, PRIMARY KEY(job,key))''')
+        db.execute('''CREATE TABLE IF NOT EXISTS job_operations (
+            job TEXT NOT NULL, source_id TEXT NOT NULL, stage_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL, lease TEXT NOT NULL, attempt INTEGER NOT NULL,
+            status TEXT NOT NULL, started_at REAL NOT NULL, finished_at REAL,
+            updated_at REAL NOT NULL, processed_units REAL, total_units REAL, unit_type TEXT,
+            message TEXT, error_code TEXT, details TEXT NOT NULL,
+            PRIMARY KEY(job,source_id,stage_id,operation_id,lease))''')
         db.execute('''CREATE TABLE IF NOT EXISTS metadata_versions (
             job TEXT NOT NULL, output INTEGER NOT NULL, version TEXT NOT NULL,
             metadata TEXT NOT NULL, provenance TEXT NOT NULL, created REAL NOT NULL,
@@ -98,6 +106,41 @@ def get(jid):
         return decode(db.execute('SELECT * FROM jobs WHERE id=?', (jid,)).fetchone(),db)
 
 
+def operations(jid, limit=200, offset=0):
+    with connect() as db:
+        rows = db.execute('''SELECT job AS job_id, source_id, stage_id, operation_id, attempt,
+                          status, started_at, finished_at, updated_at, processed_units,
+                          total_units, unit_type, message, error_code, details
+                          FROM job_operations WHERE job=? ORDER BY started_at DESC, rowid DESC
+                          LIMIT ? OFFSET ?''', (jid,limit,offset)).fetchall()
+    return [{**dict(row), 'details':json.loads(row['details']),
+             'elapsed_seconds':round((row['finished_at'] or time.time())-row['started_at'],3)}
+            for row in rows]
+
+
+def record_operation(db, jid, lease, stage, now):
+    source = stage.get('source_id') or ''
+    key = stage['key']
+    operation = stage['operation_id']
+    status = stage['status']
+    db.execute('''INSERT INTO job_operations
+        VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(attempt),0)+1 FROM job_operations
+            WHERE job=? AND source_id=? AND stage_id=? AND operation_id=?),?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(job,source_id,stage_id,operation_id,lease) DO UPDATE SET
+            status=excluded.status, finished_at=excluded.finished_at, updated_at=excluded.updated_at,
+            processed_units=excluded.processed_units, total_units=excluded.total_units,
+            unit_type=excluded.unit_type, message=excluded.message, error_code=excluded.error_code,
+            details=excluded.details''',
+        (jid,source,key,operation,lease,jid,source,key,operation,status,now,
+         now if status != 'running' else None,now,stage.get('current'),stage.get('total'),
+         stage.get('unit'),stage.get('message'),stage.get('error_code'),json.dumps(stage.get('details') or {})))
+
+
+def finish_open_operations(db, jid, now, status, error_code=None):
+    db.execute('''UPDATE job_operations SET status=?,finished_at=?,updated_at=?,error_code=?
+                  WHERE job=? AND status='running' ''', (status,now,now,error_code,jid))
+
+
 def list_jobs(limit=200,offset=0):
     with connect() as db:
         return [decode(r,db) for r in db.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT ? OFFSET ?',(min(200,max(1,limit)),max(0,offset))).fetchall()]
@@ -128,6 +171,7 @@ def claim(worker, remote=False):
                        (state,message,json.dumps(result,ensure_ascii=False),now,item['id']))
             db.execute('INSERT INTO events VALUES(?,?,?,?)',(item['id'],now,state,message))
             db.execute("UPDATE job_stages SET status='failed',finished=?,message=? WHERE job=? AND status='running'",(now,message,item['id']))
+            finish_open_operations(db,item['id'],now,'failed',failure['code'])
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
         rows = db.execute("""SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0
@@ -138,7 +182,15 @@ def claim(worker, remote=False):
         lease = uuid.uuid4().hex
         db.execute("UPDATE jobs SET state='PROBING',error=NULL,worker=?,lease=?,seen=?,result=json_remove(result,'$.retry_at') WHERE id=?", (worker,lease,now,row['id']))
         db.execute('INSERT INTO events VALUES(?,?,?,?)',(row['id'],time.time(),'PROBING','Lease assigned to '+worker))
-        return {'job': decode(db.execute('SELECT * FROM jobs WHERE id=?', (row['id'],)).fetchone()), 'lease': lease}
+        usage = db.execute('''SELECT
+            COALESCE(SUM(json_extract(details,'$.model_type')='text'),0) AS text,
+            COALESCE(SUM(json_extract(details,'$.model_type')='visual'),0) AS visual,
+            COALESCE(SUM(json_extract(details,'$.context_window')),0) AS context,
+            COALESCE(SUM(json_extract(details,'$.output_token_limit')),0) AS output,
+            COALESCE(SUM(finished_at-started_at),0) AS seconds
+            FROM job_operations WHERE job=? AND json_extract(details,'$.model_type') IS NOT NULL''', (row['id'],)).fetchone()
+        return {'job': decode(db.execute('SELECT * FROM jobs WHERE id=?', (row['id'],)).fetchone()),
+                'lease': lease,'model_usage':dict(usage)}
 
 
 def schedule_retry(result, failure, now):
@@ -189,11 +241,23 @@ def update(jid, lease, state=None, result=None, error=None, current=None, total=
             status=s.get('status','running')
             if status not in ('running','completed','skipped','failed','pending'):
                 raise ValueError('Invalid stage status')
-            db.execute('''INSERT INTO job_stages VALUES(?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(job,key) DO UPDATE SET status=excluded.status,
-                finished=excluded.finished,current=excluded.current,total=excluded.total,
-                unit=excluded.unit,message=excluded.message''',
-                (jid,s['key'],status,time.time(),time.time() if status in ('completed','skipped','failed') else None,s.get('current'),s.get('total'),s.get('unit'),s.get('message')))
+            now=time.time()
+            if s.get('operation_id'):
+                record_operation(db,jid,lease,{**s,'status':status},now)
+            if s.get('project',True):
+                db.execute('''INSERT INTO job_stages VALUES(?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(job,key) DO UPDATE SET status=excluded.status,
+                    started=CASE WHEN job_stages.finished IS NOT NULL THEN excluded.started ELSE job_stages.started END,
+                    finished=excluded.finished,current=excluded.current,total=excluded.total,
+                    unit=excluded.unit,message=excluded.message''',
+                    (jid,s['key'],status,now,now if status in ('completed','skipped','failed') else None,
+                     s.get('current'),s.get('total'),s.get('unit'),s.get('message')))
+        if terminal:
+            now=time.time()
+            failure=value.get('failure') or {}
+            status='cancelled' if state=='CANCELLED' else 'failed' if state in ('FAILED','BLOCKED','QUEUED') else 'skipped'
+            finish_open_operations(db,jid,now,status,failure.get('code'))
+            db.execute("UPDATE job_stages SET status=?,finished=? WHERE job=? AND status='running'",(status,now,jid))
 
 
 def heartbeat(worker, resources):
@@ -213,9 +277,12 @@ def events(jid):
 
 def cancel(jid):
     with connect() as db:
-        cur=db.execute("UPDATE jobs SET cancelled=1,state='CANCELLED',lease=NULL WHERE id=? AND state NOT IN ('READY','PUBLISHED')", (jid,))
+        now=time.time()
+        cur=db.execute("UPDATE jobs SET cancelled=1,state='CANCELLED',lease=NULL,seen=? WHERE id=? AND state NOT IN ('READY','PUBLISHED','CANCELLED')", (now,jid))
         if cur.rowcount:
-            db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),'CANCELLED','Cancelled by operator'))
+            db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,now,'CANCELLED','Cancelled by operator'))
+            finish_open_operations(db,jid,now,'cancelled','OPERATOR_CANCELLED')
+            db.execute("UPDATE job_stages SET status='cancelled',finished=? WHERE job=? AND status='running'",(now,jid))
 
 
 def retry(jid):
@@ -242,6 +309,8 @@ def edit_plan(jid, revision, edits, target, approve=False):
         if row['state']!='REVIEW' or not plan or plan['revision']!=revision:
             raise InterruptedError('The edit plan changed or was submitted. Reload and try again.')
         request = JobRequest.model_validate_json(row['request'])
+        limits = {item.source_id:item for item in request.sources}
+        contributions = defaultdict(float)
         original = {segment['id']:segment for segment in plan['segments']}
         if len({edit['id'] for edit in edits})!=len(edits):
             raise ValueError('Choose each segment at most once')
@@ -254,10 +323,23 @@ def edit_plan(jid, revision, edits, target, approve=False):
             source = plan['sources'][segment['source_id']]
             if not request.minimum<=end-start<=request.maximum or end+segment['source_offset']>source['end']+1e-8:
                 raise ValueError(f'Segment {edit["id"]}: choose a range within the source and the clip duration limits')
+            source_id = segment['source_id']
+            options = limits.get(source_id)
+            if options:
+                offset = segment['source_offset']
+                if any(end+offset>a and start+offset<b for a,b in options.exclude):
+                    raise ValueError(f'Segment {edit["id"]}: the edit overlaps an excluded source interval')
+                contributions[source_id]+=end-start
+                if options.max_contribution is not None and contributions[source_id]>options.max_contribution+1e-8:
+                    raise ValueError(f'Segment {edit["id"]}: the source exceeds its maximum contribution')
             selected.append({**segment,**edit})
             if (start,end)!=(segment['start_seconds'],segment['end_seconds']):
                 selected[-1].update(selection_method='manual_boundaries',reason='Boundaries edited by the operator')
                 selected[-1].pop('score',None)
+                for marker in ('event_seconds','payoff_seconds'):
+                    timestamp=selected[-1].get(marker)
+                    if timestamp is not None and not start<=timestamp<end:
+                        selected[-1].pop(marker)
         if target is not None and request.workflow!='compilation':
             raise ValueError('A timeline target is available for compilations')
         plan.update(revision=revision+1,segments=selected,approved=approve)

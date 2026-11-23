@@ -251,7 +251,7 @@ function App() {
           )
         )}
       </div>
-      <StageProgress job={j} />
+      <StageProgress job={j} api={api} />
     </article>
   );
   if (!auth)

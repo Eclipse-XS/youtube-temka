@@ -149,7 +149,7 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
-def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0):
+def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0, max_words=None):
     """
     Flatten transcript words for a clip range and group them into short blocks
     suitable for vertical video. Returns a list of blocks; each block is a list
@@ -194,7 +194,8 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
         current_text_len = sum(len(w['word']) + 1 for w in current_block)
         duration = word['end'] - block_start
 
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration:
+        if (current_text_len + len(word['word']) > max_chars or duration > max_duration
+                or (max_words is not None and len(current_block) >= max_words)):
             blocks.append(current_block)
             current_block = [word]
             block_start = word['start']
@@ -360,7 +361,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
                  margin_v=SAFE_MARGIN_V, split_ranges=None,
-                 reveal=False, shadow=0):
+                 reveal=False, shadow=0, max_words=None):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -380,7 +381,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     0 it is the soft "clean" look; a hard outline does not need it.
     max_chars=1 puts one word on screen at a time.
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration, max_words)
     if not blocks:
         return False
 

@@ -10,7 +10,7 @@ from .models import JobRequest
 from .highlights import analyze
 from .resources import preflight
 from .cleanup import remove_workspace
-from .progress import Progress
+from .progress import MODEL_PROGRESS, Progress
 from jsonfile import write_json_atomic
 
 
@@ -42,40 +42,61 @@ def source_plan(source, request, root, progress):
 
 
 def media_signals(source, request, metadata, end, resolution, root, progress):
-    from .signals import scan
+    from .signals import MAX_WINDOWS, WINDOW_SECONDS, scan
 
-    path = root/'signals.json'
+    path = root/('gameplay-signals-v1.json' if request.gameplay_only else 'signals.json')
     if path.is_file():
         data = json.loads(path.read_text(encoding='utf-8'))
         return data['events'],data['scenes'],data['coverage']
+    windows = math.ceil((end-request.start)/WINDOW_SECONDS)
+    progress.begin('signals','ANALYZING',windows if request.gameplay_only else min(windows,MAX_WINDOWS),'windows')
     events,scenes,coverage = scan(source,request,metadata,end,resolution,root,progress.tick)
     write_json_atomic(path,{'events':events,'scenes':scenes,'coverage':coverage})
+    progress.done()
     return events,scenes,coverage
+
+
+def rank_media(transcript, request, metadata, source, end, resolution, root, progress, signals):
+    from .signals import gameplay_candidates, propose
+
+    events,scenes,coverage=signals
+    duration=end-request.start
+    if request.gameplay_only:
+        from .visual_review import review_candidates
+
+        candidates=gameplay_candidates(events,scenes,request,duration,metadata['title'],coverage,progress.source_id)
+        preview_resolution=max((r for r in metadata['resolutions'] if r<=min(resolution,480)),default=resolution)
+        review_candidates(candidates,source,request,preview_resolution,root,progress)
+        result={'candidates':candidates,'analysis':'gameplay_signals','analysis_outcome':'editorial_review_required',
+                'selection_summary':f'{len(candidates)} gameplay moments selected for review from sampled visual evidence.'}
+    else:
+        result=analyze(transcript,request,duration,progress.tick,propose(events,scenes,request,duration,metadata['title']))
+    return {**result,'signal_coverage':coverage}
 
 
 def compilation_plan(request, root, progress, update):
     from .compilation import select
-    from .signals import propose
 
     sources = {}
     groups = []
     for index, item in enumerate(request.sources,1):
-        key = f'source-{index}'
+        key = item.source_id
+        progress.source_id = key
         folder = root/key
         folder.mkdir(exist_ok=True)
-        options = request.model_copy(update={'start':item.start,'end':item.end})
+        options = request.model_copy(update={'start':item.start,'end':item.end,'language':item.language or request.language})
         try:
             metadata,end,resolution = source_plan(item.source,options,folder,progress)
+            if any(b>end for _,b in item.exclude):
+                raise ValueError('An excluded interval extends beyond the source')
             checkpoint = folder/'analysis.json'
             if checkpoint.is_file():
                 result = json.loads(checkpoint.read_text(encoding='utf-8'))
             else:
-                transcript = transcribe_chunks(item.source,options,folder,metadata,end,resolution,progress,lambda **_:None)
+                transcript = discovery_transcript(item.source,options,folder,metadata,end,resolution,progress,lambda **_:None)
+                signals = media_signals(item.source,options,metadata,end,resolution,folder,progress)
                 progress.begin('highlights','ANALYZING',message=f'Source {index}/{len(request.sources)}')
-                events,scenes,coverage = media_signals(item.source,options,metadata,end,resolution,folder,progress)
-                visual = propose(events,scenes,options,end-item.start,metadata.get('title'))
-                result = analyze(transcript,options,end-item.start,progress.tick,visual)
-                result['signal_coverage'] = coverage
+                result = rank_media(transcript,options,metadata,item.source,end,resolution,folder,progress,signals)
                 write_json_atomic(checkpoint,result,ensure_ascii=True)
                 del transcript
                 progress.done()
@@ -84,11 +105,15 @@ def compilation_plan(request, root, progress, update):
             if isinstance(error, media.MediaFailure):
                 raise media.MediaFailure(error.code, f'Source {index}: {error}', error.retryable) from error
             raise
-        sources[key] = {'source':item.source,'metadata':metadata,'resolution':resolution,'end':end,
+        sources[key] = {'source':item.source,'metadata':metadata,'resolution':resolution,'end':end,'language':options.language,
                         'signal_coverage':result.get('signal_coverage')}
-        groups.append([{**c,'source_id':key,'source_offset':item.start}
-                       for c in result['candidates']])
+        groups.append([{**c,'source_id':key,'source_offset':item.start,
+                        'source_priority':item.priority,'source_max_contribution':item.max_contribution}
+                       for c in result['candidates'] if all(
+                           c['end_seconds']+item.start<=a or c['start_seconds']+item.start>=b
+                           for a,b in item.exclude)])
         update(result={'sources':sources,'failed_source_id':None})
+    progress.source_id = None
     target = request.target_duration or 900
     selected,duration = select(groups,request.count,target)
     result = {'candidates':selected, 'analysis':'source_aware_compilation',
@@ -115,7 +140,44 @@ def transcript_artifacts(root, transcript, duration):
                 output.write(re.sub(r'(\d\d:\d\d:\d\d),(\d{3})',r'\1.\2',line))
 
 
-def transcribe_chunks(source,request,root,metadata,end,resolution,progress,update):
+def empty_transcript(language=None):
+    return {'language':language,'segments':[],'text':''}
+
+
+def save_edit_transcript(root,name,transcript,start,end):
+    from .compilation import append_transcript
+
+    retained=empty_transcript(transcript.get('language'))
+    append_transcript(retained,transcript,start,end,0)
+    if not retained['segments']:
+        return None
+    retained['text']=' '.join(segment['text'] for segment in retained['segments'])
+    write_json_atomic(root/name,retained,ensure_ascii=True)
+    return name
+
+
+def reuse_edit_transcript(root,origin_job,output,request,tick):
+    name=output.get('edit_transcript')
+    checkpoint=root/'transcript.json'
+    if (not name or not re.fullmatch(r'edit-(?:clip-\d+|long)\.json',name)
+        or checkpoint.is_file() or request.start!=0 or any(
+            getattr(request,key)!=origin_job['request'].get(key) for key in ('asr_model','language'))):
+        return
+    local=config.SCRATCH/origin_job['id']/name
+    if local.is_file():
+        write_json_atomic(checkpoint,json.loads(local.read_text(encoding='utf-8')),ensure_ascii=True)
+    elif name in origin_job['result'].get('artifacts',{}):
+        media.fetch_drive(origin_job['result']['artifacts'][name],checkpoint,tick)
+
+
+def discovery_transcript(source,request,root,metadata,end,resolution,progress,update):
+    if request.gameplay_only:
+        progress.done('transcription','skipped','Gameplay discovery scans visual and audio signals first')
+        return empty_transcript(request.language)
+    return transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
+
+
+def transcribe_chunks(source,request,root,metadata,end,resolution,progress,update,*,operation_prefix=''):
     path=root/'transcript.json'
     if path.is_file():
         progress.done('extraction',message='Reused transcript checkpoint');progress.done('transcription',message='Reused transcript checkpoint')
@@ -139,13 +201,16 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
             offset=index*chunk_seconds;chunk_end=min(offset+chunk_seconds,duration)
             partial=root/f'transcript-{offset}.json'
             if not partial.is_file():
-                progress.begin('extraction','DOWNLOADING',message=f'Audio chunk {index+1}/{chunks}')
+                operation=f'{operation_prefix}chunk-{offset}'
+                progress.begin('extraction','DOWNLOADING',message=f'Audio chunk {index+1}/{chunks}',operation=operation)
                 audio=root/f'audio-{offset}.mka'
                 media.download(source,audio,request.start+offset,request.start+chunk_end,resolution,True,progress.tick)
-                progress.begin('transcription','TRANSCRIBING',duration,'seconds',f'Chunk {index+1}/{chunks}')
-                progress.tick(offset,duration)
-                def asr_tick(current=None,total=None):progress.tick(offset+current if current is not None else None,duration)
-                media.run([sys.executable,'-m','factory.transcribe',str(audio),str(partial),language or 'auto'],asr_tick,duration=chunk_end-offset,env={**os.environ,'WHISPER_MODEL':request.asr_model or config.ASR_MODEL})
+                progress.done()
+                model=request.asr_model or config.ASR_MODEL
+                progress.begin('transcription','TRANSCRIBING',chunk_end-offset,'seconds',
+                               f'Chunk {index+1}/{chunks}',operation=operation,model=model)
+                media.run([sys.executable,'-m','factory.transcribe',str(audio),str(partial),language or 'auto'],progress.tick,duration=chunk_end-offset,env={**os.environ,'WHISPER_MODEL':model})
+                progress.done()
             (root/f'audio-{offset}.mka').unlink(missing_ok=True)
             part=json.loads(partial.read_text(encoding='utf-8'))
             if part['segments']:language=language or part.get('language')
@@ -155,14 +220,28 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
                     word['start']+=offset;word['end']+=offset
                 segments.append(segment)
             update(result={'audio_chunks_completed':index+1,'audio_chunks_total':chunks})
-            progress.tick(chunk_end,duration)
-        progress.done('extraction');progress.done('transcription')
     else:
         progress.done('extraction','skipped','No audio, manual intervals without captions, or an explicitly silent short source')
         progress.done('transcription','skipped','No speech analysis required')
     transcript={'language':language if segments or request.language else None,'segments':segments,'text':' '.join(s['text'] for s in segments)}
     write_json_atomic(path,transcript,ensure_ascii=True)
     return transcript
+
+
+def gameplay_clip_transcript(source,request,root,metadata,resolution,progress,candidate,offset,index):
+    from .compilation import append_transcript
+
+    start,end=candidate['start_seconds'],candidate['end_seconds']
+    merged=empty_transcript(request.language)
+    if not (request.captions or (request.audio_mode=='voiceover' and not request.tts_text)) or metadata.get('has_audio') is False:
+        return merged
+    folder=root/f'gameplay-asr-{index}'
+    folder.mkdir(exist_ok=True)
+    options=request.model_copy(update={'start':offset+start,'end':offset+end,'intervals':[]})
+    selected=transcribe_chunks(source,options,folder,metadata,options.end,resolution,progress,lambda **_:None,
+                               operation_prefix=f'clip-{index}-')
+    append_transcript(merged,selected,0,end-start,start)
+    return merged
 
 
 def process(claim,assets=None):
@@ -174,6 +253,7 @@ def process(claim,assets=None):
         if state:stage=state
         store.update(jid,lease,state=state,**kwargs)
     progress=Progress(update)
+    model_context=MODEL_PROGRESS.set(progress)
     def renew():
         while not cancel_event.wait(15):
             try:store.update(jid,lease)
@@ -181,6 +261,7 @@ def process(claim,assets=None):
     heartbeat=threading.Thread(target=renew,daemon=True);heartbeat.start()
     try:
         request=JobRequest.model_validate(job['request'])
+        progress.limit_models(request,claim.get('model_usage',{}))
         root.mkdir(parents=True,exist_ok=True)
         if job['result'].get('cloud_verified'):
             remove_workspace(root);update('READY');return
@@ -199,6 +280,7 @@ def process(claim,assets=None):
                 preflight(path.stat().st_size)
                 shutil.copyfile(path,root/'edit-source.mp4')
             else:media.fetch_drive(editable,root/'edit-source.mp4',progress.tick)
+            reuse_edit_transcript(root,origin_job,original,request,progress.tick)
             source='job-local:'+jid
         compiling = request.workflow=='compilation'
         source_url=request.source if request.source.startswith('https://') else origin_job['result'].get('source_url') if request.source.startswith('edit:') else None
@@ -209,6 +291,7 @@ def process(claim,assets=None):
             update(result={'source':metadata,'source_url':None})
             end = request.start + result['planned_duration']
         else:
+            progress.source_id = 'source-1'
             metadata,end,resolution = source_plan(source,request,root,progress)
             if request.workflow=='story':
                 from .timeline import story_part_count
@@ -226,13 +309,17 @@ def process(claim,assets=None):
         if compiling:
             transcript = {'language':None,'segments':[]}
         else:
-            transcript=transcribe_chunks(source,request,root,metadata,end,resolution,progress,update)
+            transcript=discovery_transcript(source,request,root,metadata,end,resolution,progress,update)
             progress.begin('language','TRANSCRIBING')
             update(result={'language':transcript['language']})
             progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
-            transcript_artifacts(root,transcript,end-request.start)
-        progress.begin('highlights','ANALYZING')
+            if not request.gameplay_only:
+                transcript_artifacts(root,transcript,end-request.start)
         analysis_checkpoint=root/'analysis.json'
+        scan_needed = (not compiling and request.workflow in ('story','highlights') and not request.intervals
+                       and not analysis_checkpoint.is_file() and not job['result'].get('candidates'))
+        signals = media_signals(source,request,metadata,end,resolution,root,progress) if scan_needed else None
+        progress.begin('highlights','ANALYZING')
         if compiling:
             candidates = result['candidates']
         elif analysis_checkpoint.is_file():
@@ -247,17 +334,15 @@ def process(claim,assets=None):
             candidates=[{'start_seconds':a-request.start,'end_seconds':b-request.start,'title':metadata['title']} for a,b in (request.intervals if request.mode=='longs' else sorted(request.intervals))]
             result={'candidates':candidates,'analysis':'manual chronological intervals'}
         elif request.workflow in ('story','highlights'):
-            from .signals import propose
-            events,scenes,coverage = media_signals(source,request,metadata,end,resolution,root,progress)
             if request.workflow=='story':
                 from .timeline import story
+                _,scenes,coverage=signals
                 candidates,summary = story(transcript,request,end-request.start,metadata['title'],scenes)
-                result = {'candidates':candidates,'analysis':'continuous_story','selection_summary':summary,'series_applied':True}
+                result = {'candidates':candidates,'analysis':'continuous_story','selection_summary':summary,
+                          'series_applied':True,'signal_coverage':coverage}
             else:
-                visual = propose(events,scenes,request,end-request.start,metadata['title'])
-                result = analyze(transcript,request,end-request.start,progress.tick,visual)
+                result = rank_media(transcript,request,metadata,source,end,resolution,root,progress,signals)
                 candidates = result['candidates']
-            result['signal_coverage'] = coverage
         elif not transcript['segments'] and request.minimum<=end-request.start<=request.maximum and request.audio_mode=='silent':
             candidates=[{'start_seconds':0,'end_seconds':end-request.start,'title':metadata['title']}]
             result={'candidates':candidates,'analysis':'whole short visual source; no AI claim'}
@@ -315,6 +400,8 @@ def process(claim,assets=None):
             from .timeline import manifest
             write_json_atomic(root/'timeline.json',manifest(candidates,request),ensure_ascii=True)
         for i,candidate in enumerate(candidates):
+            progress.source_id = candidate.get('source_id','source-1')
+            operation=f'clip-{i+1}'
             clip_request=request.model_copy()
             clip_request.transition = candidate.get('transition',request.transition)
             clip_transcript = transcript
@@ -324,12 +411,21 @@ def process(claim,assets=None):
                 from .compilation import append_transcript
                 key = candidate['source_id']
                 clip_source = sources[key]['source']
+                clip_request.language = sources[key]['language']
                 resolution = sources[key]['resolution']
                 offset = candidate['source_offset']
-                if key!=last_source:
+                if not request.gameplay_only and key!=last_source:
                     source_transcript = json.loads((root/key/'transcript.json').read_text(encoding='utf-8'))
                     last_source = key
-                clip_transcript = source_transcript
+                if not request.gameplay_only:
+                    clip_transcript = source_transcript
+            if request.gameplay_only:
+                clip_metadata=sources[key]['metadata'] if compiling else metadata
+                clip_transcript=gameplay_clip_transcript(clip_source,clip_request,root,clip_metadata,resolution,progress,candidate,offset,i+1)
+                if not compiling:
+                    from .compilation import append_transcript
+                    append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],candidate['start_seconds'])
+            if compiling:
                 length = candidate['end_seconds']-candidate['start_seconds']
                 append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],compilation_position)
                 compilation_ranges.append({**candidate,'start_seconds':compilation_position,'end_seconds':compilation_position+length})
@@ -339,56 +435,75 @@ def process(claim,assets=None):
             hook_candidates=None
             if request.text_mode in ('static_hook','hook_subtitles') and not request.hook and (request.mode!='longs' or i==0):
                 from .hooks import suggest
-                progress.begin('hooks','ANALYZING',message=f'Clip {i+1}/{len(candidates)}')
+                progress.begin('hooks','ANALYZING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
                 evidence=' '.join(s['text'] for s in clip_transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds'])
                 hook_candidates=suggest(evidence,request.metadata_language or clip_transcript['language'] or 'en',request.llm_model,metadata['title'])
                 clip_request.hook=hook_candidates['candidates'][0]['text']
                 progress.done(message=hook_candidates['method'])
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'
-            progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}')
+            progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
             if clip.is_file():
                 try:media.validate_output(clip,duration)
                 except Exception:clip.unlink()
             if not clip.is_file():
                 if compiling:
-                    temporary = clip.with_suffix('.input.mp4')
-                    try:
-                        media.download(clip_source,temporary,offset+candidate['start_seconds'],offset+candidate['end_seconds'],resolution,False,progress.tick)
-                        media.normalize_compilation(temporary,clip,duration,request.output_height,progress.tick)
-                    finally:
-                        temporary.unlink(missing_ok=True)
+                    local = media.local_source(clip_source)
+                    if local:
+                        media.normalize_compilation(local,clip,duration,request.output_height,progress.tick,
+                                                    start=offset+candidate['start_seconds'],input_height=resolution)
+                    else:
+                        temporary = clip.with_suffix('.input.mp4')
+                        try:
+                            media.download(clip_source,temporary,offset+candidate['start_seconds'],offset+candidate['end_seconds'],resolution,False,progress.tick)
+                            media.normalize_compilation(temporary,clip,duration,request.output_height,progress.tick)
+                        finally:
+                            temporary.unlink(missing_ok=True)
                 else:
                     media.download(clip_source,clip,offset+candidate['start_seconds'],offset+candidate['end_seconds'],resolution,False,progress.tick)
             raw_sources[output.name]=clip;progress.done()
-            def render_stage(key):
+            def render_stage(key,**details):
                 if progress.active in ('rendering','captions_audio'):progress.done()
-                progress.begin(key,'RENDERING',duration if key=='rendering' else None,'seconds' if key=='rendering' else None,f'Clip {i+1}/{len(candidates)}')
+                progress.begin(key,'RENDERING',duration if key=='rendering' else None,'seconds' if key=='rendering' else None,
+                               f'Clip {i+1}/{len(candidates)}',operation=operation,**details)
             if output.is_file():
                 try:
                     checkpoint=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
-                    refreshed=media.validate_output(output,checkpoint['duration'],request=request)
-                    output.with_suffix('.validation.json').write_text(json.dumps({**checkpoint,**refreshed}),encoding='utf-8')
+                    refreshed=media.verify_checkpoint(output,checkpoint,clip_request)
+                    if refreshed is not checkpoint:
+                        write_json_atomic(output.with_suffix('.validation.json'),refreshed)
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
-                    progress.begin('validation','RENDERING')
+                    progress.begin('validation','RENDERING',operation=operation)
                 except Exception:output.unlink()
             if not output.is_file():media.render(clip,output,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],clip_request,background,progress.tick,stage=render_stage,music_path=assets.get('music') if assets is not None else None,logo_path=assets.get('logos') if assets is not None else None)
             progress.done('validation')
             thumbnail=output.with_suffix('.jpg')
             from .thumbnails import create as make_thumbnail
+            progress.begin('thumbnail','RENDERING',operation=operation)
             thumbnail_report=make_thumbnail(output,thumbnail,tick=progress.tick) if not thumbnail.is_file() else {'method':'reused_existing_frame'}
+            progress.done()
             validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
             outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name,**thumbnail_report},'validation':validation})
-            import hashlib
-            with output.open('rb') as rendered:digest=hashlib.file_digest(rendered,'sha256').hexdigest()
+            if clip_request.captions and output.with_suffix('.ass').is_file():
+                outputs[-1]['caption_artifact']=output.with_suffix('.ass').name
+            if clip_request.cta_text:
+                outputs[-1]['cta']=clip_request.cta_text
+            retained=save_edit_transcript(root,f'edit-clip-{i+1}.json',clip_transcript,candidate['start_seconds'],candidate['end_seconds'])
+            if retained:
+                outputs[-1]['edit_transcript']=retained
+            digest=validation.get('media_fingerprint',{}).get('sha256') or media.media_fingerprint(output)['sha256']
             outputs[-1].update(render_id=f'{jid}:{i+1}',render_version=1,output_hash=digest,hook=clip_request.hook,hook_candidates=hook_candidates,series={'id':jid,'title':candidate.get('series_title',candidate['title']),'part':candidate['part'],'parts':candidate['parts'],'previous_part':candidate['part']-1 if candidate['part']>1 else None,'next_part':candidate['part']+1 if candidate['part']<candidate['parts'] else None} if candidate.get('part') else None)
             update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
-        if compiling:
+        progress.source_id = None
+        if compiling or request.gameplay_only:
+            transcript['segments'].sort(key=lambda segment:segment['start'])
             transcript['text'] = ' '.join(s['text'] for s in transcript['segments'])
             write_json_atomic(root/'transcript.json',transcript,ensure_ascii=True)
-            transcript_artifacts(root,transcript,compilation_position)
+            transcript_artifacts(root,transcript,compilation_position if compiling else end-request.start)
             update(result={'language':transcript['language']})
         if request.mode=='longs':
+            from .timeline import rendered_tracks
+
             timeline=manifest(candidates,request);position=0
             for segment,output in zip(timeline['segments'],outputs):
                 segment['output_start_ms']=round(position*1000)
@@ -396,15 +511,36 @@ def process(claim,assets=None):
             timeline['duration_ms']=round(position*1000)
             if compiling:
                 timeline['target_duration_ms']=round(result['target_duration']*1000)
+            timeline['tracks']=rendered_tracks(timeline,candidates,outputs,request)
+            timeline['schema_version']=2
             write_json_atomic(root/'timeline.json',timeline,ensure_ascii=True)
         if request.mode=='longs' and len(outputs)>1:
+            progress.begin('rendering','RENDERING',operation='assemble-long')
             final=root/'long.mp4';media.concatenate([root/o['name'] for o in outputs],final,progress.tick)
+            progress.done()
+            progress.begin('validation','RENDERING',operation='assemble-long')
             validation=media.validate_output(final,sum(o['duration'] for o in outputs),request=request)
+            progress.done()
+            progress.begin('retrieval','RENDERING',operation='assemble-edit-source')
             raw=root/'long-source.mp4';media.concatenate(list(raw_sources.values()),raw,progress.tick)
+            progress.done()
             raw_sources[final.name]=raw
+            progress.begin('thumbnail','RENDERING',operation='assemble-long')
             thumb=final.with_suffix('.jpg');thumbnail_report=make_thumbnail(final,thumb,tick=progress.tick)
+            progress.done()
+            from .compilation import append_transcript
+            edit_speech=empty_transcript()
+            offset=0
+            for item in outputs:
+                if item.get('edit_transcript'):
+                    part=json.loads((root/item['edit_transcript']).read_text(encoding='utf-8'))
+                    append_transcript(edit_speech,part,0,item['edit_duration'],offset)
+                offset+=item['edit_duration']
+            retained=save_edit_transcript(root,'edit-long.json',edit_speech,0,offset)
             outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':sum(c['end_seconds']-c['start_seconds'] for c in candidates),'validation':validation,'thumbnail':{'name':thumb.name,**thumbnail_report}}]
-            with final.open('rb') as rendered:digest=hashlib.file_digest(rendered,'sha256').hexdigest()
+            if retained:
+                outputs[0]['edit_transcript']=retained
+            digest=media.media_fingerprint(final)['sha256']
             outputs[0].update(render_id=f'{jid}:long',render_version=1,output_hash=digest)
         if compiling:
             actual = outputs[0]['duration']
@@ -432,7 +568,7 @@ def process(claim,assets=None):
         update(result={'outputs':outputs,'publishing_state':'AWAITING_EDITORIAL_REVIEW'})
         metadata_obj={'job_id':jid,'request':request.model_dump(),'source':metadata,'language':transcript['language'],'candidates':candidates,'outputs':outputs}
         if request.save_drive:
-            artifact_paths=[root/'transcript.json',root/'metadata.json',*root.glob('timeline.json'),*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass'),*root.glob('*.validation.json')]
+            artifact_paths=[root/'transcript.json',root/'metadata.json',*root.glob('timeline.json'),*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass'),*root.glob('*.validation.json'),*(root/o['edit_transcript'] for o in outputs if o.get('edit_transcript'))]
             total_files=sum(1+bool(o.get('thumbnail'))+int(o['name'] in raw_sources) for o in outputs)+sum(p.name=='metadata.json' or (p.is_file() and p.stat().st_size>0) for p in artifact_paths)
             progress.begin('drive','UPLOADING',total_files,'files');progress.tick(0,total_files)
             from .drive import Drive
@@ -491,9 +627,10 @@ def process(claim,assets=None):
               else f'{type(error).__name__} in {stage}; inspect configuration and retry')[:500]
         failure={'code':code,'stage':progress.active or stage,'message':safe,'retryable':retryable}
         try:
-            progress.done(status='failed',message=safe)
+            progress.done(status='failed',message=safe,error_code=code)
             state = 'QUEUED' if retryable else 'BLOCKED' if stage=='UPLOADING' or isinstance(error,NeedsReview) else 'FAILED'
             update(state,error=safe,result={'failure':failure})
         except InterruptedError:pass
     finally:
+        MODEL_PROGRESS.reset(model_context)
         cancel_event.set();heartbeat.join(timeout=1)

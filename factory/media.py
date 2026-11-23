@@ -1,4 +1,5 @@
 """Bounded ingest and rendering, using OpenShorts caption/encoder modules."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from collections import deque
 from urllib.parse import urlsplit
 from . import config
 from .resources import preflight
+from jsonfile import write_json_atomic
 
 
 class MediaFailure(RuntimeError):
@@ -56,6 +58,7 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None, cwd=No
     started=time.monotonic()
     tail=deque(maxlen=12)
     next_check=0.0
+    next_quota_check=0.0
     progress=None
     eof=False
     try:
@@ -64,7 +67,11 @@ def run(args, tick=lambda *_:None, duration=None, timeout=7200, env=None, cwd=No
             if now-started > timeout:
                 raise MediaFailure('MEDIA_TIMEOUT', 'Media operation timed out; check the source connection or shorten the interval.', True)
             if now>=next_check:
-                preflight()
+                if now>=next_quota_check:
+                    preflight()
+                    next_quota_check=now+3
+                elif config.RESERVE_BYTES and shutil.disk_usage(config.SCRATCH).free < config.RESERVE_BYTES:
+                    raise RuntimeError('Free-space reserve would be exceeded. Free disk space before retrying.')
                 tick(progress,duration)
                 next_check=now+.5
             if eof:
@@ -243,6 +250,7 @@ def render(source,output,transcript,start,end,request,background=None,tick=lambd
 def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
+    from .captions import appearance
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
     # synthetic speech. Limit at the final sample rate with makeup gain disabled.
     audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
@@ -285,10 +293,9 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         if translated.is_file():transcript=json.loads(translated.read_text(encoding='utf-8'))
         else:
             transcript=translate(transcript,request.subtitle_language,request.llm_model)
-            from jsonfile import write_json_atomic
             write_json_atomic(translated,transcript,ensure_ascii=True)
     generate_srt(transcript,caption_start,caption_end,str(srt))
-    generate_ass(transcript,caption_start,caption_end,str(ass),fontsize=18,font_name='Noto Sans',max_chars=30,effect='pop' if request.caption_style=='pop' else 'none',highlight_color='#FFFFFF' if request.caption_style=='clean' else '#FFD700')
+    generate_ass(transcript,caption_start,caption_end,str(ass),**appearance(request))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
@@ -328,19 +335,32 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
         fontsize=request.hook_font_size
-        while True:
-            hooklines=textwrap.wrap(request.hook,width=max(1,min(26,int(width*.84/(fontsize*1.1)))))
-            if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=18:break
-            fontsize-=2
-        hookfile.write_text('\n'.join(hooklines),encoding='utf-8')
+        if request.hook_wrap:
+            while True:
+                hooklines=textwrap.wrap(request.hook,width=max(1,min(26,int(width*.84/(fontsize*1.1)))))
+                if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=18:break
+                fontsize-=2
+            text='\n'.join(hooklines)
+        else:
+            text=request.hook
+        hookfile.write_text(text,encoding='utf-8',newline='')
         # Windows FFmpeg builds may have no fontconfig configuration. An explicit
         # installed font avoids drawtext terminating the entire render process.
         font="font='"+{'sans':'Noto Sans','serif':'Noto Serif','mono':'DejaVu Sans Mono'}[request.hook_font]+"':"
         if os.name=='nt':
             fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/{'sans':'arial.ttf','serif':'times.ttf','mono':'consola.ttf'}[request.hook_font]
             if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
-        hook_y={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
-        graph+=f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:shadowx={2 if request.hook_shadow else 0}:shadowy={2 if request.hook_shadow else 0}:box={int(request.hook_box)}:boxcolor=black@0.65:boxborderw=14:x=(w-tw)/2:y={hook_y}:enable='lt(t,{request.hook_duration})'[hooked]"
+        anchor={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
+        x=f'clip((w-tw)/2+{request.hook_x},w*.05,max(w*.05,w*.95-tw))'
+        y=f'clip({anchor}+{request.hook_y},h*.05,max(h*.05,h*.95-th))'
+        show=f'gte(t,{request.hook_start})'
+        if not request.hook_pinned:
+            show+=f'*lt(t,{request.hook_start+request.hook_duration})'
+        shadow=2 if request.hook_shadow else 0
+        graph+=(f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:"
+                f"fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:"
+                f"shadowx={shadow}:shadowy={shadow}:box={int(request.hook_box)}:boxcolor=black@{request.hook_box_opacity}:"
+                f"boxborderw={request.hook_padding}:x='{x}':y='{y}':enable='{show}'[hooked]")
         video='[hooked]'
     audio_map=None
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
@@ -383,21 +403,37 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             audio_map='[faded_audio]'
     args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video]
     args+=['-map',audio_map,'-c:a','aac','-b:a','192k','-ar','48000'] if audio_map else ['-an']
-    args+=[*video_encode_args(),'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
+    encoding=video_encode_args()
+    args+=[*encoding,'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
     if not request.preserve_fps:
         args+=['-r','30']
     temporary=output.with_suffix('.rendering.mp4')
     args+=['-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(temporary)]
-    if stage:stage('rendering')
+    if stage:stage('rendering',encoder=encoding[1])
     try:
         run(args,tick,duration)
         if stage:stage('validation')
         report=validate_output(temporary,duration,request=request,expected_audio=audio_map is not None)
         temporary.replace(output)
     finally:temporary.unlink(missing_ok=True)
-    from jsonfile import write_json_atomic
-    write_json_atomic(output.with_suffix('.validation.json'), {**report,'framing':framing})
+    write_json_atomic(output.with_suffix('.validation.json'),{**report,'framing':framing,
+                      'media_fingerprint':media_fingerprint(output,request)})
     return output
+
+
+def media_fingerprint(path,request=None):
+    with path.open('rb') as source:
+        digest=hashlib.file_digest(source,'sha256').hexdigest()
+    return {'sha256':digest,'validation_version':1,
+            'profile':[request.mode,request.output_height,request.destination,config.SHORTS_MAX_SECONDS] if request else None}
+
+
+def verify_checkpoint(path,report,request):
+    fingerprint=media_fingerprint(path,request)
+    if report.get('validated') is True and report.get('media_fingerprint')==fingerprint:
+        return report
+    refreshed=validate_output(path,report['duration'],request=request,expected_audio=report.get('audio'))
+    return {**report,**refreshed,'media_fingerprint':fingerprint}
 
 
 def validate_output(path,duration,request=None,expected_audio=None):
@@ -463,19 +499,21 @@ def concatenate(paths,output,tick=lambda *_:None):
         temporary.unlink(missing_ok=True)
 
 
-def normalize_compilation(source,output,duration,height,tick):
+def normalize_compilation(source,output,duration,height,tick,*,start=0,input_height=None):
     """Make stream-copy assembly safe across source dimensions, frame rates and audio layouts."""
     import av
+    from ffmpeg_utils import DELIVERY, video_encode_args
 
     width=height*16//9//2*2
     with av.open(str(source)) as container:
         has_audio=bool(container.streams.audio)
-    args=[ffmpeg(),'-y','-hide_banner','-loglevel','error','-threads','2','-i',str(source)]
+    args=[ffmpeg(),'-y','-hide_banner','-loglevel','error','-threads','2','-ss',str(start),'-i',str(source)]
     if not has_audio:
         args+=['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']
+    scaling = f'scale=-2:min(ih\\,{input_height}),' if input_height else ''
+    scaling += f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1'
     args+=['-map','0:v:0','-map','0:a:0' if has_audio else '1:a:0',
-           '-vf',f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1',
-           '-af','apad','-t',str(duration),'-r','30','-c:v','libx264','-preset','fast',
+           '-vf',scaling,'-af','apad','-t',str(duration),'-r','30',*video_encode_args(DELIVERY),
            '-threads','2','-filter_threads','1','-pix_fmt','yuv420p','-c:a','aac',
            '-ac','2','-ar','48000','-movflags','+faststart','-progress','pipe:1']
     temporary=output.with_suffix('.normalizing.mp4')
