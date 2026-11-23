@@ -10,7 +10,7 @@ same head. The authorized Eclipse-XS repository's `main`,
 ## Runtime and verification
 
 - The Factory dashboard baseline built successfully with `npm run build -- --config vite.factory.config.js`.
-- `docker compose config --quiet` accepted the baseline configuration. Docker's Linux engine pipe was unavailable, so the running deployment, images, and container Ollama endpoint could not be verified. WSL enumeration returned access denied.
+- `docker compose config --quiet` accepted the baseline configuration. Docker's Linux engine pipe was unavailable, so the running deployment, images, and container Ollama endpoint could not be verified. WSL enumeration with host permissions showed only the stopped Docker Desktop distribution.
 - The visible GPU is an NVIDIA GeForce RTX 3050 6GB Laptop GPU with 6,144 MiB VRAM. This host cannot establish the 4 GB release gate.
 - The workspace has a Windows virtual environment and a bundled FFmpeg. `ffprobe` is absent from the shell PATH.
 - The Factory 9 report records a 219.64-second CPU x264 run for a 900-second controlled compilation. This is historical evidence. The matched local baseline run and test suite were started before editing the pipeline.
