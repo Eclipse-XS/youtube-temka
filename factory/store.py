@@ -346,6 +346,9 @@ def edit_plan(jid, revision, edits, target, approve=False):
                     timestamp=selected[-1].get(marker)
                     if timestamp is not None and not start<=timestamp<end:
                         selected[-1].pop(marker)
+                if 'narrative_event' in selected[-1]:
+                    from .compilation import gameplay_event
+                    selected[-1]['narrative_event'] = gameplay_event(selected[-1])
         if target is not None and request.workflow!='compilation':
             raise ValueError('A timeline target is available for compilations')
         plan.update(revision=revision+1,segments=selected,approved=approve)

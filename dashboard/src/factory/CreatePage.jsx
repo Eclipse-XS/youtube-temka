@@ -79,7 +79,32 @@ function parseRanges(text) {
   }) : [];
 }
 
-function AdditionalSource({item, index, api, act, onChange, onUpload, onEarlier, onRemove}) {
+const gameplayCategories = {
+  vehicle_crash: "Аварія", stunt_fail: "Невдалий трюк", physics_glitch: "Збій фізики",
+  animation_glitch: "Збій анімації", unexpected_collision: "Несподіване зіткнення",
+  police_chase_fail: "Невдала погоня", unexpected_survival: "Несподіване виживання",
+  unexpected_death: "Несподівана смерть", combat_fail: "Невдалий бій",
+  absurd_interaction: "Абсурдна взаємодія", visual_reaction: "Візуальна реакція",
+  unknown_event: "Невизначена подія",
+};
+
+function GameplayPreferences({item, onChange}) {
+  return <>
+    <label>Категорії подій
+      <select multiple size="4" value={item.event_categories||[]}
+        onChange={e=>onChange({event_categories:Array.from(e.target.selectedOptions,option=>option.value)})}>
+        {Object.entries(gameplayCategories).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+      </select>
+      <small>Якщо нічого не вибрати, підійдуть усі категорії.</small>
+    </label>
+    <label>Бажана тривалість події, сек
+      <input type="number" min="5" max="600" value={item.preferred_event_duration??""}
+        onChange={e=>onChange({preferred_event_duration:e.target.value?+e.target.value:null})}/>
+    </label>
+  </>;
+}
+
+function AdditionalSource({item, index, api, act, onChange, onUpload, onEarlier, onRemove, gameplay}) {
   const [probe, setProbe] = useState(null);
   const [loading, setLoading] = useState(false);
   const source = item.source.trim();
@@ -125,6 +150,7 @@ function AdditionalSource({item, index, api, act, onChange, onUpload, onEarlier,
         <label>Виключені інтервали, сек
           <textarea value={item.exclusions} placeholder="30,45" onChange={(e) => onChange({exclusions:e.target.value})} />
         </label>
+        {gameplay && <GameplayPreferences item={item} onChange={onChange}/>}
       </div>
       <button type="button" disabled={!source || loading} onClick={inspect}>{loading ? "Перевіряю…" : "Перевірити джерело"}</button>
       <button type="button" disabled={index === 0} onClick={onEarlier}>Вище</button>
@@ -151,6 +177,7 @@ export default function CreatePage({
     [intervals, setIntervals] = useState(""),
     [music, setMusic] = useState([]),
     [additional, setAdditional] = useState([]),
+    [primary, setPrimary] = useState({}),
     [plan, setPlan] = useState(null);
   const submission = useRef(false);
   const nextSource = useRef(2);
@@ -256,7 +283,7 @@ export default function CreatePage({
     const ranges = !story && !compilation ? parseRanges(intervals) : [];
     const source = form.source.trim();
     const sources = compilation
-      ? [{source,source_id:'source-1',start:form.start,end:form.end}, ...additional.map(({exclusions,...item})=>
+      ? [{...primary,source,source_id:'source-1',start:form.start,end:form.end}, ...additional.map(({exclusions,...item})=>
         ({...item,source:item.source.trim(),exclude:parseRanges(exclusions)}))]
       : [];
     return {...form,source,sources,intervals:ranges,
@@ -345,7 +372,11 @@ export default function CreatePage({
             />
           </label>
         {compilation && <section aria-label="Додаткові джерела">
-          {additional.map((item,index)=><AdditionalSource key={item.source_id} item={item} index={index} api={api} act={act}
+          {gameplay && <details>
+            <summary>Добір подій з основного джерела</summary>
+            <GameplayPreferences item={primary} onChange={changes=>setPrimary(item=>({...item,...changes}))}/>
+          </details>}
+          {additional.map((item,index)=><AdditionalSource key={item.source_id} item={item} index={index} api={api} act={act} gameplay={gameplay}
             onChange={(changes)=>updateSource(item.source_id,changes)} onUpload={(file)=>act(()=>upload(file,"source",item.source_id))}
             onEarlier={()=>setSources((items)=>{
               const ordered=[...items];

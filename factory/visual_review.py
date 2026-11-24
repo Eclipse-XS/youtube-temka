@@ -3,19 +3,17 @@ import base64
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
 from . import config, media
 from .inference import ModelBudgetExceeded, generate, model_session
+from .models import GameplayCategory
 
 
 class VisualReview(BaseModel):
-    category: Literal['vehicle_crash','stunt_fail','physics_glitch','animation_glitch',
-                      'unexpected_collision','police_chase_fail','unexpected_survival',
-                      'unexpected_death','combat_fail','absurd_interaction','visual_reaction','unknown_event']
+    category: GameplayCategory
     observation: str = Field(max_length=300)
     setup: str = Field(max_length=300)
     trigger_frame: int | None = Field(ge=1,le=3)

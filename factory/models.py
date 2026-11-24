@@ -3,6 +3,11 @@ from pydantic import BaseModel, Field, model_validator
 from . import config
 
 
+GameplayCategory = Literal['vehicle_crash', 'stunt_fail', 'physics_glitch', 'animation_glitch',
+                           'unexpected_collision', 'police_chase_fail', 'unexpected_survival',
+                           'unexpected_death', 'combat_fail', 'absurd_interaction', 'visual_reaction', 'unknown_event']
+
+
 class CompilationSource(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     source_id: str | None = Field(default=None, pattern=r'^source-[A-Za-z0-9_-]{1,32}$')
@@ -12,6 +17,8 @@ class CompilationSource(BaseModel):
     priority: float = Field(default=1, ge=.5, le=2, allow_inf_nan=False)
     max_contribution: float | None = Field(default=None, ge=5, le=3600, allow_inf_nan=False)
     exclude: list[tuple[float,float]] = Field(default_factory=list,max_length=30)
+    event_categories: list[GameplayCategory] = Field(default_factory=list, max_length=12)
+    preferred_event_duration: float | None = Field(default=None, ge=5, le=600, allow_inf_nan=False)
 
     @model_validator(mode='after')
     def validate_interval(self):

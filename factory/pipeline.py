@@ -74,8 +74,8 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
     return {**result,'signal_coverage':coverage}
 
 
-def compilation_plan(request, root, progress, update):
-    from .compilation import select
+def compilation_plan(request, root, progress, update, previous=None):
+    from .compilation import plan_gameplay, select
 
     sources = {}
     groups = []
@@ -114,12 +114,21 @@ def compilation_plan(request, root, progress, update):
                            for a,b in item.exclude)])
         update(result={'sources':sources,'failed_source_id':None})
     progress.source_id = None
+    if previous is not None:
+        return sources, previous
     target = request.target_duration or 900
-    selected,duration = select(groups,request.count,target)
-    result = {'candidates':selected, 'analysis':'source_aware_compilation',
+    narrative = None
+    if request.gameplay_only:
+        selected,duration,narrative = plan_gameplay(groups,request.count,target,
+                                                    {item.source_id:item for item in request.sources})
+    else:
+        selected,duration = select(groups,request.count,target)
+    result = {'candidates':selected, 'analysis':'gameplay_narrative' if narrative is not None else 'source_aware_compilation',
               'selection_summary':f'Selected {duration:.1f}s for a {target:g}s target from {len({c["source_id"] for c in selected})} sources.',
               'target_duration':target,'planned_duration':round(duration,3),
               'duration_shortfall':duration<target*.95}
+    if narrative is not None:
+        result['narrative_plan'] = narrative
     if result['duration_shortfall']:
         result['selection_summary'] += ' Add more suitable material or adjust the target/clip constraints.'
     return sources,result
@@ -284,10 +293,12 @@ def process(claim,assets=None):
             reuse_edit_transcript(root,origin_job,original,request,progress.tick)
             source='job-local:'+jid
         compiling = request.workflow=='compilation'
+        analysis_checkpoint=root/'analysis.json'
         source_url=request.source if request.source.startswith('https://') else origin_job['result'].get('source_url') if request.source.startswith('edit:') else None
         if compiling:
             source_url = None
-            sources,result = compilation_plan(request,root,progress,update)
+            previous=json.loads(analysis_checkpoint.read_text(encoding='utf-8')) if analysis_checkpoint.is_file() else None
+            sources,result = compilation_plan(request,root,progress,update,previous)
             metadata = {'title':'Highlights compilation','platform':'compilation'}
             update(result={'source':metadata,'source_url':None})
             end = request.start + result['planned_duration']
@@ -316,7 +327,6 @@ def process(claim,assets=None):
             progress.done(message='Detected '+str(transcript['language']) if transcript['language'] else 'No speech detected')
             if not request.gameplay_only:
                 transcript_artifacts(root,transcript,end-request.start)
-        analysis_checkpoint=root/'analysis.json'
         scan_needed = (not compiling and request.workflow in ('story','highlights') and not request.intervals
                        and not analysis_checkpoint.is_file() and not job['result'].get('candidates'))
         signals = media_signals(source,request,metadata,end,resolution,root,progress) if scan_needed else None

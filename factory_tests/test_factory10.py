@@ -120,6 +120,32 @@ def test_visual_review_cannot_point_to_an_unseen_or_earlier_payoff():
         VisualReview.model_validate({**decision,'evidence_frames':[1,2]})
 
 
+def test_gameplay_plan_links_sources_and_leaves_unsupported_beats_empty():
+    from factory.compilation import plan_gameplay
+    from factory.models import CompilationSource
+
+    def clip(source, start, score, category):
+        return {'source_id':source,'start_seconds':start,'end_seconds':start+10,'score':score,
+                'event_seconds':start+3,'source_frame_times':[start+1,start+3,start+6],
+                'visual_review':{'uncertain':False,'category':category,'setup':'A vehicle approaches',
+                                 'observation':'The vehicle stalls','trigger_frame':2,'payoff_frame':3}}
+
+    primary='source-1'
+    additional='source-2'
+    prefs={primary:CompilationSource(source='upload:a.mp4',max_contribution=20),
+           additional:CompilationSource(source='upload:b.mp4',event_categories=['vehicle_crash'])}
+    groups=[[clip(primary,0,40,'stunt_fail'),clip(primary,11,31,'stunt_fail')],
+            [clip(additional,0,33,'vehicle_crash'),clip(additional,15,60,'physics_glitch')]]
+    chosen,duration,plan=plan_gameplay(groups,3,30,prefs)
+    assert duration==30 and [candidate['source_id'] for candidate in chosen]==[primary,additional,primary]
+    assert plan['scenes'][0]['role']=='cold_open' and plan['scenes'][-1]['role']=='closing_scene'
+    assert len(plan['chapters'])==1 and plan['chapters'][0]['theme']=='vehicles'
+    assert {beat['type'] for beat in plan['scenes'][0]['event']['beats']}=={'setup','trigger','payoff'}
+    assert plan['scenes'][0]['event']['editorial_uncertainty']=='model_hypothesis'
+    scarce=[{'source_id':primary,'start_seconds':0,'end_seconds':10,'score':1,'event_seconds':3}]
+    assert plan_gameplay([scarce],3,30,prefs)[:2]==([],0)
+
+
 def test_caption_looks_and_retained_word_timings_are_independent(workspace):
     from factory.captions import appearance
     from subtitles import generate_ass
