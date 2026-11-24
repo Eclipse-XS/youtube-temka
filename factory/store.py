@@ -298,7 +298,7 @@ def retry(jid):
 
 def edit_plan(jid, revision, edits, target, approve=False, *, branding=None):
     from .assets import asset_path
-    from .models import JobRequest, TimelineCard
+    from .models import JobRequest, TimelineCaptionTrack, TimelineCard
     from .render_timeline import build, compile_scenes, validate_scene_edits
 
     with connect() as db:
@@ -336,6 +336,12 @@ def edit_plan(jid, revision, edits, target, approve=False, *, branding=None):
                 if options.max_contribution is not None and contributions[source_id]>options.max_contribution+1e-8:
                     raise ValueError(f'Segment {edit["id"]}: the source exceeds its maximum contribution')
             selected.append({**segment,**edit})
+            if 'caption_track' in edit:
+                old, new = segment.get('caption_track'), edit['caption_track']
+                old = TimelineCaptionTrack.model_validate(old).model_dump() if old is not None else None
+                new = TimelineCaptionTrack.model_validate(new).model_dump() if new is not None else None
+                selected[-1]['caption_track'] = new
+                selected[-1]['caption_revision'] = segment.get('caption_revision', 1) + int(old != new)
             validate_scene_edits(selected[-1],end-start)
             for effect in selected[-1].get('effects', []):
                 library = {'image_overlay':'logos','video_overlay':'backgrounds'}.get(effect['kind'])

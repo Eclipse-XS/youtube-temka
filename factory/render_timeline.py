@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 
-from .models import JobRequest, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
+from .models import JobRequest, TimelineCaptionTrack, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
 from .audio_edit import PROCEDURAL_SOUNDS
 
 
@@ -36,6 +36,7 @@ class SceneRender:
     automatic_hook: str | None
     sounds: list[TimelineSound]
     effects: list[TimelineEffect]
+    caption_cues: list[dict] | None
     fade_seconds: float | None
     start_ms: int
     end_ms: int
@@ -72,9 +73,19 @@ def fingerprint(data):
 
 
 def validate_scene_edits(scene, duration):
+    track = scene.get('caption_track')
+    if track is not None:
+        track = TimelineCaptionTrack.model_validate(track)
+        if track.cues and track.mode != 'manual':
+            raise ValueError('Only the manual caption track accepts cue edits')
+        previous = 0
+        for cue in track.cues:
+            if not previous <= cue.start < cue.end <= duration + 1e-8:
+                raise ValueError('Caption cues must be ordered, non-overlapping and inside the scene')
+            previous = cue.end
     if scene.get('hook') is not None:
         hook = TimelineHook.model_validate(scene['hook'])
-        if hook.text and not 0 <= hook.start < (hook.end if hook.end is not None else duration) <= duration + 1e-8:
+        if hook.text and not hook.disabled and not 0 <= hook.start < (hook.end if hook.end is not None else duration) <= duration + 1e-8:
             raise ValueError('Hook interval must be inside the scene')
     for sound in scene.get('sounds', []):
         sound = TimelineSound.model_validate(sound)
@@ -124,7 +135,7 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         end = round((offset + candidate['end_seconds']) * 1000)
         duration = end - start
         validate_scene_edits(candidate, candidate['end_seconds'] - candidate['start_seconds'])
-        if request.silence_removal and any(candidate.get(key) for key in ('hook', 'sounds', 'effects')):
+        if request.silence_removal and any(candidate.get(key) for key in ('hook', 'sounds', 'effects', 'caption_track')):
             raise ValueError('Manual timed events require pause removal to be disabled')
         transition = candidate.get('transition', request.transition)
         seconds = candidate.get('transition_duration')
@@ -159,9 +170,21 @@ def build(candidates, request, source_limits, revision, target_duration=None):
             event(track, effect.kind, name=f'effect-{effect.id or effect_index}', begin=round(effect.start * 1000),
                   finish=round(effect.end * 1000), asset=effect.asset if effect.kind in OVERLAY_EFFECTS else source,
                   **effect.model_dump(exclude={'kind', 'start', 'end', 'asset'}))
-        if request.captions:
-            event('captions', 'captions', style=request.caption_style,
-                  appearance=request.caption_appearance.model_dump(), language=request.subtitle_language)
+        caption_spec = candidate.get('caption_track')
+        caption_track = TimelineCaptionTrack.model_validate(caption_spec) if caption_spec is not None else None
+        caption_style = (caption_track.style if caption_track else None) or request.caption_style
+        if caption_track and caption_track.mode != 'off' and caption_track.style is None and caption_style == 'captions_off':
+            caption_style = 'clean'
+        captions_on = (caption_track.mode != 'off' if caption_track else request.captions) and caption_style != 'captions_off'
+        if captions_on:
+            caption_style_options = request.caption_appearance.model_dump()
+            if caption_track:
+                caption_style_options.update(caption_track.appearance.model_dump(exclude_none=True))
+            manual = caption_track is not None and caption_track.mode == 'manual'
+            event('captions', 'captions', style=caption_style, appearance=caption_style_options,
+                  language=None if manual else request.subtitle_language,
+                  track_revision=candidate.get('caption_revision', 1),
+                  cues=[cue.model_dump() for cue in caption_track.cues] if manual else None)
         if request.logo_asset:
             event('branding', 'logo', asset=request.logo_asset)
         theme = (candidate.get('narrative_event') or {}).get('theme')
@@ -175,7 +198,7 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         manual = candidate.get('hook')
         if manual is not None:
             hook = TimelineHook.model_validate(manual)
-            text, begin, finish = hook.text, round(hook.start * 1000), round(hook.end * 1000) if hook.end is not None else duration
+            text, begin, finish = ('' if hook.disabled else hook.text), round(hook.start * 1000), round(hook.end * 1000) if hook.end is not None else duration
             automatic = False
         else:
             eligible = request.mode != 'longs' or index == 0
@@ -195,7 +218,7 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         segments.append({'segment_id': scene_id, 'source_id': source, 'source_start_ms': start,
                          'source_end_ms': end, 'output_start_ms': position, 'output_end_ms': finishing,
                          'edit_start_ms': position, 'edit_end_ms': finishing, 'transition': transition,
-                         'subtitle_track': request.captions, 'overlay_assets': [request.logo_asset] if request.logo_asset else [],
+                         'subtitle_track': captions_on, 'overlay_assets': [request.logo_asset] if request.logo_asset else [],
                          'audio_settings': {'mode': mode}})
         position = finishing
         if index == 0 and request.intro and request.intro.after_cold_open:
@@ -267,6 +290,7 @@ def compile_scenes(timeline, request):
         overlap = 0
         sounds = []
         effects = []
+        caption_cues = None
         for event in by_scene[video['scene_id']]:
             kind, params = event['type'], event['parameters']
             local_start = event['start_ms'] - begin
@@ -282,6 +306,7 @@ def compile_scenes(timeline, request):
             elif kind == 'captions':
                 options.update(captions=True, caption_style=params['style'], subtitle_language=params['language'],
                                caption_appearance=request.caption_appearance.model_validate(params['appearance']))
+                caption_cues = params.get('cues')
             elif kind == 'logo':
                 options['logo_asset'] = event['source_asset_id']
             elif kind == 'cta':
@@ -320,9 +345,10 @@ def compile_scenes(timeline, request):
         offset = video['parameters']['source_offset']
         candidate = {**video['parameters']['candidate'], 'source_id': source, 'source_offset': offset,
                      'start_seconds': start / 1000 - offset, 'end_seconds': end / 1000 - offset}
-        validate_scene_edits({'effects': effects}, (finish - begin) / 1000)
+        validate_scene_edits({'effects': effects, 'caption_track':{'mode':'manual','cues':caption_cues}
+                              if caption_cues is not None else None}, (finish - begin) / 1000)
         scenes.append(SceneRender(candidate, request.model_copy(update=options), automatic_hook,
-                                  sounds, effects, transition_seconds, begin, finish, overlap))
+                                  sounds, effects, caption_cues, transition_seconds, begin, finish, overlap))
         position = finish
         if len(scenes) == 1 and intro and intro.settings.after_cold_open:
             if intro.start_ms != position:

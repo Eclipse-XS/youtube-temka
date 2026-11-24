@@ -242,15 +242,15 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
 
 
 def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-           timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None):
+           timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None):
     from .heavy import HEAVY_LOCK
     with HEAVY_LOCK:
         return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path,
-                       timeline_sounds,force_audio,transition_seconds,timeline_effects,asset_paths)
+                       timeline_sounds,force_audio,transition_seconds,timeline_effects,asset_paths,caption_cues)
 
 
 def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-            timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None):
+            timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     from .captions import appearance
@@ -286,7 +286,7 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             voice_duration=audio_container.duration/av.time_base
         if voice_duration>duration+.1:
             raise ValueError('Voice-over is longer than the clip. Shorten its text or select a longer interval; words were not truncated.')
-        if request.captions:
+        if request.captions and caption_cues is None:
             import sys
             timed=output.with_suffix('.voice.json')
             run([sys.executable,'-m','factory.transcribe',str(narration),str(timed),transcript.get('language') or request.language or 'en'],tick)
@@ -294,15 +294,18 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             caption_start,caption_end=0,duration
     ass=output.with_suffix('.ass')
     srt=output.with_suffix('.srt')
-    if request.captions and request.subtitle_language and transcript.get('language')!=request.subtitle_language:
+    if caption_cues is not None:
+        transcript={'language':transcript.get('language'),'segments':caption_cues}
+        caption_start,caption_end=0,duration
+    elif request.captions and request.subtitle_language and transcript.get('language')!=request.subtitle_language:
         from .captions import translate
         translated=output.with_suffix('.translated.json')
         if translated.is_file():transcript=json.loads(translated.read_text(encoding='utf-8'))
         else:
             transcript=translate(transcript,request.subtitle_language,request.llm_model)
             write_json_atomic(translated,transcript,ensure_ascii=True)
-    generate_srt(transcript,caption_start,caption_end,str(srt))
-    generate_ass(transcript,caption_start,caption_end,str(ass),**appearance(request))
+    generate_srt(transcript,caption_start,caption_end,str(srt),preserve_cues=caption_cues is not None)
+    generate_ass(transcript,caption_start,caption_end,str(ass),preserve_cues=caption_cues is not None,**appearance(request))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
     width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)

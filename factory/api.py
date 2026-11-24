@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import config, store, media
-from .models import JobRequest, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
+from .models import JobRequest, TimelineCaptionTrack, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
 from .resources import preflight, usage
 
 
@@ -454,6 +454,7 @@ class EditSegment(BaseModel):
     hook: TimelineHook | None = None
     sounds: list[TimelineSound] = Field(default_factory=list, max_length=8)
     effects: list[TimelineEffect] = Field(default_factory=list, max_length=12)
+    caption_track: TimelineCaptionTrack | None = None
 
 
 class EditPlanUpdate(BaseModel):
@@ -483,6 +484,55 @@ def timeline_revision(jid: str, revision: int):
     if snapshot.is_file():
         return FileResponse(snapshot, media_type='application/json')
     raise HTTPException(404,'Timeline revision not found')
+
+
+@app.get('/api/jobs/{jid}/edit-plan/{segment_id}/captions')
+def edit_caption_cues(jid: str, segment_id: int):
+    from .compilation import append_transcript
+    from .models import CaptionCue
+
+    job = get_job(jid)
+    plan = job['result'].get('edit_plan') or {}
+    segment = next((item for item in plan.get('segments', []) if item['id'] == segment_id), None)
+    if segment is None:
+        raise HTTPException(404,'Scene not found')
+    track = segment.get('caption_track') or {}
+    if track.get('mode') == 'manual':
+        return {'cues':track.get('cues',[])}
+    root = config.SCRATCH/jid
+    timeline_path = root/'timeline.json'
+    transcript = {'segments':[], 'language':None}
+    start, end = segment['start_seconds'], segment['end_seconds']
+    if timeline_path.is_file():
+        timeline = json.loads(timeline_path.read_text(encoding='utf-8'))
+        for index, scene in enumerate(timeline.get('segments', []), 1):
+            if scene['segment_id'] != str(segment_id):
+                continue
+            retained = root/f'edit-clip-{index}.json'
+            offset = segment['source_offset']
+            if (retained.is_file() and scene['source_id'] == segment['source_id'] and
+                    scene['source_start_ms'] == round((offset+start)*1000) and scene['source_end_ms'] == round((offset+end)*1000)):
+                transcript = json.loads(retained.read_text(encoding='utf-8'))
+            break
+    if not transcript['segments'] and not JobRequest.model_validate(job['request']).gameplay_only:
+        folder = root/segment['source_id'] if job['request'].get('workflow') == 'compilation' else root
+        source = folder/'transcript.json'
+        if source.is_file():
+            append_transcript(transcript,json.loads(source.read_text(encoding='utf-8')),start,end,0)
+    cues = []
+    position = 0
+    for speech in transcript['segments'][:400]:
+        begin, finish = max(position, speech['start']), min(end-start, speech['end'])
+        if finish <= begin or not speech['text'].strip():
+            continue
+        cue = {'text':speech['text'][:300], 'start':begin, 'end':finish, 'words':speech.get('words',[])}
+        try:
+            value = CaptionCue.model_validate(cue)
+        except ValueError:
+            value = CaptionCue.model_validate({**cue,'words':[]})
+        cues.append(value.model_dump())
+        position = finish
+    return {'cues':cues}
 
 
 def save_edit_plan(jid, body, approve=False):

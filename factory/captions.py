@@ -17,6 +17,7 @@ STYLES = {
     'two_to_three_words':{'fontsize':21,'max_words':3,'max_duration':1.6,'highlight_color':'#CBEA54'},
     'boxed_reaction':{'fontsize':24,'max_words':3,'effect':'highlight','highlight_color':'#70EEBD','bg_opacity':.45},
     'clean_longs':{'fontsize':16,'max_chars':52,'max_duration':3,'highlight_color':'#FFFFFF','shadow':2,'border_width':0},
+    'action_labels':{'fontsize':20,'max_chars':52,'max_duration':5,'highlight_color':'#FFFFFF','bg_opacity':.6},
     'captions_off':{},
 }
 
@@ -27,7 +28,8 @@ def appearance(request):
         defaults['margin_v']=28 if request.mode=='longs' else 46
     defaults.update(STYLES[request.caption_style])
     fields={'size':'fontsize','color':'font_color','active_color':'highlight_color','position':'alignment',
-            'outline':'border_width','box_opacity':'bg_opacity','words':'max_words','duration':'max_duration'}
+            'outline':'border_width','box_opacity':'bg_opacity','words':'max_words','duration':'max_duration',
+            'shadow':'shadow','box_color':'bg_color','animation':'effect','uppercase':'uppercase','reveal':'reveal'}
     overrides=request.caption_appearance.model_dump(exclude_none=True)
     if 'font' in overrides:
         defaults['font_name']={'sans':'Noto Sans','serif':'Noto Serif','mono':'DejaVu Sans Mono'}[overrides.pop('font')]

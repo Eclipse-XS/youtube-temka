@@ -264,6 +264,41 @@ def test_timeline_cards_appear_at_configured_positions(owned_sources):
         assert abs(container.duration/av.time_base-7)<.1
 
 
+def test_manual_caption_track_revises_without_speech_analysis(owned_sources,monkeypatch):
+    from factory import pipeline
+    from factory.api import edit_caption_cues
+
+    monkeypatch.setattr(pipeline,'transcribe_chunks',lambda *_args,**_kwargs:pytest.fail('Unexpected ASR'))
+    request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,workflow='highlights',mode='longs',
+                       ranking_profile='gameplay_only',minimum=5,maximum=6,intervals=[(0,5)],review_before_render=True,
+                       save_drive=False,audio_mode='silent',max_text_model_calls=0)
+    job=store.create(request.model_dump())
+    process(store.claim('fixture'))
+    first=store.get(job['id'])['result']['edit_plan']
+    scene=first['segments'][0]
+    edits={'id':scene['id'],'start_seconds':0,'end_seconds':5,
+           'caption_track':{'mode':'manual','style':'action_labels','appearance':{'box_color':'#00FF00'},
+                            'cues':[{'text':'First action','start':.5,'end':1},{'text':'Second','start':1.2,'end':1.7}]}}
+    saved=store.edit_plan(job['id'],first['revision'],[edits],None,approve=True)
+    process(store.claim('fixture'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    assert saved['segments'][0]['caption_revision']==2
+    assert edit_caption_cues(job['id'],scene['id'])['cues'][0]['text']=='First action'
+    output=config.SCRATCH/job['id']/'clip-1.ass'
+    initial=output.read_text(encoding='utf-8-sig')
+    assert '0:00:00.50,0:00:01.00' in initial and 'First action' in initial and 'Second' in initial
+
+    edits['caption_track']['cues'][0]['text']='Corrected action'
+    revised=store.edit_plan(job['id'],saved['revision'],[edits],None,approve=True)
+    process(store.claim('fixture'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    assert revised['segments'][0]['caption_revision']==3
+    corrected=output.read_text(encoding='utf-8-sig')
+    assert 'Corrected action' in corrected and 'First action' not in corrected
+
+
 def test_render_recovers_after_transient_failure_without_rerendering_first_clip(owned_sources,monkeypatch):
     request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,
                        workflow='highlights',minimum=5,maximum=6,intervals=[(0,5),(1,6)],

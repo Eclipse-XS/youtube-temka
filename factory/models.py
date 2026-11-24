@@ -40,12 +40,55 @@ class CaptionAppearance(BaseModel):
     box_opacity: float | None = Field(default=None,ge=0,le=1,allow_inf_nan=False)
     words: int | None = Field(default=None,ge=1,le=12)
     duration: float | None = Field(default=None,ge=.5,le=8,allow_inf_nan=False)
+    shadow: int | None = Field(default=None, ge=0, le=6)
+    box_color: str | None = Field(default=None, pattern=r'^#[0-9A-Fa-f]{6}$')
+    animation: Literal['none','pop','glow','box','highlight'] | None = None
+    uppercase: bool | None = None
+    reveal: bool | None = None
+
+
+CaptionStyle = Literal['pop','karaoke','clean','gameplay_minimal','gaming_comic','bold_karaoke',
+                       'one_word','two_to_three_words','boxed_reaction','clean_longs','action_labels','captions_off']
+
+
+class CaptionWord(BaseModel):
+    word: str = Field(min_length=1, max_length=100)
+    start: float = Field(ge=0, le=600, allow_inf_nan=False)
+    end: float = Field(gt=0, le=600, allow_inf_nan=False)
+
+
+class CaptionCue(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    start: float = Field(ge=0, le=600, allow_inf_nan=False)
+    end: float = Field(gt=0, le=600, allow_inf_nan=False)
+    words: list[CaptionWord] = Field(default_factory=list, max_length=60)
+
+    @model_validator(mode='after')
+    def validate_cue(self):
+        if not self.text.strip() or self.start >= self.end:
+            raise ValueError('Caption needs visible text and an increasing interval')
+        previous = self.start
+        for word in self.words:
+            if not previous <= word.start < word.end <= self.end:
+                raise ValueError('Caption words must be ordered and inside the cue')
+            previous = word.end
+        if self.words and ''.join(word.word for word in self.words).split() != self.text.split():
+            raise ValueError('Timed words must match the caption text')
+        return self
+
+
+class TimelineCaptionTrack(BaseModel):
+    mode: Literal['automatic','manual','off'] = 'automatic'
+    style: CaptionStyle | None = None
+    appearance: CaptionAppearance = Field(default_factory=CaptionAppearance)
+    cues: list[CaptionCue] = Field(default_factory=list, max_length=400)
 
 
 class TimelineHook(BaseModel):
     text: str = Field(max_length=120)
     start: float = Field(default=0, ge=0, le=600, allow_inf_nan=False)
     end: float | None = Field(default=None, gt=0, le=600, allow_inf_nan=False)
+    disabled: bool = False
 
 
 class TimelineSound(BaseModel):
@@ -102,8 +145,7 @@ class JobRequest(BaseModel):
     resolution: Literal[480,720,1080,'best'] = 720
     output_height: Literal[720,1080] = 720
     bitrate: int = Field(default=8000000,ge=1000000,le=50000000)
-    caption_style: Literal['pop','karaoke','clean','gameplay_minimal','gaming_comic','bold_karaoke',
-                           'one_word','two_to_three_words','boxed_reaction','clean_longs','captions_off'] = 'pop'
+    caption_style: CaptionStyle = 'pop'
     caption_appearance: CaptionAppearance = Field(default_factory=CaptionAppearance)
     split_ratio: float = Field(default=.5,ge=.2,le=.8,allow_inf_nan=False)
     hook: str = Field(default='',max_length=120)

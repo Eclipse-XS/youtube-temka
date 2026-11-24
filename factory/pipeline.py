@@ -143,15 +143,15 @@ def compilation_plan(request, root, progress, update, previous=None):
     return sources,result
 
 
-def transcript_artifacts(root, transcript, duration):
+def transcript_artifacts(root, transcript, duration, *, replace=False):
     from subtitles import generate_srt
 
     srt = root/'transcript.srt'
-    if not srt.is_file():
+    if replace or not srt.is_file():
         if not generate_srt(transcript,0,duration,str(srt)):
             srt.write_text('',encoding='utf-8')
     vtt = root/'transcript.vtt'
-    if not vtt.is_file():
+    if replace or not vtt.is_file():
         with srt.open(encoding='utf-8-sig') as source, vtt.open('w',encoding='utf-8') as output:
             output.write('WEBVTT\n\n')
             for line in source:
@@ -168,6 +168,7 @@ def save_edit_transcript(root,name,transcript,start,end):
     retained=empty_transcript(transcript.get('language'))
     append_transcript(retained,transcript,start,end,0)
     if not retained['segments']:
+        (root/name).unlink(missing_ok=True)
         return None
     retained['text']=' '.join(segment['text'] for segment in retained['segments'])
     write_json_atomic(root/name,retained,ensure_ascii=True)
@@ -460,7 +461,8 @@ def process(claim,assets=None):
                     clip_transcript = source_transcript
             if request.gameplay_only:
                 clip_metadata=sources[key]['metadata'] if compiling else metadata
-                clip_transcript=gameplay_clip_transcript(clip_source,clip_request,root,clip_metadata,resolution,progress,candidate,offset,i+1)
+                speech_request=clip_request if scene.caption_cues is None else clip_request.model_copy(update={'captions':False})
+                clip_transcript=gameplay_clip_transcript(clip_source,speech_request,root,clip_metadata,resolution,progress,candidate,offset,i+1)
                 if not compiling:
                     from .compilation import append_transcript
                     append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],candidate['start_seconds'])
@@ -500,7 +502,8 @@ def process(claim,assets=None):
             clip_checkpoint=clip.with_suffix('.json')
             source_changed=not clip_checkpoint.is_file() or json.loads(clip_checkpoint.read_text(encoding='utf-8'))!=source_key
             render_key=render_timeline.fingerprint([source_key,clip_request.model_dump(),[sound.model_dump() for sound in sounds],
-                                                    force_audio,transition_seconds,[effect.model_dump() for effect in scene.effects]])
+                                                    force_audio,transition_seconds,[effect.model_dump() for effect in scene.effects],
+                                                    scene.caption_cues])
             progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
             if source_changed:
                 clip.unlink(missing_ok=True)
@@ -547,7 +550,7 @@ def process(claim,assets=None):
                              music_path=assets.get('music') if assets is not None else None,
                              logo_path=assets.get('logos') if assets is not None else None,
                              timeline_sounds=sounds,force_audio=force_audio,transition_seconds=transition_seconds,
-                             timeline_effects=scene.effects,asset_paths=assets)
+                             timeline_effects=scene.effects,asset_paths=assets,caption_cues=scene.caption_cues)
                 report_path=output.with_suffix('.validation.json')
                 if report_path.is_file():
                     report=json.loads(report_path.read_text(encoding='utf-8'))
@@ -575,7 +578,7 @@ def process(claim,assets=None):
             transcript['segments'].sort(key=lambda segment:segment['start'])
             transcript['text'] = ' '.join(s['text'] for s in transcript['segments'])
             write_json_atomic(root/'transcript.json',transcript,ensure_ascii=True)
-            transcript_artifacts(root,transcript,timeline['duration_ms']/1000 if compiling else end-request.start)
+            transcript_artifacts(root,transcript,timeline['duration_ms']/1000 if compiling else end-request.start,replace=True)
             update(result={'language':transcript['language']})
         if request.mode=='longs' and (len(outputs)>1 or cards):
             playlist=[*scenes]

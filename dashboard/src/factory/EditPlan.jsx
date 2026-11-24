@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import CaptionTrackEditor from "./CaptionTrackEditor.jsx";
 
 const soundKinds = {
   impact: "Удар",
@@ -65,8 +66,8 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
     setSaving(true);
     try {
       const body = {revision:plan.revision,target_duration:target,intro,outro,chapter_titles:chapterTitles,segments:segments.map(
-        ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects})=>
-          ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects}))};
+        ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects,caption_track})=>
+          ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects,caption_track}))};
       if (render) await post(path+"/render",body);
       else await api(path+"/edit-plan",{method:"PATCH",body:JSON.stringify(body)});
       await onSaved();
@@ -126,9 +127,15 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
         </div>
         <details>
           <summary>Напис і звукові ефекти</summary>
-          <label><input type="checkbox" checked={s.hook!=null} onChange={e=>change(s.id,"hook",
-            e.target.checked?{text:job.request.hook||"",start:0,end:null}:null)}/> Власний напис</label>
-          {s.hook && <div className="grid">
+          <label>Напис
+            <select value={s.hook==null?"inherit":s.hook.disabled?"off":"manual"} onChange={e=>change(s.id,"hook",
+              e.target.value==="inherit"?null:e.target.value==="off"?{text:"",disabled:true}:
+                {text:job.request.hook||"",start:0,end:null})}>
+              <option value="inherit">Як у завданні</option><option value="manual">Власний напис</option>
+              <option value="off">Без напису</option>
+            </select>
+          </label>
+          {s.hook && !s.hook.disabled && <div className="grid">
             <label>Текст
               <input maxLength="120" value={s.hook.text} onChange={e=>change(s.id,"hook",{...s.hook,text:e.target.value})}/>
             </label>
@@ -211,6 +218,12 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
           <button type="button" disabled={s.effects?.length>=12} onClick={()=>change(s.id,"effects",
             [...(s.effects||[]),{kind:"punch_in",start:2,end:3,replay_start:0}])}>Додати ефект</button>
         </details>}
+        {!job.request.silence_removal && <CaptionTrackEditor track={s.caption_track} revision={s.caption_revision}
+          duration={duration} onChange={value=>change(s.id,"caption_track",value)}
+          loadCues={()=>act(async()=>{
+            const data=await api(`${path}/edit-plan/${s.id}/captions`);
+            change(s.id,"caption_track",{...s.caption_track,cues:data.cues});
+          })}/>}
         <div className="actions">
           <button type="button" disabled={!index} onClick={()=>setSegments(items=>{
             const ordered=[...items];
