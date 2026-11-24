@@ -1,5 +1,23 @@
 # Factory 10 regression verification
 
+## Stable-candidate verification on 2026-11-25
+
+- The Linux baseline at `ad163576e3037fbf883bd9b4f3cabb812ba7f124` passed 2,307 tests, skipped 66 and failed zero in 214.06 seconds. The existing worker image ran a tracked read-only snapshot with the documented Linux regression dependencies.
+- Candidate `3a713c91885caed50c082d092fe99c1af3d16ab2` passed 2,313 Linux tests, skipped 66 and failed zero in 249.77 seconds. The latest code passed all 14 Factory 10 tests on Windows, including six new regressions for localized motion, black lead-ins, budget fairness and adaptive frame indices, overlapping source ranges, one-to-one detection scoring and the 100 ms A/V end-alignment check.
+- The first run at `ac32ab0f2780e83d5b60e19a83cd7474eb28d122` passed 2,312, skipped 66 and failed one in 242.18 seconds. `test_resume_scan_reads_manifests_off_the_loop` recorded a 163 ms stall against a strict 150 ms limit while the isolated vision and browser workloads were active. The test and upstream queue implementation are identical to the baseline.
+- After stopping the separate vision and browser workloads, the affected test passed in 2.41 seconds. The full repeat at the same `ac32ab0` revision passed 2,313, skipped 66 and failed zero in 208.51 seconds. The local logs are `scratch/f10-stable-regression-ac32ab0.log` and `scratch/f10-stable-regression-ac32ab0-isolated.log`.
+- The dashboard production build and both CPU/GPU Compose configurations passed. ESLint for the changed Create page reported the same 12 pre-existing errors and two warnings at the baseline and candidate.
+- The isolated Linux regression command pins the implementation SHA in the snapshot and reproducibility metadata.
+
+```powershell
+$factory10Commit = 'ac32ab0f2780e83d5b60e19a83cd7474eb28d122'
+git archive --format=tar -o scratch/f10-stable-release-ac32ab0.tar $factory10Commit
+$factory10Snapshot = (Resolve-Path scratch/f10-stable-release-ac32ab0.tar).Path
+docker run --rm --user root --env PYTHON_DOTENV_DISABLED=1 --env FACTORY_BUILD_COMMIT=$factory10Commit --mount "type=bind,source=$factory10Snapshot,target=/snapshot.tar,readonly" --entrypoint sh youtube-temka-worker:latest -lc 'set -e; mkdir -p /tmp/repo /data/scratch; tar -xf /snapshot.tar -C /tmp/repo; cd /tmp/repo; python -m pip install -q --no-cache-dir -r requirements-billing.txt boto3==1.43.4 Pillow==13.0.0 google-genai==1.75.0 py3langid==0.3.0; python -m pytest -q factory_tests tests'
+```
+
+The representative ten-job pilot requires held-out local and remote gameplay and private Drive access. Predeclare the jobs in the manifest, run them consecutively with the final build and retain their outputs and final states. Include gameplay Shorts, multi-source Longs, captioned and silent inputs, a remote input, an edited rerender, and successful storage delivery. The current isolated Neverball run does not meet the production workload mix.
+
 ## Continuation verification
 
 The current implementation was tested in the existing Linux Factory worker

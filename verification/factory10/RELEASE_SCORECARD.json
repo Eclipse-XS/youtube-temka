@@ -7,37 +7,73 @@
         "id": "D1.1",
         "name": "Detection recall",
         "weight": 25,
-        "expected": "Recall@K ≥ 85%"
+        "expected": "Recall@K ≥ 85%",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D1.2",
         "name": "Detection precision",
         "weight": 20,
-        "expected": "Precision@K ≥ 75%"
+        "expected": "Precision@K ≥ 75%",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D1.3",
         "name": "Silent/low-motion detection",
         "weight": 15,
-        "expected": "Recall on the predefined low-motion/silent subset ≥ 80%"
+        "expected": "Recall on the predefined low-motion/silent subset ≥ 80%",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D1.4",
         "name": "Payoff preservation",
         "weight": 20,
-        "expected": "At least 95% of matched candidates include the annotated payoff"
+        "expected": "At least 95% of matched candidates include the annotated payoff",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D1.5",
         "name": "Source coverage",
         "weight": 10,
-        "expected": "Every selected source interval follows the documented scan coverage policy"
+        "expected": "Every selected source interval follows the documented scan coverage policy",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D1.6",
         "name": "Semantic evidence",
         "weight": 10,
-        "expected": "Accepted classifications have traceable evidence; uncertain cases are explicitly identified"
+        "expected": "Accepted classifications have traceable evidence; uncertain cases are explicitly identified",
+        "status": "BLOCKED",
+        "actual": "Requires authorized held-out GTA inputs with independent annotations.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented gameplay semantics verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D2": [
@@ -45,37 +81,73 @@
         "id": "D2.1",
         "name": "Clip structure",
         "weight": 25,
-        "expected": "At least 9 of 10 Shorts have an understandable opening, event and outcome"
+        "expected": "At least 9 of 10 Shorts have an understandable opening, event and outcome",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D2.2",
         "name": "Effect relevance",
         "weight": 20,
-        "expected": "At least 90% of applied automatic effects are judged useful or unobtrusive"
+        "expected": "At least 90% of applied automatic effects are judged useful or unobtrusive",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D2.3",
         "name": "Effect timing",
         "weight": 15,
-        "expected": "At least 90% of evaluated effects are aligned with their intended events"
+        "expected": "At least 90% of evaluated effects are aligned with their intended events",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D2.4",
         "name": "Visual framing",
         "weight": 15,
-        "expected": "No essential action is cropped out in the accepted Shorts"
+        "expected": "No essential action is cropped out in the accepted Shorts",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D2.5",
         "name": "Original audio",
         "weight": 10,
-        "expected": "No meaningful original audio is accidentally masked, removed, or distorted"
+        "expected": "No meaningful original audio is accidentally masked, removed, or distorted",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D2.6",
         "name": "First-pass usability",
         "weight": 15,
-        "expected": "At least 9 of 10 Shorts are accepted without substantial manual re-editing"
+        "expected": "At least 9 of 10 Shorts are accepted without substantial manual re-editing",
+        "status": "BLOCKED",
+        "actual": "Requires independent review of the prespecified automatic GTA Shorts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented automatic editing verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D3": [
@@ -83,37 +155,73 @@
         "id": "D3.1",
         "name": "Narrative quality",
         "weight": 25,
-        "expected": "Both full Longs achieve human editorial scores ≥ 85%"
+        "expected": "Both full Longs achieve human editorial scores ≥ 85%",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D3.2",
         "name": "Complete scenes",
         "weight": 20,
-        "expected": "At least 95% of selected scenes preserve essential context and payoff"
+        "expected": "At least 95% of selected scenes preserve essential context and payoff",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D3.3",
         "name": "Opening and ending",
         "weight": 15,
-        "expected": "Both videos have an understandable strong opening and deliberate ending"
+        "expected": "Both videos have an understandable strong opening and deliberate ending",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D3.4",
         "name": "Source coherence",
         "weight": 15,
-        "expected": "Source changes and scene ordering do not introduce unexplained narrative discontinuities"
+        "expected": "Source changes and scene ordering do not introduce unexplained narrative discontinuities",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D3.5",
         "name": "Duration and diversity",
         "weight": 15,
-        "expected": "Two accepted 8–15-minute videos without irrelevant padding or unintended duplication"
+        "expected": "Two accepted 8–15-minute videos without irrelevant padding or unintended duplication",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D3.6",
         "name": "Provenance",
         "weight": 10,
-        "expected": "Every scene retains verifiable source identity and source timestamps"
+        "expected": "Every scene retains verifiable source identity and source timestamps",
+        "status": "BLOCKED",
+        "actual": "Requires two independent authorized GTA Longs jobs and human review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented longs narrative verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D4": [
@@ -121,37 +229,73 @@
         "id": "D4.1",
         "name": "Grounding",
         "weight": 25,
-        "expected": "Zero unsupported factual claims among accepted automatic hooks"
+        "expected": "Zero unsupported factual claims among accepted automatic hooks",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D4.2",
         "name": "Event specificity",
         "weight": 20,
-        "expected": "At least 90% refer meaningfully to the particular event"
+        "expected": "At least 90% refer meaningfully to the particular event",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D4.3",
         "name": "Distinctness",
         "weight": 15,
-        "expected": "Zero identical normalized hooks for unrelated accepted events"
+        "expected": "Zero identical normalized hooks for unrelated accepted events",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D4.4",
         "name": "Editorial quality",
         "weight": 15,
-        "expected": "At least 85% receive a human rating of 4/5 or higher for relevance and naturalness"
+        "expected": "At least 85% receive a human rating of 4/5 or higher for relevance and naturalness",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D4.5",
         "name": "Presentation",
         "weight": 15,
-        "expected": "All evaluated rendered hooks remain readable, correctly timed and free of clipping"
+        "expected": "All evaluated rendered hooks remain readable, correctly timed and free of clipping",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D4.6",
         "name": "Manual control",
         "weight": 10,
-        "expected": "Manual text, positioning, timing and disabled state survive save, render and restart"
+        "expected": "Manual text, positioning, timing and disabled state survive save, render and restart",
+        "status": "BLOCKED",
+        "actual": "Requires grounded automatic GTA hook outputs and independent review.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented hooks verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D5": [
@@ -159,37 +303,73 @@
         "id": "D5.1",
         "name": "Synchronization",
         "weight": 25,
-        "expected": "At least 95% of evaluated cues begin within 250 ms of the intended timing"
+        "expected": "At least 95% of evaluated cues begin within 250 ms of the intended timing",
+        "status": "BLOCKED",
+        "actual": "Requires accepted captioned GTA outputs across languages, styles and layouts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D5.2",
         "name": "Style differentiation",
         "weight": 20,
-        "expected": "Every supported preset is exercised and visibly behaves according to its definition"
+        "expected": "Every supported preset is exercised and visibly behaves according to its definition",
+        "status": "BLOCKED",
+        "actual": "Requires accepted captioned GTA outputs across languages, styles and layouts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D5.3",
         "name": "Readability",
         "weight": 20,
-        "expected": "At least 90% of reviewed captioned outputs receive readability scores ≥ 4/5"
+        "expected": "At least 90% of reviewed captioned outputs receive readability scores ≥ 4/5",
+        "status": "BLOCKED",
+        "actual": "Requires accepted captioned GTA outputs across languages, styles and layouts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D5.4",
         "name": "Caption accuracy",
         "weight": 15,
-        "expected": "No fabricated speech captions; manually corrected text remains accurate"
+        "expected": "No fabricated speech captions; manually corrected text remains accurate",
+        "status": "BLOCKED",
+        "actual": "Requires accepted captioned GTA outputs across languages, styles and layouts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D5.5",
         "name": "Editing and caching",
         "weight": 10,
-        "expected": "Caption-only revisions cause zero unnecessary ASR or gameplay-analysis calls"
+        "expected": "Caption-only revisions cause zero unnecessary ASR or gameplay-analysis calls",
+        "status": "UNVERIFIED",
+        "actual": "Controlled manual correction and replay passed. An automatic GTA selection with live semantic inference has not exercised the correction.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D5.6",
         "name": "Layout and language",
         "weight": 10,
-        "expected": "No text overflow, broken Unicode, missing glyphs, or essential-action obstruction in accepted outputs"
+        "expected": "No text overflow, broken Unicode, missing glyphs, or essential-action obstruction in accepted outputs",
+        "status": "BLOCKED",
+        "actual": "Requires accepted captioned GTA outputs across languages, styles and layouts.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented captions verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D6": [
@@ -197,37 +377,73 @@
         "id": "D6.1",
         "name": "Media integrity",
         "weight": 25,
-        "expected": "All accepted MP4s decode successfully with expected streams and dimensions"
+        "expected": "All accepted MP4s decode successfully with expected streams and dimensions",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented timeline renderer verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D6.2",
         "name": "Timeline fidelity",
         "weight": 20,
-        "expected": "Rendered order, trim and timing match approved revision"
+        "expected": "Rendered order, trim and timing match approved revision",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented timeline renderer verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D6.3",
         "name": "Effects",
         "weight": 20,
-        "expected": "Every advertised effect passes decoded-media verification"
+        "expected": "Every advertised effect passes decoded-media verification",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented timeline renderer verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D6.4",
         "name": "A/V synchronization",
         "weight": 15,
-        "expected": "All synchronization fixtures and accepted outputs satisfy the defined tolerance"
+        "expected": "All synchronization fixtures and accepted outputs satisfy the defined tolerance",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented timeline renderer verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D6.5",
         "name": "Mixed-source compatibility",
         "weight": 10,
-        "expected": "Mixed FPS, dimensions and audio configurations render correctly"
+        "expected": "Mixed FPS, dimensions and audio configurations render correctly",
+        "status": "PASS",
+        "actual": "The mixed-source compilation rendered and decoded successfully.",
+        "input": "Controlled clips with three resolutions, frame rates and audio configurations.",
+        "procedure": "Run test_compilation_reviews_and_renders_three_different_sources.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D6.6",
         "name": "Replayability",
         "weight": 10,
-        "expected": "Approved timeline can be rerendered without regenerating its editing decisions"
+        "expected": "Approved timeline can be rerendered without regenerating its editing decisions",
+        "status": "PASS",
+        "actual": "Replay retained the revision and output SHA-256 and reused the rendered scene.",
+        "input": "An approved local timeline with a corrected caption track.",
+        "procedure": "Run test_manual_caption_track_revises_without_speech_analysis.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D7": [
@@ -235,37 +451,73 @@
         "id": "D7.1",
         "name": "Creation workflow",
         "weight": 20,
-        "expected": "Complete browser-to-export workflow succeeds"
+        "expected": "Complete browser-to-export workflow succeeds",
+        "status": "PASS",
+        "actual": "Chromium created and approved a local gameplay job. The proxy and final MP4 were generated and the final decoded 299 frames.",
+        "input": "Authorized Neverball local fixture.",
+        "procedure": "Upload or select a local source. Use Gameplay Only, edit the hook, caption and effect, then render a proxy and approve.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D7.2",
         "name": "Source controls",
         "weight": 15,
-        "expected": "Every source range, priority and exclusion setting persists and is honored"
+        "expected": "Every source range, priority and exclusion setting persists and is honored",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented editor and preview verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D7.3",
         "name": "Revision editing",
         "weight": 20,
-        "expected": "All five edit operations persist and affect actual output"
+        "expected": "All five edit operations persist and affect actual output",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented editor and preview verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D7.4",
         "name": "Preview fidelity",
         "weight": 20,
-        "expected": "Preview and final render use equivalent editing decisions"
+        "expected": "Preview and final render use equivalent editing decisions",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented editor and preview verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D7.5",
         "name": "Efficient corrections",
         "weight": 15,
-        "expected": "Local text edits cause zero unnecessary ASR/semantic processing; unaffected artifacts are reused"
+        "expected": "Local text edits cause zero unnecessary ASR/semantic processing; unaffected artifacts are reused",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented editor and preview verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D7.6",
         "name": "Error handling",
         "weight": 10,
-        "expected": "Failures, cancellation and invalid inputs are understandable and recoverable through the UI"
+        "expected": "Failures, cancellation and invalid inputs are understandable and recoverable through the UI",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented editor and preview verification and compare with the frozen expected result.",
+        "evidence": "EDITORIAL_ACCEPTANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D8": [
@@ -273,43 +525,85 @@
         "id": "D8.1",
         "name": "New Shorts throughput",
         "weight": 20,
-        "expected": "Workload S satisfies median and maximum processing budgets"
+        "expected": "Workload S satisfies median and maximum processing budgets",
+        "status": "BLOCKED",
+        "actual": "Requires representative workloads, with production resource and timing evidence on the 4 GiB target.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.2",
         "name": "New Longs throughput",
         "weight": 20,
-        "expected": "Workload L satisfies median and maximum processing budgets"
+        "expected": "Workload L satisfies median and maximum processing budgets",
+        "status": "BLOCKED",
+        "actual": "Requires representative workloads, with production resource and timing evidence on the 4 GiB target.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.3",
         "name": "Cold-cache improvement",
         "weight": 15,
-        "expected": "At least 30% matched median reduction against the agreed baseline"
+        "expected": "At least 30% matched median reduction against the agreed baseline",
+        "status": "UNVERIFIED",
+        "actual": "Earlier matched CPU fixture showed 8.2% cold-cache improvement. The final GTA matched workload has not been run.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.4",
         "name": "Inference efficiency",
         "weight": 15,
-        "expected": "Model workload is bounded and confirmed avoidable inference is reduced by at least 70%"
+        "expected": "Model workload is bounded and confirmed avoidable inference is reduced by at least 70%",
+        "status": "UNVERIFIED",
+        "actual": "The original request exceeded 2,048 tokens. The bounded retest reached model execution, timed out at 180 seconds and yielded no visual response fragment. The historical repeat text stage saved one request.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.5",
         "name": "Resource safety",
         "weight": 15,
-        "expected": "Actual 4 GiB GPU acceptance, zero uncontrolled OOM failures, no uncontrolled RAM or scratch exhaustion"
+        "expected": "Actual 4 GiB GPU acceptance, zero uncontrolled OOM failures, no uncontrolled RAM or scratch exhaustion",
+        "status": "BLOCKED",
+        "actual": "Requires representative workloads, with production resource and timing evidence on the 4 GiB target.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.6",
         "name": "Revision efficiency",
         "weight": 10,
-        "expected": "Workload E passes"
+        "expected": "Workload E passes",
+        "status": "UNVERIFIED",
+        "actual": "A Neverball edited preview and rerender passed. The comparable preview and full-render median has not been measured.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D8.7",
         "name": "Profiling",
         "weight": 5,
-        "expected": "All dominant stages have measured timing and resource evidence"
+        "expected": "All dominant stages have measured timing and resource evidence",
+        "status": "BLOCKED",
+        "actual": "Requires representative workloads, with production resource and timing evidence on the 4 GiB target.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented performance verification and compare with the frozen expected result.",
+        "evidence": "PERFORMANCE.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D9": [
@@ -317,37 +611,73 @@
         "id": "D9.1",
         "name": "Consecutive jobs",
         "weight": 25,
-        "expected": "Ten consecutive representative jobs complete successfully"
+        "expected": "Ten consecutive representative jobs complete successfully",
+        "status": "BLOCKED",
+        "actual": "The declared production pilot requires the accepted GTA corpus, remote footage and private Drive.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented reliability verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D9.2",
         "name": "Recovery",
         "weight": 20,
-        "expected": "Interruption and restart tests recover without stale or duplicate outputs"
+        "expected": "Interruption and restart tests recover without stale or duplicate outputs",
+        "status": "PASS",
+        "actual": "The lease was fenced and requeued. The rendered scene checkpoint was retained and the job completed without rerendering it.",
+        "input": "A persisted worker lease and a multi-clip job with an injected transient failure.",
+        "procedure": "Run test_expired_processing_lease_requeues_and_fences_after_backoff and test_render_recovers_after_transient_failure_without_rerendering_first_clip.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D9.3",
         "name": "Cancellation",
         "weight": 15,
-        "expected": "Processing stops safely within documented limits"
+        "expected": "Processing stops safely within documented limits",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented reliability verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D9.4",
         "name": "Progress",
         "weight": 15,
-        "expected": "Real operation state remains visible without fabricated percentages"
+        "expected": "Real operation state remains visible without fabricated percentages",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented reliability verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D9.5",
         "name": "Reproducibility",
         "weight": 15,
-        "expected": "Approved timeline and accepted analysis are reproducible from retained artifacts"
+        "expected": "Approved timeline and accepted analysis are reproducible from retained artifacts",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented reliability verification and compare with the frozen expected result.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D9.6",
         "name": "Regression",
         "weight": 10,
-        "expected": "Existing regression suite, relevant migrations and new tests pass"
+        "expected": "Existing regression suite, relevant migrations and new tests pass",
+        "status": "PASS",
+        "actual": "The exact candidate full isolated run passed 2,313 tests with 66 skipped and zero failed. The earlier concurrent run had one timing failure. The targeted repeat passed and copied state passed the isolated database upgrade and restore test.",
+        "input": "Read-only tracked snapshot ac32ab0 and copied baseline SQLite test data.",
+        "procedure": "Run the focused queue timing test and then the full factory_tests and tests suites in the disposable Linux worker image. Exercise a copied baseline SQLite backup with the candidate and prior build.",
+        "evidence": "REGRESSION_RESULTS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ],
     "D10": [
@@ -355,38 +685,190 @@
         "id": "D10.1",
         "name": "Startup",
         "weight": 20,
-        "expected": "Three consecutive clean launches using the supported launcher"
+        "expected": "Three consecutive clean launches using the supported launcher",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented deployment readiness verification and compare with the frozen expected result.",
+        "evidence": "DEPLOYMENT_AND_ROLLBACK.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D10.2",
         "name": "Target hardware",
         "weight": 20,
-        "expected": "Actual Windows/WSL2/Docker/RTX 3050 4 GiB acceptance succeeds"
+        "expected": "Actual Windows/WSL2/Docker/RTX 3050 4 GiB acceptance succeeds",
+        "status": "BLOCKED",
+        "actual": "Available hardware reported 6,144 MiB. The physical target has 4,096 MiB.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented deployment readiness verification and compare with the frozen expected result.",
+        "evidence": "DEPLOYMENT_AND_ROLLBACK.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D10.3",
         "name": "Google Drive",
         "weight": 20,
-        "expected": "Live Short and Longs uploads and artifact verification succeed"
+        "expected": "Live Short and Longs uploads and artifact verification succeed",
+        "status": "BLOCKED",
+        "actual": "Private Drive parent and authorized OAuth credential mount are unavailable.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented deployment readiness verification and compare with the frozen expected result.",
+        "evidence": "DEPLOYMENT_AND_ROLLBACK.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D10.4",
         "name": "Upgrade and rollback",
         "weight": 15,
-        "expected": "Migration, backup, upgrade and isolated rollback procedures succeed"
+        "expected": "Migration, backup, upgrade and isolated rollback procedures succeed",
+        "status": "UNVERIFIED",
+        "actual": "A Windows checkout upgrade and separate SQLite rollback with copied state passed. Three launcher starts and the deployed upgrade/rollback procedure remain unverified.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented deployment readiness verification and compare with the frozen expected result.",
+        "evidence": "DEPLOYMENT_AND_ROLLBACK.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D10.5",
         "name": "Security and persistence",
         "weight": 15,
-        "expected": "Existing credentials, state, channel settings and publishing safeguards are preserved"
+        "expected": "Existing credentials, state, channel settings and publishing safeguards are preserved",
+        "status": "UNVERIFIED",
+        "actual": "The complete release criterion has not been demonstrated.",
+        "input": "See evidence procedure and current availability.",
+        "procedure": "Follow the documented deployment readiness verification and compare with the frozen expected result.",
+        "evidence": "DEPLOYMENT_AND_ROLLBACK.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       },
       {
         "id": "D10.6",
         "name": "GitHub delivery",
         "weight": 10,
-        "expected": "Final tested commit, reports, reproduction commands and PR are available remotely"
+        "expected": "Final tested commit, reports, reproduction commands and PR are available remotely",
+        "status": "PASS",
+        "actual": "GitHub verified the candidate at the authorized fork branch and open draft PR #4. GitHub listed zero remote check runs.",
+        "input": "Tested candidate commit on denusbtw:codex/factory-10.",
+        "procedure": "Check the fork branch with git ls-remote and verify the draft PR head and remote GitHub check runs.",
+        "evidence": "RELEASE_STATUS.md",
+        "commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122"
       }
     ]
+  },
+  "implementation_commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122",
+  "status_values": [
+    "PASS",
+    "FAIL",
+    "BLOCKED",
+    "UNVERIFIED"
+  ],
+  "classification": "FACTORY_10_RELEASE_CANDIDATE_BLOCKED",
+  "domain_summary": {
+    "D1": {
+      "name": "Gameplay semantics",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D2": {
+      "name": "Automatic editing",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D3": {
+      "name": "Longs narrative",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D4": {
+      "name": "Hooks",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D5": {
+      "name": "Captions",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D6": {
+      "name": "Timeline renderer",
+      "verified_score": 20,
+      "status": "UNVERIFIED"
+    },
+    "D7": {
+      "name": "Editor and preview",
+      "verified_score": 20,
+      "status": "UNVERIFIED"
+    },
+    "D8": {
+      "name": "Performance",
+      "verified_score": 0,
+      "status": "BLOCKED"
+    },
+    "D9": {
+      "name": "Reliability",
+      "verified_score": 30,
+      "status": "BLOCKED"
+    },
+    "D10": {
+      "name": "Deployment readiness",
+      "verified_score": 10,
+      "status": "BLOCKED"
+    }
+  },
+  "hard_gates": {
+    "D1–D10 independently at least 85/100": "FAIL",
+    "Independent human editorial acceptance": "BLOCKED",
+    "Evaluated held-out GTA corpus": "BLOCKED",
+    "At least nine of ten automatic Shorts accepted": "BLOCKED",
+    "Two accepted 8–15-minute Longs": "BLOCKED",
+    "No unsupported facts in accepted hooks": "BLOCKED",
+    "Payoff preserved in accepted clips": "BLOCKED",
+    "All accepted final media decodes": "UNVERIFIED",
+    "No critical A/V synchronization defects": "UNVERIFIED",
+    "Physical 4 GiB target environment": "BLOCKED",
+    "Live private Google Drive delivery": "BLOCKED",
+    "Mandatory time budgets": "BLOCKED",
+    "Non-destructive upgrade and isolated rollback": "UNVERIFIED",
+    "Ten consecutive representative jobs": "BLOCKED",
+    "Tested commit available on the authorized remote branch": "PASS",
+    "Zero unresolved P0 or P1 defects": "FAIL"
+  },
+  "minimum_verified_domain_score": 0,
+  "aggregate_verified_score": 8.0,
+  "open_p0_observed": 0,
+  "open_p1_release_gaps": 5,
+  "metrics": {
+    "shorts_acceptance_rate": null,
+    "longs_editorial_scores": null,
+    "precision_at_k": null,
+    "recall_at_k": null,
+    "low_motion_recall": null,
+    "payoff_preservation": null,
+    "production_cold_shorts_seconds": null,
+    "production_cold_longs_seconds": null,
+    "production_peak_ram_bytes": null,
+    "production_peak_vram_mib": null,
+    "development_vision_timeout_seconds": 180,
+    "development_vision_received_fragments": 0,
+    "development_vision_actual_placement": null,
+    "development_vision_peak_host_ram_bytes": 16166412288,
+    "development_vision_peak_device_vram_mib": 2038,
+    "historical_fixture_cold_reduction_percent": 8.2,
+    "historical_fixture_warm_reduction_percent": 57.6
+  },
+  "github": {
+    "candidate": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122",
+    "branch": "denusbtw:codex/factory-10",
+    "pull_request": "https://github.com/Eclipse-XS/youtube-temka/pull/4",
+    "draft": true,
+    "candidate_remote_check_runs": 0
+  },
+  "regression": {
+    "implementation_commit": "ac32ab0f2780e83d5b60e19a83cd7474eb28d122",
+    "passed": 2313,
+    "failed": 0,
+    "skipped": 66,
+    "elapsed_seconds": 208.51,
+    "prior_concurrent_failures": 1
   }
 }

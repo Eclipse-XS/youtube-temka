@@ -1,5 +1,17 @@
 # Factory 10 performance observations
 
+## Stable-candidate development run
+
+The isolated runner processed the authorized Neverball development inputs with CPU libx264. A 20-second source scan and one 1080×1920 Short took 20.613 seconds. A 40-second two-source scan and 20-second 720p export took 23.418 seconds. One edit workflow, including the initial render, edited proxy and final rerender, took 40.241 seconds. These are individual observations on a shared 6 GiB host with vision disabled for this run. `verification/test-output/f10-release-runner-20261125-010350/results.json` contains the per-stage timings and cache activity.
+
+The baseline Neverball smoke showed rendering as the largest single stage for the Shorts. The two-source export also spent 7.610 seconds retrieving and normalizing selected ranges and 9.064 seconds rendering. The five-output repeat does not form a matched cold-cache median. The production Workload S, Workload L and Workload E requirements are still pending. The historical approximately 280-minute Longs execution could not be reconstructed from an input, configuration and job-log pair in this checkout.
+
+### Live development model probe
+
+A dedicated Docker Ollama 0.40.16 server loaded `qwen3-vl:2b`, digest prefix `0635d9d857d4`, from a separate model cache. The original three-frame request exceeded 2,048 context tokens. The server reported 3,283 required tokens. At 4,096 context the request progressed to image decoding and later timed out. With bounded thumbnails, a 180-second read deadline and one allowed visual call, the repeat again timed out before receiving a response fragment. The fallback was skipped by the one-call budget. The Short still reached `READY` with heuristic selection and no automatic hook in 207.081 seconds. Peak sampled host RAM was 16,166,412,288 bytes and peak device-wide VRAM was 2,038 MiB. Twenty-four GPU layers were requested. The run has no reported actual model placement. The host was shared with verification processes. Evidence is in `verification/test-output/f10-release-vision-bounded-20261125-012328/results.json`.
+
+Use the [target hardware commands](TARGET_HARDWARE.md) to run three fresh-cache and three warm-cache samples per benchmark workload. Establish the matched baseline separately using the same input, model and profile. Report matched cold median reduction and confirmed avoidable inference independently. Preserve the complete sample and include retry time, failures and maximums.
+
 ## Matched 12-second timeline benchmark
 
 Three runs per condition compared the initial continuation commit `bb066c6`
