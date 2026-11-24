@@ -1,6 +1,7 @@
 """Bounded structured hook suggestions, with honest localized neutral fallback."""
 import json
 import re
+import unicodedata
 import httpx
 from pydantic import BaseModel,Field
 from . import config
@@ -43,29 +44,48 @@ GAMEPLAY_HOOKS = {
 }
 
 
+def normalize_hook(text):
+    text = unicodedata.normalize('NFKC', text).casefold()
+    return ' '.join(re.findall(r'[^\W_]+', text))
+
+
 def suggest_gameplay(candidate, language='en'):
     review = candidate.get('visual_review') or {}
     observed = ' '.join(review.get('observation', '').split())
     category = review.get('category', 'unknown_event')
     language = language or 'en'
     base = language.split('-')[0]
-    local = 'uk' if base == 'uk' else 'en'
+    structured_language = review.get('hook_language')
+    local = language if structured_language == language else 'uk' if base == 'uk' else 'en'
     pool = []
     times = candidate.get('source_frame_times', [])
     trigger, payoff = review.get('trigger_frame'), review.get('payoff_frame')
     offset = candidate.get('source_offset', 0)
-    bounded = (len(times) == 3 and trigger in (1, 2) and payoff in (2, 3) and
+    bounded = (trigger is not None and payoff is not None and 1 <= trigger < payoff <= len(times) and
                candidate['start_seconds'] + offset <= times[trigger - 1] < times[payoff - 1] < candidate['end_seconds'] + offset)
     if observed and not review.get('uncertain', True) and bounded:
-        for style, english, ukrainian in GAMEPLAY_HOOKS.get(category, ()):
-            pool.append({'text': ukrainian if local == 'uk' else english, 'language': local, 'style': style,
-                         'factual_support': observed, 'reason': f'Uses the observed {category} event'})
-        if not pool and local == 'en' and len(observed) <= 100 and category != 'unknown_event':
-            pool.append({'text': observed, 'language': local, 'style': 'direct',
-                         'factual_support': observed, 'reason': 'Uses the observation verbatim'})
+        if structured_language == language and category != 'unknown_event':
+            seen = set()
+            for style, field in (('direct', 'action'), ('contrast', 'unexpected_element'), ('outcome', 'visible_result')):
+                text = ' '.join((review.get(field) or '').split()).strip(' .')
+                normalized = normalize_hook(text)
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                pool.append({'text': text, 'language': local, 'style': style, 'factual_support': observed,
+                             'evidence_seconds': [times[trigger - 1], times[payoff - 1]],
+                             'reason': 'Uses the recorded visual evidence'})
+        elif 'hook_language' not in review:
+            # Existing reviews retain their suggestions when reopened.
+            for style, english, ukrainian in GAMEPLAY_HOOKS.get(category, ()):
+                pool.append({'text': ukrainian if local == 'uk' else english, 'language': local, 'style': style,
+                             'factual_support': observed, 'reason': f'Uses the observed {category} event'})
+            if not pool and local == 'en' and len(observed) <= 100 and category != 'unknown_event':
+                pool.append({'text': observed, 'language': local, 'style': 'direct',
+                             'factual_support': observed, 'reason': 'Uses the observation verbatim'})
     warnings = [] if pool else ['A visible payoff could not be grounded. Review the scene or leave the hook off.']
-    if local != base:
-        warnings.append('Gameplay hook templates are available in English and Ukrainian.')
+    if local != language and local != base:
+        warnings.append('Visual hook evidence is unavailable in the selected language.')
     return {'schema_version': 1, 'language': local, 'method': 'gameplay_evidence' if pool else 'no_hook',
             'candidates': pool, 'review_required': True, 'warnings': warnings}
 

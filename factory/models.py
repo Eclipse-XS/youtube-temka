@@ -198,6 +198,7 @@ class JobRequest(BaseModel):
     editing_intensity: Literal['manual','focused','expressive'] = 'manual'
     gameplay_scan_fps: Literal[1,2,4] = 2
     gameplay_low_signal_fraction: float = Field(default=.2,ge=0,le=.5,allow_inf_nan=False)
+    gameplay_max_proposals: int | None = Field(default=None,ge=1,le=40)
     visual_model: str | None = Field(default=None,pattern=r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$')
     max_text_model_calls: int = Field(default=24,ge=0,le=96)
     max_visual_model_calls: int = Field(default=4,ge=0,le=12)

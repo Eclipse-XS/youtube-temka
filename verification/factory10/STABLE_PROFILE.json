@@ -1,0 +1,22 @@
+{
+  "encoder": "auto",
+  "job_defaults": {
+    "ranking_profile": "gameplay_only",
+    "visual_model": "qwen3-vl:2b",
+    "llm_model": "qwen2.5:3b",
+    "max_visual_model_calls": 8,
+    "max_text_model_calls": 4,
+    "max_model_context_tokens": 24576,
+    "max_model_output_tokens": 4096,
+    "max_model_seconds": 600,
+    "gameplay_scan_fps": 2,
+    "gameplay_low_signal_fraction": 0.2,
+    "editing_intensity": "focused",
+    "text_mode": "none",
+    "preset": "blur",
+    "resolution": 720,
+    "output_height": 720
+  },
+  "shorts": {"minimum": 12, "maximum": 45},
+  "longs": {"minimum": 30, "maximum": 65, "count": 20, "target_duration": 600}
+}

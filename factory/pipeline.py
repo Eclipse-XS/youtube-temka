@@ -57,7 +57,7 @@ def source_plan(source, request, root, progress):
 def media_signals(source, request, metadata, end, resolution, root, progress):
     from .signals import MAX_WINDOWS, WINDOW_SECONDS, scan
 
-    path = root/('gameplay-signals-v1.json' if request.gameplay_only else 'signals.json')
+    path = root/('gameplay-signals-v3.json' if request.gameplay_only else 'signals.json')
     if path.is_file():
         data = json.loads(path.read_text(encoding='utf-8'))
         progress.reused('visual_signals')
@@ -65,7 +65,7 @@ def media_signals(source, request, metadata, end, resolution, root, progress):
     windows = math.ceil((end-request.start)/WINDOW_SECONDS)
     progress.begin('signals','ANALYZING',windows if request.gameplay_only else min(windows,MAX_WINDOWS),'windows')
     identity=metadata.get('local_identity')
-    shared=stage_cache.cache_path('signals',[2,identity,request.start,end,resolution,request.gameplay_only,
+    shared=stage_cache.cache_path('signals',[4 if request.gameplay_only else 2,identity,request.start,end,resolution,request.gameplay_only,
                                             request.gameplay_scan_fps,WINDOW_SECONDS,MAX_WINDOWS]) if identity else None
     cached=stage_cache.read_json(shared)
     if cached is None:
@@ -79,20 +79,43 @@ def media_signals(source, request, metadata, end, resolution, root, progress):
     return cached['events'],cached['scenes'],cached['coverage']
 
 
-def rank_media(transcript, request, metadata, source, end, resolution, root, progress, signals):
-    from .signals import gameplay_candidates, propose
+def rank_gameplay(candidates, request, resolution):
+    preferred = {'comedy': {'npc_behavior', 'ragdoll', 'absurd_interaction'},
+                 'physics': {'physics_glitch', 'animation_glitch', 'ragdoll'},
+                 'stunts': {'vehicle_crash', 'stunt_fail', 'police_chase_fail'}}.get(request.gameplay_focus, set())
+    weights = {'visible_payoff': 30, 'context_clarity': 20, 'comedic_contrast': 15,
+               'event_completeness': 15, 'visual_comprehensibility': 10, 'technical_quality': 5, 'novelty': 5}
+    for item in candidates:
+        components = item['evidence']['score_components']
+        components['technical_quality'] = min(1, resolution / 720)
+        if item.get('visual_review_state') == 'model_hypothesis' and item['category'] != 'unknown_event':
+            item['semantic_score'] = round(sum(weight * float(components.get(key) or 0)
+                                               for key, weight in weights.items()), 3)
+        score = item['semantic_score']
+        item['score'] = item['heuristic_score'] if score is None else score
+    candidates.sort(key=lambda item: (item['semantic_score'] is None,
+                                      -item['score'] - 6 * (item['category'] in preferred),
+                                      -item['heuristic_score'], item['event_seconds']))
+
+
+def rank_media(transcript, request, metadata, source, end, resolution, root, progress, signals,
+               *, proposal_limit=None, defer_visual=False):
+    from .signals import gameplay_candidates, gameplay_proposal_limit, propose
     from .inference import installed_model_digest
 
     events,scenes,coverage=signals
     duration=end-request.start
     identity=metadata.get('local_identity')
     model=(request.visual_model if request.max_visual_model_calls else None) if request.gameplay_only else request.llm_model or config.MODEL
-    digest=installed_model_digest(progress,model) if identity and model and (request.gameplay_only or request.max_text_model_calls) else None
+    digest=installed_model_digest(progress,model) if identity and model and not defer_visual and (request.gameplay_only or request.max_text_model_calls) else None
     controls=(request.minimum,request.maximum,request.count,request.gameplay_focus,request.gameplay_low_signal_fraction,
               request.max_text_model_calls,request.max_visual_model_calls,request.max_model_context_tokens,
               request.max_model_output_tokens,request.max_model_seconds)
-    shareable=bool(identity and (digest or (request.gameplay_only and not model)))
-    shared=stage_cache.cache_path('selection',[3,identity,request.start,end,resolution,progress.source_id,controls,
+    shareable=bool(identity and not defer_visual and (digest or (request.gameplay_only and not model)))
+    if request.gameplay_only:
+        proposal_limit = gameplay_proposal_limit(request) if proposal_limit is None else proposal_limit
+        controls += (proposal_limit, request.workflow, request.metadata_language or request.language)
+    shared=stage_cache.cache_path('selection',[4 if request.gameplay_only else 3,identity,request.start,end,resolution,progress.source_id,controls,
                                                request.gameplay_only,model,digest,signals,transcript]) if shareable else None
     cached=stage_cache.read_json(shared)
     if cached is not None:
@@ -101,25 +124,24 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
     if request.gameplay_only:
         from .visual_review import review_candidates
 
-        candidates=gameplay_candidates(events,scenes,request,duration,metadata['title'],coverage,progress.source_id)
-        preview_resolution=max((r for r in metadata['resolutions'] if r<=min(resolution,480)),default=resolution)
-        review_candidates(candidates,source,request,preview_resolution,root,progress)
-        preferred={'comedy':{'npc_behavior','ragdoll','absurd_interaction'},
-                   'physics':{'physics_glitch','animation_glitch','ragdoll'},
-                   'stunts':{'vehicle_crash','stunt_fail','police_chase_fail'}}.get(request.gameplay_focus, set())
-        for candidate in candidates:
-            components=candidate['evidence']['score_components']
-            bonus=6 if candidate['category'] in preferred else 0
-            components.update(profile_bonus=bonus,technical_quality=min(1,resolution/720))
-            candidate['score']=round(candidate['score']+bonus+5*bool(components['event_completeness']),3)
-        candidates.sort(key=lambda candidate:-candidate['score'])
-        result={'candidates':candidates,'analysis':'gameplay_signals','analysis_outcome':'editorial_review_required',
-                'selection_summary':f'{len(candidates)} gameplay moments selected for review from sampled visual evidence.'}
+        proposals = gameplay_candidates(events,scenes,request,duration,metadata['title'],coverage,
+                                        progress.source_id,proposal_limit)
+        if not defer_visual:
+            preview_resolution = max((r for r in metadata['resolutions'] if r <= min(resolution, 480)), default=resolution)
+            review_candidates([(proposals, source, preview_resolution, root)], request, progress)
+            rank_gameplay(proposals, request, resolution)
+        candidates = proposals if request.workflow == 'compilation' else proposals[:request.count]
+        result={'candidates':candidates,'proposal_count':len(proposals),
+                'analysis':'gameplay_signals','analysis_outcome':'editorial_review_required',
+                'selection_summary':f'{len(candidates)} of {len(proposals)} sampled gameplay proposals selected for review.'}
     else:
         result=analyze(transcript,request,duration,progress.tick,propose(events,scenes,request,duration,metadata['title']))
     result={**result,'signal_coverage':coverage}
-    complete_vision = not model or all(c.get('visual_review_state') in ('uncertain','model_hypothesis')
-                                      for c in result['candidates'][:request.max_visual_model_calls])
+    # Failed fetches, exhausted budgets and unverified selections must not become stable cross-job evidence.
+    if request.gameplay_only:
+        complete_vision = not model or (all(c.get('visual_review_state') == 'model_hypothesis' for c in candidates)
+                                        and not any(c.get('visual_review_state') in ('unavailable_or_invalid', 'budget_exhausted')
+                                                    for c in proposals))
     if (request.gameplay_only and complete_vision) or result['analysis']=='ollama':
         stage_cache.save_json(shared,result)
     return result
@@ -127,9 +149,14 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
 
 def compilation_plan(request, root, progress, update, previous=None):
     from .compilation import plan_gameplay, select
+    from .signals import gameplay_proposal_limit
+    from .visual_review import review_candidates
 
     sources = {}
     groups = []
+    pending = []
+    defer_visual = bool(request.gameplay_only and request.visual_model and request.max_visual_model_calls)
+    quota, spare = divmod(gameplay_proposal_limit(request), len(request.sources))
     for index, item in enumerate(request.sources,1):
         key = item.source_id
         progress.source_id = key
@@ -147,8 +174,10 @@ def compilation_plan(request, root, progress, update, previous=None):
                 transcript = discovery_transcript(item.source,options,folder,metadata,end,resolution,progress,lambda **_:None)
                 signals = media_signals(item.source,options,metadata,end,resolution,folder,progress)
                 progress.begin('highlights','ANALYZING',message=f'Source {index}/{len(request.sources)}')
-                result = rank_media(transcript,options,metadata,item.source,end,resolution,folder,progress,signals)
-                write_json_atomic(checkpoint,result,ensure_ascii=True)
+                result = rank_media(transcript,options,metadata,item.source,end,resolution,folder,progress,signals,
+                                    proposal_limit=quota + (index <= spare), defer_visual=defer_visual)
+                if not defer_visual:
+                    write_json_atomic(checkpoint,result,ensure_ascii=True)
                 del transcript
                 progress.done()
         except (ValueError, RuntimeError) as error:
@@ -158,13 +187,24 @@ def compilation_plan(request, root, progress, update, previous=None):
             raise
         sources[key] = {'source':item.source,'metadata':metadata,'resolution':resolution,'end':end,'language':options.language,
                         'signal_coverage':result.get('signal_coverage')}
-        groups.append([{**c,'source_id':key,'source_offset':item.start,
-                        'source_priority':item.priority,'source_max_contribution':item.max_contribution}
-                       for c in result['candidates'] if all(
-                           c['end_seconds']+item.start<=a or c['start_seconds']+item.start>=b
-                           for a,b in item.exclude)])
+        source_fingerprint = render_timeline.fingerprint(item.source)
+        group = [{**c,'source_id':key,'source_offset':item.start,'source_fingerprint':source_fingerprint,
+                  'source_priority':item.priority,'source_max_contribution':item.max_contribution}
+                 for c in result['candidates'] if all(
+                     c['end_seconds']+item.start<=a or c['start_seconds']+item.start>=b for a,b in item.exclude)]
+        groups.append(group)
+        if defer_visual and not checkpoint.is_file():
+            preview_resolution = max((r for r in metadata['resolutions'] if r <= min(resolution, 480)), default=resolution)
+            pending.append((group, item.source, preview_resolution, folder, resolution, result, checkpoint))
         update(result={'sources':sources,'failed_source_id':None})
     progress.source_id = None
+    if pending:
+        progress.begin('gameplay_vision', 'ANALYZING', message='Reviewing visual evidence across sources')
+        review_candidates([entry[:4] for entry in pending], request, progress)
+        for group, _, _, _, resolution, result, checkpoint in pending:
+            rank_gameplay(group, request, resolution)
+            write_json_atomic(checkpoint, {**result, 'candidates': group}, ensure_ascii=True)
+        progress.done()
     if previous is not None:
         return sources, previous
     target = request.target_duration or 900
@@ -507,6 +547,7 @@ def process(claim,assets=None):
         last_source = None
         compilation_ranges = []
         hook_bindings=dict(job['result'].get('timeline_hook_bindings') or {})
+        used_gameplay_hooks = set()
         for i,scene in enumerate(scenes):
             candidate,clip_request=scene.candidate,scene.request
             automatic_hook,sounds,transition_seconds=scene.automatic_hook,scene.sounds,scene.fade_seconds
@@ -541,12 +582,13 @@ def process(claim,assets=None):
                 compilation_ranges.append({**candidate,'start_seconds':scene_start,'end_seconds':scene_start+length})
             hook_candidates=None
             if automatic_hook:
-                from .hooks import suggest, suggest_gameplay
+                from .hooks import normalize_hook, suggest, suggest_gameplay
                 progress.begin('hooks','ANALYZING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
                 evidence=' '.join(s['text'] for s in clip_transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds'])
-                language=request.metadata_language or clip_transcript['language'] or 'en'
-                basis=candidate.get('visual_review') if request.gameplay_only else evidence
-                hook_key=render_timeline.fingerprint([2,automatic_hook,basis,language,request.llm_model,metadata['title'],
+                language=request.metadata_language or (request.language if request.gameplay_only else clip_transcript['language']) or 'en'
+                basis=[candidate.get('visual_review'), candidate.get('source_frame_times')] if request.gameplay_only else evidence
+                hook_version = 3 if request.gameplay_only else 2
+                hook_key=render_timeline.fingerprint([hook_version,automatic_hook,basis,language,request.llm_model,metadata['title'],
                     candidate['start_seconds'],candidate['end_seconds'],candidate['source_offset']])
                 hook_checkpoint=root/f'hook-{hook_key}.json'
                 binding=hook_bindings.get(automatic_hook)
@@ -558,7 +600,7 @@ def process(claim,assets=None):
                     from .inference import installed_model_digest
                     model=request.llm_model or config.MODEL
                     digest=installed_model_digest(progress,model) if not request.gameplay_only and evidence and request.max_text_model_calls else None
-                    shared=stage_cache.cache_path('hooks',[2,basis,language,metadata['title'],digest,
+                    shared=stage_cache.cache_path('hooks',[hook_version,basis,language,metadata['title'],digest,
                         candidate['start_seconds'],candidate['end_seconds'],candidate['source_offset']]) if request.gameplay_only or digest else None
                     hook_candidates=stage_cache.read_json(shared)
                     if hook_candidates is None:
@@ -573,7 +615,11 @@ def process(claim,assets=None):
                     hook_bindings[automatic_hook]={'key':hook_key,'decision':hook_candidates}
                     update(result={'timeline_hook_bindings':hook_bindings})
                 suggestions=hook_candidates['candidates']
+                if request.gameplay_only:
+                    suggestions = [option for option in suggestions if normalize_hook(option['text']) not in used_gameplay_hooks]
                 clip_request.hook=suggestions[0]['text'] if suggestions else ''
+                if request.gameplay_only and clip_request.hook:
+                    used_gameplay_hooks.add(normalize_hook(clip_request.hook))
                 progress.done(message=hook_candidates['method'])
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/(f'proxy-clip-{i+1}.mp4' if preview else f'clip-{i+1}.mp4')

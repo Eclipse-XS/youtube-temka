@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "minimum_domain_score": 85,
+  "domains": {
+    "D1": [
+      {
+        "id": "D1.1",
+        "name": "Detection recall",
+        "weight": 25,
+        "expected": "Recall@K ≥ 85%"
+      },
+      {
+        "id": "D1.2",
+        "name": "Detection precision",
+        "weight": 20,
+        "expected": "Precision@K ≥ 75%"
+      },
+      {
+        "id": "D1.3",
+        "name": "Silent/low-motion detection",
+        "weight": 15,
+        "expected": "Recall on the predefined low-motion/silent subset ≥ 80%"
+      },
+      {
+        "id": "D1.4",
+        "name": "Payoff preservation",
+        "weight": 20,
+        "expected": "At least 95% of matched candidates include the annotated payoff"
+      },
+      {
+        "id": "D1.5",
+        "name": "Source coverage",
+        "weight": 10,
+        "expected": "Every selected source interval follows the documented scan coverage policy"
+      },
+      {
+        "id": "D1.6",
+        "name": "Semantic evidence",
+        "weight": 10,
+        "expected": "Accepted classifications have traceable evidence; uncertain cases are explicitly identified"
+      }
+    ],
+    "D2": [
+      {
+        "id": "D2.1",
+        "name": "Clip structure",
+        "weight": 25,
+        "expected": "At least 9 of 10 Shorts have an understandable opening, event and outcome"
+      },
+      {
+        "id": "D2.2",
+        "name": "Effect relevance",
+        "weight": 20,
+        "expected": "At least 90% of applied automatic effects are judged useful or unobtrusive"
+      },
+      {
+        "id": "D2.3",
+        "name": "Effect timing",
+        "weight": 15,
+        "expected": "At least 90% of evaluated effects are aligned with their intended events"
+      },
+      {
+        "id": "D2.4",
+        "name": "Visual framing",
+        "weight": 15,
+        "expected": "No essential action is cropped out in the accepted Shorts"
+      },
+      {
+        "id": "D2.5",
+        "name": "Original audio",
+        "weight": 10,
+        "expected": "No meaningful original audio is accidentally masked, removed, or distorted"
+      },
+      {
+        "id": "D2.6",
+        "name": "First-pass usability",
+        "weight": 15,
+        "expected": "At least 9 of 10 Shorts are accepted without substantial manual re-editing"
+      }
+    ],
+    "D3": [
+      {
+        "id": "D3.1",
+        "name": "Narrative quality",
+        "weight": 25,
+        "expected": "Both full Longs achieve human editorial scores ≥ 85%"
+      },
+      {
+        "id": "D3.2",
+        "name": "Complete scenes",
+        "weight": 20,
+        "expected": "At least 95% of selected scenes preserve essential context and payoff"
+      },
+      {
+        "id": "D3.3",
+        "name": "Opening and ending",
+        "weight": 15,
+        "expected": "Both videos have an understandable strong opening and deliberate ending"
+      },
+      {
+        "id": "D3.4",
+        "name": "Source coherence",
+        "weight": 15,
+        "expected": "Source changes and scene ordering do not introduce unexplained narrative discontinuities"
+      },
+      {
+        "id": "D3.5",
+        "name": "Duration and diversity",
+        "weight": 15,
+        "expected": "Two accepted 8–15-minute videos without irrelevant padding or unintended duplication"
+      },
+      {
+        "id": "D3.6",
+        "name": "Provenance",
+        "weight": 10,
+        "expected": "Every scene retains verifiable source identity and source timestamps"
+      }
+    ],
+    "D4": [
+      {
+        "id": "D4.1",
+        "name": "Grounding",
+        "weight": 25,
+        "expected": "Zero unsupported factual claims among accepted automatic hooks"
+      },
+      {
+        "id": "D4.2",
+        "name": "Event specificity",
+        "weight": 20,
+        "expected": "At least 90% refer meaningfully to the particular event"
+      },
+      {
+        "id": "D4.3",
+        "name": "Distinctness",
+        "weight": 15,
+        "expected": "Zero identical normalized hooks for unrelated accepted events"
+      },
+      {
+        "id": "D4.4",
+        "name": "Editorial quality",
+        "weight": 15,
+        "expected": "At least 85% receive a human rating of 4/5 or higher for relevance and naturalness"
+      },
+      {
+        "id": "D4.5",
+        "name": "Presentation",
+        "weight": 15,
+        "expected": "All evaluated rendered hooks remain readable, correctly timed and free of clipping"
+      },
+      {
+        "id": "D4.6",
+        "name": "Manual control",
+        "weight": 10,
+        "expected": "Manual text, positioning, timing and disabled state survive save, render and restart"
+      }
+    ],
+    "D5": [
+      {
+        "id": "D5.1",
+        "name": "Synchronization",
+        "weight": 25,
+        "expected": "At least 95% of evaluated cues begin within 250 ms of the intended timing"
+      },
+      {
+        "id": "D5.2",
+        "name": "Style differentiation",
+        "weight": 20,
+        "expected": "Every supported preset is exercised and visibly behaves according to its definition"
+      },
+      {
+        "id": "D5.3",
+        "name": "Readability",
+        "weight": 20,
+        "expected": "At least 90% of reviewed captioned outputs receive readability scores ≥ 4/5"
+      },
+      {
+        "id": "D5.4",
+        "name": "Caption accuracy",
+        "weight": 15,
+        "expected": "No fabricated speech captions; manually corrected text remains accurate"
+      },
+      {
+        "id": "D5.5",
+        "name": "Editing and caching",
+        "weight": 10,
+        "expected": "Caption-only revisions cause zero unnecessary ASR or gameplay-analysis calls"
+      },
+      {
+        "id": "D5.6",
+        "name": "Layout and language",
+        "weight": 10,
+        "expected": "No text overflow, broken Unicode, missing glyphs, or essential-action obstruction in accepted outputs"
+      }
+    ],
+    "D6": [
+      {
+        "id": "D6.1",
+        "name": "Media integrity",
+        "weight": 25,
+        "expected": "All accepted MP4s decode successfully with expected streams and dimensions"
+      },
+      {
+        "id": "D6.2",
+        "name": "Timeline fidelity",
+        "weight": 20,
+        "expected": "Rendered order, trim and timing match approved revision"
+      },
+      {
+        "id": "D6.3",
+        "name": "Effects",
+        "weight": 20,
+        "expected": "Every advertised effect passes decoded-media verification"
+      },
+      {
+        "id": "D6.4",
+        "name": "A/V synchronization",
+        "weight": 15,
+        "expected": "All synchronization fixtures and accepted outputs satisfy the defined tolerance"
+      },
+      {
+        "id": "D6.5",
+        "name": "Mixed-source compatibility",
+        "weight": 10,
+        "expected": "Mixed FPS, dimensions and audio configurations render correctly"
+      },
+      {
+        "id": "D6.6",
+        "name": "Replayability",
+        "weight": 10,
+        "expected": "Approved timeline can be rerendered without regenerating its editing decisions"
+      }
+    ],
+    "D7": [
+      {
+        "id": "D7.1",
+        "name": "Creation workflow",
+        "weight": 20,
+        "expected": "Complete browser-to-export workflow succeeds"
+      },
+      {
+        "id": "D7.2",
+        "name": "Source controls",
+        "weight": 15,
+        "expected": "Every source range, priority and exclusion setting persists and is honored"
+      },
+      {
+        "id": "D7.3",
+        "name": "Revision editing",
+        "weight": 20,
+        "expected": "All five edit operations persist and affect actual output"
+      },
+      {
+        "id": "D7.4",
+        "name": "Preview fidelity",
+        "weight": 20,
+        "expected": "Preview and final render use equivalent editing decisions"
+      },
+      {
+        "id": "D7.5",
+        "name": "Efficient corrections",
+        "weight": 15,
+        "expected": "Local text edits cause zero unnecessary ASR/semantic processing; unaffected artifacts are reused"
+      },
+      {
+        "id": "D7.6",
+        "name": "Error handling",
+        "weight": 10,
+        "expected": "Failures, cancellation and invalid inputs are understandable and recoverable through the UI"
+      }
+    ],
+    "D8": [
+      {
+        "id": "D8.1",
+        "name": "New Shorts throughput",
+        "weight": 20,
+        "expected": "Workload S satisfies median and maximum processing budgets"
+      },
+      {
+        "id": "D8.2",
+        "name": "New Longs throughput",
+        "weight": 20,
+        "expected": "Workload L satisfies median and maximum processing budgets"
+      },
+      {
+        "id": "D8.3",
+        "name": "Cold-cache improvement",
+        "weight": 15,
+        "expected": "At least 30% matched median reduction against the agreed baseline"
+      },
+      {
+        "id": "D8.4",
+        "name": "Inference efficiency",
+        "weight": 15,
+        "expected": "Model workload is bounded and confirmed avoidable inference is reduced by at least 70%"
+      },
+      {
+        "id": "D8.5",
+        "name": "Resource safety",
+        "weight": 15,
+        "expected": "Actual 4 GiB GPU acceptance, zero uncontrolled OOM failures, no uncontrolled RAM or scratch exhaustion"
+      },
+      {
+        "id": "D8.6",
+        "name": "Revision efficiency",
+        "weight": 10,
+        "expected": "Workload E passes"
+      },
+      {
+        "id": "D8.7",
+        "name": "Profiling",
+        "weight": 5,
+        "expected": "All dominant stages have measured timing and resource evidence"
+      }
+    ],
+    "D9": [
+      {
+        "id": "D9.1",
+        "name": "Consecutive jobs",
+        "weight": 25,
+        "expected": "Ten consecutive representative jobs complete successfully"
+      },
+      {
+        "id": "D9.2",
+        "name": "Recovery",
+        "weight": 20,
+        "expected": "Interruption and restart tests recover without stale or duplicate outputs"
+      },
+      {
+        "id": "D9.3",
+        "name": "Cancellation",
+        "weight": 15,
+        "expected": "Processing stops safely within documented limits"
+      },
+      {
+        "id": "D9.4",
+        "name": "Progress",
+        "weight": 15,
+        "expected": "Real operation state remains visible without fabricated percentages"
+      },
+      {
+        "id": "D9.5",
+        "name": "Reproducibility",
+        "weight": 15,
+        "expected": "Approved timeline and accepted analysis are reproducible from retained artifacts"
+      },
+      {
+        "id": "D9.6",
+        "name": "Regression",
+        "weight": 10,
+        "expected": "Existing regression suite, relevant migrations and new tests pass"
+      }
+    ],
+    "D10": [
+      {
+        "id": "D10.1",
+        "name": "Startup",
+        "weight": 20,
+        "expected": "Three consecutive clean launches using the supported launcher"
+      },
+      {
+        "id": "D10.2",
+        "name": "Target hardware",
+        "weight": 20,
+        "expected": "Actual Windows/WSL2/Docker/RTX 3050 4 GiB acceptance succeeds"
+      },
+      {
+        "id": "D10.3",
+        "name": "Google Drive",
+        "weight": 20,
+        "expected": "Live Short and Longs uploads and artifact verification succeed"
+      },
+      {
+        "id": "D10.4",
+        "name": "Upgrade and rollback",
+        "weight": 15,
+        "expected": "Migration, backup, upgrade and isolated rollback procedures succeed"
+      },
+      {
+        "id": "D10.5",
+        "name": "Security and persistence",
+        "weight": 15,
+        "expected": "Existing credentials, state, channel settings and publishing safeguards are preserved"
+      },
+      {
+        "id": "D10.6",
+        "name": "GitHub delivery",
+        "weight": 10,
+        "expected": "Final tested commit, reports, reproduction commands and PR are available remotely"
+      }
+    ]
+  }
+}

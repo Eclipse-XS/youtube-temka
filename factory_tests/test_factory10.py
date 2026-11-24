@@ -129,6 +129,72 @@ def test_visual_review_cannot_point_to_an_unseen_or_earlier_payoff():
         VisualReview.model_validate({**decision,'evidence_frames':[1,2]})
 
 
+def test_gameplay_keeps_local_motion_separate_from_motion_peaks():
+    from factory.signals import gameplay_candidates, gameplay_proposal_limit
+
+    request = JobRequest(source='upload:owned.mp4', rights_confirmed=True, workflow='highlights',
+                         ranking_profile='gameplay_only', minimum=5, maximum=8, count=1)
+    events = [(4, .010, 0, .19), (4.5, .009, 0, .15), (24, .12, 0, .31), (25, .06, 0, .25)]
+    proposals = gameplay_candidates(events, [], request, 40, 'Gameplay', {'fps': 2}, 'source-1',
+                                    gameplay_proposal_limit(request))
+    assert len(proposals) == 2
+    assert {item['proposal_kind'] for item in proposals} == {'local_motion', 'motion'}
+    localized = next(item for item in proposals if item['proposal_kind'] == 'local_motion')
+    assert localized['evidence']['motion'] < .025 and localized['semantic_score'] is None
+    assert localized['editorial_review_required']
+
+
+def test_gameplay_proposals_trim_black_lead_in_without_losing_the_event():
+    from factory.signals import gameplay_candidates
+
+    request = JobRequest(source='upload:owned.mp4', rights_confirmed=True, workflow='highlights',
+                         ranking_profile='gameplay_only', minimum=5, maximum=8, count=1)
+    events = [(4, .16, 0, .31), (6, .12, 0, .28), (7, .06, 0, .15)]
+    coverage = {'fps': 2, 'black_intervals': [[0, 5]]}
+    proposal, = gameplay_candidates(events, [], request, 20, 'Gameplay', coverage, 'source-1', 1)
+    assert proposal['event_seconds'] == 6
+    assert (proposal['start_seconds'], proposal['end_seconds']) == (5, 13)
+
+
+def test_gameplay_visual_budget_reviews_each_source_before_expansion(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from factory import visual_review
+    from factory.progress import Progress
+
+    request = JobRequest(source='upload:owned.mp4', rights_confirmed=True, workflow='highlights',
+                         ranking_profile='gameplay_only', visual_model='test', max_visual_model_calls=3)
+    progress = Progress(lambda *args, **kwargs: None)
+    progress.limit_models(request, {})
+    calls = []
+
+    def generate(client, url, payload, session):
+        import httpx
+        calls.append((progress.source_id, len(payload['images'])))
+        assert progress.reserve_model('visual', payload['options']['num_ctx'], 400)
+        last = len(payload['images'])
+        review = {'category': 'unknown_event' if last == 3 else 'physics_glitch', 'observation': 'A wheel floats',
+                  'setup': 'A parked car', 'trigger_frame': 2, 'payoff_frame': last,
+                  'evidence_frames': [1, 2, last], 'comprehensible_without_speech': True, 'uncertain': last == 3}
+        return httpx.Response(200, json={'response': json.dumps(review)})
+
+    monkeypatch.setattr(visual_review, 'generate', generate)
+    monkeypatch.setattr(visual_review, 'model_session', lambda *args: nullcontext({'layers': 0}))
+    monkeypatch.setattr(visual_review, 'frame_images', lambda source, times, *args: ['image'] * len(times))
+
+    def candidate(source, score):
+        return {'source_id': source, 'source_frame_times': [1, 3, 5], 'start_seconds': 0, 'end_seconds': 9,
+                'heuristic_score': score, 'proposal_kind': 'motion', 'evidence': {'score_components': {}}}
+
+    first = candidate('source-1', 30)
+    second = candidate('source-2', 5)
+    visual_review.review_candidates([([first, candidate('source-1', 20)], 'upload:one.mp4', 480, tmp_path),
+                                    ([second], 'upload:two.mp4', 480, tmp_path)], request, progress)
+    assert calls[:2] == [('source-1', 3), ('source-2', 3)]
+    assert calls[2][0] == 'source-1' and 6 <= calls[2][1] <= 12
+    assert first['payoff_seconds'] == first['source_frame_times'][-1]
+    assert second['visual_review_state'] == 'uncertain'
+
+
 def test_gameplay_plan_links_sources_and_leaves_unsupported_beats_empty():
     from factory.compilation import plan_gameplay
     from factory.models import CompilationSource
@@ -153,6 +219,38 @@ def test_gameplay_plan_links_sources_and_leaves_unsupported_beats_empty():
     assert plan['scenes'][0]['event']['editorial_uncertainty']=='model_hypothesis'
     scarce=[{'source_id':primary,'start_seconds':0,'end_seconds':10,'score':1,'event_seconds':3}]
     assert plan_gameplay([scarce],3,30,prefs)[:2]==([],0)
+
+
+def test_gameplay_compilation_rejects_duplicate_recording_ranges_across_source_ids():
+    from factory.compilation import plan_gameplay
+    from factory.models import CompilationSource
+
+    def candidate(source, start, score):
+        return {'source_id': source, 'source_fingerprint': 'same-recording', 'start_seconds': start,
+                'end_seconds': start + 10, 'event_seconds': start + 4, 'score': score}
+
+    groups = [[candidate('source-1', 20, 50)], [candidate('source-2', 21, 49),
+                                               candidate('source-2', 0, 30), candidate('source-2', 10, 24)]]
+    prefs = {source: CompilationSource(source='upload:gameplay.mp4') for source in ('source-1', 'source-2')}
+    chosen, seconds, _ = plan_gameplay(groups, 4, 40, prefs)
+    assert seconds == 30
+    assert [item['start_seconds'] for item in chosen] == [20, 0, 10]
+
+
+def test_release_detection_counts_unique_events_and_reports_missing_payoff():
+    from verification.factory10.acceptance_metrics import evaluate
+
+    def clip(start, end):
+        return {'source': 'gameplay', 'start': start, 'end': end}
+
+    events = [{'source': 'gameplay', 'category': 'ragdoll', 'essential': [10, 12], 'trigger': 10,
+               'payoff': [12, 13], 'low_motion_or_silent': True},
+              {'source': 'gameplay', 'category': 'npc_behavior', 'essential': [20, 22], 'trigger': 20,
+               'payoff': [24, 25], 'low_motion_or_silent': False}]
+    metrics = evaluate([clip(9, 14), clip(9, 14), clip(19, 23)], events, [])
+    assert metrics['precision_at_k'] == 1 / 3
+    assert metrics['recall_at_k'] == metrics['payoff_preservation'] == .5
+    assert metrics['low_motion_recall'] == 1
 
 
 def test_gameplay_hooks_are_diverse_and_require_payoff_inside_scene():

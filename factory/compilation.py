@@ -19,7 +19,7 @@ def gameplay_event(candidate):
     offset = candidate.get('source_offset', 0)
     review = candidate.get('visual_review') or {}
     times = candidate.get('source_frame_times', [])
-    supported = bool(review and not review['uncertain'] and len(times) == 3)
+    supported = bool(review and not review['uncertain'] and len(times) >= 3)
     category = review['category'] if supported else 'unknown_event'
     beats = []
     trigger, payoff = candidate.get('event_seconds'), None
@@ -73,19 +73,22 @@ def plan_gameplay(groups, count, target, source_preferences):
         previous = selected[-1][1] if selected else None
 
         def fit(option):
-            _, event, length, _ = option
+            candidate, event, length, _ = option
             source = event['source_id']
+            recording = candidate.get('source_fingerprint', source)
             maximum = source_preferences[source].max_contribution
             return (duration + length <= target * 1.05 and
                     (maximum is None or contributions[source] + length <= maximum) and
                     all(event['source_end'] <= start or event['source_start'] >= end
-                        for start, end in ranges[source]))
+                        for start, end in ranges[recording]))
 
         def rank(option):
             _, event, length, quality = option
             theme_link = previous and event['theme'] and event['theme'] == previous['theme']
             new_source = previous and event['source_id'] != previous['source_id']
-            return (quality + 6 * bool(theme_link) + 5 * bool(new_source) - min(6, length * .12),
+            needed_per_scene = (target - duration) / (count - len(selected))
+            shortage_penalty = min(15, max(0, needed_per_scene - length) * .25)
+            return (quality + 6 * bool(theme_link) + 5 * bool(new_source) - shortage_penalty,
                     event['complete'], -event['source_start'])
 
         pool = [option for option in pool if fit(option)]
@@ -93,14 +96,28 @@ def plan_gameplay(groups, count, target, source_preferences):
             break
         choice = max(pool, key=rank)
         pool.remove(choice)
-        _, event, length, _ = choice
+        candidate, event, length, _ = choice
         selected.append(choice)
         duration += length
         contributions[event['source_id']] += length
-        ranges[event['source_id']].append((event['source_start'], event['source_end']))
+        recording = candidate.get('source_fingerprint', event['source_id'])
+        ranges[recording].append((event['source_start'], event['source_end']))
 
     if len(selected) > 2:
-        ending = max(selected[1:], key=lambda option: (option[1]['complete'], option[3]))
+        # Keep the cold open and source alternation, but tell each recording's
+        # subsequent events in source order.
+        slots = defaultdict(list)
+        for index, (candidate, event, _, _) in enumerate(selected[1:], 1):
+            slots[candidate.get('source_fingerprint', event['source_id'])].append(index)
+        for positions in slots.values():
+            ordered = sorted((selected[index] for index in positions), key=lambda option: option[1]['source_start'])
+            for index, option in zip(positions, ordered):
+                selected[index] = option
+        latest_by_recording = {}
+        for option in selected[1:]:
+            candidate, event, _, _ = option
+            latest_by_recording[candidate.get('source_fingerprint', event['source_id'])] = option
+        ending = max(latest_by_recording.values(), key=lambda option: (option[1]['complete'], option[3]))
         if ending[3] > selected[-1][3] + 5:
             selected.remove(ending)
             selected.append(ending)

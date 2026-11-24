@@ -470,6 +470,15 @@ export default function CreatePage({
               <input value={form.visual_model || ''} placeholder="Необов’язково, наприклад qwen3-vl:2b"
                 onChange={(e)=>set('visual_model',e.target.value.trim() || null)}/>
             </label>
+            <label>Ліміт кандидатів на завдання
+              <input type="number" min="1" max="40" value={form.gameplay_max_proposals ?? ''}
+                placeholder={String(Math.min(40, 4 * form.count))}
+                onChange={(e)=>set('gameplay_max_proposals',e.target.value ? Number(e.target.value) : null)}/>
+            </label>
+            {form.visual_model && <label>Ліміт викликів візуальної моделі
+              <input type="number" min="0" max="12" value={form.max_visual_model_calls ?? 4}
+                onChange={(e)=>set('max_visual_model_calls',Number(e.target.value))}/>
+            </label>}
             <label>Пріоритет добору
               <select value={form.gameplay_focus||"balanced"} onChange={e=>set("gameplay_focus",e.target.value)}>
                 <option value="balanced">Усі ігрові події</option><option value="comedy">Комедія та NPC</option>

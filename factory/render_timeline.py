@@ -117,7 +117,7 @@ def edit_gameplay(candidate, request):
     frames = candidate.get('source_frame_times', [])
     payoff = review.get('payoff_frame')
     if (not request.gameplay_only or request.silence_removal or request.editing_intensity == 'manual' or not focus or
-            review.get('uncertain',True) or len(frames) != 3 or payoff not in (2,3)):
+            review.get('uncertain',True) or payoff is None or not 2 <= payoff <= len(frames)):
         return candidate
     start, end = candidate['start_seconds'], candidate['end_seconds']
     point = frames[payoff-1] - candidate.get('source_offset',request.start) - start
