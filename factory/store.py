@@ -297,6 +297,7 @@ def retry(jid):
 
 
 def edit_plan(jid, revision, edits, target, approve=False):
+    from .assets import asset_path
     from .models import JobRequest
     from .render_timeline import build, compile_scenes, validate_scene_edits
 
@@ -336,9 +337,14 @@ def edit_plan(jid, revision, edits, target, approve=False):
                     raise ValueError(f'Segment {edit["id"]}: the source exceeds its maximum contribution')
             selected.append({**segment,**edit})
             validate_scene_edits(selected[-1],end-start)
-            if 'sounds' in selected[-1]:
-                selected[-1]['sounds'] = [{**sound,'id':sound.get('id') or uuid.uuid4().hex}
-                                          for sound in selected[-1]['sounds']]
+            for effect in selected[-1].get('effects', []):
+                library = {'image_overlay':'logos','video_overlay':'backgrounds'}.get(effect['kind'])
+                if library:
+                    asset_path(library,effect['asset'])
+            for track in ('sounds','effects'):
+                if track in selected[-1]:
+                    selected[-1][track] = [{**event,'id':event.get('id') or uuid.uuid4().hex}
+                                           for event in selected[-1][track]]
             if (start,end)!=(segment['start_seconds'],segment['end_seconds']):
                 selected[-1].update(selection_method='manual_boundaries',reason='Boundaries edited by the operator')
                 selected[-1].pop('score',None)

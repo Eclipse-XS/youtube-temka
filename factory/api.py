@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import config, store, media
-from .models import JobRequest, TimelineHook, TimelineSound
+from .models import JobRequest, TimelineEffect, TimelineHook, TimelineSound
 from .resources import preflight, usage
 
 
@@ -449,9 +449,11 @@ class EditSegment(BaseModel):
     id: int = Field(ge=1, le=30)
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
-    transition: Literal['cut','fade'] = 'cut'
+    transition: Literal['cut','fade','crossfade'] = 'cut'
+    transition_duration: float | None = Field(default=None, ge=.1, le=2, allow_inf_nan=False)
     hook: TimelineHook | None = None
     sounds: list[TimelineSound] = Field(default_factory=list, max_length=8)
+    effects: list[TimelineEffect] = Field(default_factory=list, max_length=12)
 
 
 class EditPlanUpdate(BaseModel):
@@ -640,9 +642,12 @@ def claim(body:Worker):
         from .assets import manifest
         try:
             result=claimed['job']['result']
-            if 'asset_manifest' not in result:
-                result['asset_manifest']=manifest(claimed['job']['request'])
-                store.update(claimed['job']['id'],claimed['lease'],result={'asset_manifest':result['asset_manifest']})
+            timeline=result.get('render_timeline')
+            revision=timeline['revision'] if timeline else None
+            if 'asset_manifest' not in result or result.get('asset_timeline_revision')!=revision:
+                result['asset_manifest']=manifest(claimed['job']['request'],timeline)
+                store.update(claimed['job']['id'],claimed['lease'],result={'asset_manifest':result['asset_manifest'],
+                                                                       'asset_timeline_revision':revision})
             claimed['assets']=result['asset_manifest']
         except ValueError as error:
             store.update(claimed['job']['id'],claimed['lease'],state='BLOCKED',error=str(error))

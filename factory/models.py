@@ -49,9 +49,27 @@ class TimelineHook(BaseModel):
 
 class TimelineSound(BaseModel):
     id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
-    kind: Literal['impact', 'comedic_accent', 'whoosh', 'bass_hit']
+    kind: Literal['impact', 'comedic_accent', 'whoosh', 'bass_hit', 'suspense']
     start: float = Field(ge=0, le=600, allow_inf_nan=False)
     gain: float = Field(default=.25, ge=0, le=1, allow_inf_nan=False)
+
+
+class TimelineEffect(BaseModel):
+    id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+    kind: Literal['punch_in', 'animated_zoom', 'crop', 'visual_accent', 'text_overlay', 'image_overlay',
+                  'video_overlay', 'freeze_frame', 'slow_motion', 'replay', 'gain', 'audio_fade']
+    start: float = Field(ge=0, le=600, allow_inf_nan=False)
+    end: float = Field(gt=0, le=600, allow_inf_nan=False)
+    scale: float = Field(default=1.3, gt=1, le=3, allow_inf_nan=False)
+    x: float = Field(default=.5, ge=0, le=1, allow_inf_nan=False)
+    y: float = Field(default=.5, ge=0, le=1, allow_inf_nan=False)
+    rate: float = Field(default=.5, ge=.25, lt=1, allow_inf_nan=False)
+    replay_start: float | None = Field(default=None, ge=0, le=600, allow_inf_nan=False)
+    text: str = Field(default='', max_length=120)
+    color: str = Field(default='#FFFFFF', pattern=r'^#[a-fA-F0-9]{6}$')
+    asset: str | None = Field(default=None, pattern=r'^[a-zA-Z0-9_-]+\.(png|mp4)$')
+    gain: float = Field(default=.5, ge=0, le=2, allow_inf_nan=False)
+    fade_direction: Literal['in', 'out'] = 'in'
 
 
 class JobRequest(BaseModel):

@@ -242,18 +242,19 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
 
 
 def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-           timeline_sounds=(),force_audio=False,transition_seconds=None):
+           timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None):
     from .heavy import HEAVY_LOCK
     with HEAVY_LOCK:
         return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path,
-                       timeline_sounds,force_audio,transition_seconds)
+                       timeline_sounds,force_audio,transition_seconds,timeline_effects,asset_paths)
 
 
 def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-            timeline_sounds=(),force_audio=False,transition_seconds=None):
+            timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     from .captions import appearance
+    from .timeline_filters import audio_graph, font_option, playback_graph, playback_ranges, retime_transcript, visual_graph
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
     # synthetic speech. Limit at the final sample rate with makeup gain disabled.
     audio_filter=f'{LOUDNORM_FILTER},aformat=sample_rates=48000:channel_layouts=stereo,alimiter=limit=0.707945:level=false:latency=true'
@@ -271,6 +272,9 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         from .audio_edit import remove_pauses
         source,transcript,start,end=remove_pauses(source,output.with_suffix('.trimmed.mp4'),transcript,start,end,has_audio,tick)
         duration=end-start
+    playback=playback_ranges(timeline_effects,duration)
+    if playback:
+        transcript=retime_transcript(transcript,playback,start)
     narration=None
     caption_start,caption_end=start,end
     if request.audio_mode=='voiceover':
@@ -314,27 +318,31 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             commands=output.with_suffix('.camera.txt')
             commands.write_text('\n'.join(dedupe_sendcmd_lines(positions,2)),encoding='utf-8')
         else:preset='blur'
+    playback_parts,video_input,audio_input=playback_graph(playback,has_audio)
+    if playback and has_audio and request.audio_mode in ('silent','voiceover'):
+        playback_parts.append(f'{audio_input}anullsink')
     if request.mode=='longs':
-        graph=f'[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]'
+        graph=f'{video_input}scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]'
     elif preset=='gameplay':
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
         args+=['-stream_loop','-1','-threads','2','-i',str(background)]
         top=2*round(1920*request.split_ratio/2)
         bottom=1920-top
-        graph=f'[0:v]scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
+        graph=f'{video_input}scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
     elif preset=='smart' and trajectory:
-        graph=f"[0:v]sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
+        graph=f"{video_input}sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
     elif preset=='crop':
         # Explicit center framing fallback; no unverified face-tracking claim.
-        graph='[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
+        graph=f'{video_input}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
     else:
-        graph='[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:2[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
+        graph=f'{video_input}split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:2[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
+    next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
+    visual_parts,video,next_input=visual_graph(timeline_effects,args,'[v]',next_input,width,height,output,asset_paths)
+    graph=';'.join([*playback_parts,graph,*visual_parts])
     if request.captions and ass.exists():
-        graph+=f";[v]ass=filename='{escape_filter_value(str(ass.resolve()))}'[captioned]"
+        graph+=f";{video}ass=filename='{escape_filter_value(str(ass.resolve()))}'[captioned]"
         video='[captioned]'
-    else:
-        video='[v]'
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
         fontsize=request.hook_font_size
@@ -349,10 +357,7 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         hookfile.write_text(text,encoding='utf-8',newline='')
         # Windows FFmpeg builds may have no fontconfig configuration. An explicit
         # installed font avoids drawtext terminating the entire render process.
-        font="font='"+{'sans':'Noto Sans','serif':'Noto Serif','mono':'DejaVu Sans Mono'}[request.hook_font]+"':"
-        if os.name=='nt':
-            fontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/{'sans':'arial.ttf','serif':'times.ttf','mono':'consola.ttf'}[request.hook_font]
-            if fontpath.is_file():font=f"fontfile='{escape_filter_value(str(fontpath.resolve()))}':"
+        font=font_option(request.hook_font)
         anchor={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
         x=f'clip((w-tw)/2+{request.hook_x},w*.05,max(w*.05,w*.95-tw))'
         y=f'clip({anchor}+{request.hook_y},h*.05,max(h*.05,h*.95-th))'
@@ -366,7 +371,6 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
                 f"boxborderw={request.hook_padding}:x='{x}':y='{y}':enable='{show}'[hooked]")
         video='[hooked]'
     audio_map=None
-    next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
     if request.logo_asset:
         logo=logo_path or config.DATA/'logos'/request.logo_asset
         if not logo.is_file():raise ValueError('Selected logo is unavailable')
@@ -391,26 +395,27 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         args+=['-stream_loop','-1','-i',str(music)]
         graph+=f';[{next_input}:a]atrim=duration={duration},afade=t=in:d=0.3,afade=t=out:st={max(0,duration-.5)}:d=0.5,volume=0.12[bed]'
         if has_audio:
-            graph+=f';[0:a]asplit[original][side];[bed][side]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[duck];[original][duck]amix=inputs=2:normalize=0,{audio_filter}[audio]'
+            graph+=f';{audio_input}asplit[original][side];[bed][side]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=350[duck];[original][duck]amix=inputs=2:normalize=0,{audio_filter}[audio]'
         else:graph+=f';[bed]{audio_filter}[audio]'
         audio_map='[audio]'
     elif has_audio and request.audio_mode!='silent':
-        graph+=f';[0:a]{audio_filter}[audio]';audio_map='[audio]'
+        graph+=f';{audio_input}{audio_filter}[audio]';audio_map='[audio]'
+    if audio_map:
+        audio_parts,audio_map=audio_graph(timeline_effects,audio_map)
+        if audio_parts:
+            graph+=';'+';'.join(audio_parts)
     if timeline_sounds or force_audio:
-        from .render_timeline import SOUND_DURATIONS
+        from .audio_edit import PROCEDURAL_SOUNDS
 
         if not audio_map:
             graph+=';anullsrc=r=48000:cl=stereo[silence]'
             audio_map='[silence]'
         mixed=[audio_map]
-        effects={'impact':'sin(2*PI*(95*t-110*t*t))*exp(-14*t)',
-                 'bass_hit':'sin(2*PI*(64*t-36*t*t))*exp(-8*t)',
-                 'comedic_accent':'sin(2*PI*(390*t+1300*t*t))*exp(-8*t)',
-                 'whoosh':'sin(2*PI*(130*t+2400*t*t))*sin(PI*t/.32)^2'}
         for index,sound in enumerate(timeline_sounds):
-            length=SOUND_DURATIONS[sound.kind]/1000
+            milliseconds,expression=PROCEDURAL_SOUNDS[sound.kind]
+            length=milliseconds/1000
             label=f'[sfx{index}]'
-            graph+=(f";aevalsrc='{effects[sound.kind]}':s=48000:d={length},"
+            graph+=(f";aevalsrc='{expression}':s=48000:d={length},"
                     f'aformat=channel_layouts=stereo,volume={sound.gain},'
                     f'adelay={round(sound.start*1000)}:all=1{label}')
             mixed.append(label)
@@ -519,6 +524,61 @@ def concatenate(paths,output,tick=lambda *_:None):
     try:
         run([ffmpeg(),'-y','-hide_banner','-loglevel','error','-f','concat','-safe','1','-i',manifest.name,
              '-c','copy','-movflags','+faststart',temporary.name],tick,cwd=output.parent)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None):
+    if not any(scene.overlap_ms for scene in scenes):
+        return concatenate(paths, output, tick)
+
+    import av
+    from ffmpeg_utils import video_encode_args
+
+    width, height = request.output_height * 16 // 9 // 2 * 2, request.output_height
+    args = [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error']
+    audio = []
+    for path in paths:
+        args.extend(['-threads', '2', '-i', str(path)])
+        with av.open(str(path)) as container:
+            audio.append(bool(container.streams.audio))
+    with_audio = any(audio)
+    graph = []
+    for i, scene in enumerate(scenes):
+        duration = (scene.end_ms - scene.start_ms) / 1000
+        graph.append(f'[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,'
+                     f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,'
+                     f'tpad=stop_mode=clone:stop_duration=0.1,trim=duration={duration},'
+                     f'setpts=PTS-STARTPTS,fps=30,settb=AVTB[v{i}]')
+        if with_audio:
+            source = f'[{i}:a]apad' if audio[i] else 'anullsrc=r=48000:cl=stereo'
+            graph.append(f'{source},aformat=sample_rates=48000:channel_layouts=stereo,'
+                         f'atrim=duration={duration},asetpts=PTS-STARTPTS[a{i}]')
+    video, sound = '[v0]', '[a0]'
+    for i, scene in enumerate(scenes[1:], 1):
+        video_out, sound_out = f'[outv{i}]', f'[outa{i}]'
+        if scene.overlap_ms:
+            overlap = scene.overlap_ms / 1000
+            graph.append(f'{video}[v{i}]xfade=transition=fade:duration={overlap}:offset={scene.start_ms/1000},'
+                         f'fps=30,settb=AVTB{video_out}')
+            if with_audio:
+                graph.append(f'{sound}[a{i}]acrossfade=d={overlap}{sound_out}')
+        else:
+            graph.append(f'{video}[v{i}]concat=n=2:v=1:a=0,fps=30,settb=AVTB{video_out}')
+            if with_audio:
+                graph.append(f'{sound}[a{i}]concat=n=2:v=0:a=1{sound_out}')
+        video, sound = video_out, sound_out
+    duration = scenes[-1].end_ms / 1000
+    temporary = output.with_suffix('.assembling.mp4')
+    args.extend(['-filter_complex_threads', '1', '-filter_complex', ';'.join(graph), '-map', video])
+    if with_audio:
+        args.extend(['-map', sound, '-c:a', 'aac', '-b:a', '192k'])
+    args.extend([*video_encode_args(), '-threads', '2', '-pix_fmt', 'yuv420p', '-t', str(duration),
+                 '-maxrate', str(request.bitrate), '-bufsize', str(request.bitrate * 2),
+                 '-movflags', '+faststart', '-progress', 'pipe:1', str(temporary)])
+    try:
+        run(args, tick, duration)
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)

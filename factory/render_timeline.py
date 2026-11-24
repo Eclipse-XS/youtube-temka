@@ -1,20 +1,42 @@
 """Persisted edit decisions compiled into the existing FFmpeg scene renderer."""
 from collections import defaultdict
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 
-from .models import TimelineHook, TimelineSound
+from .models import JobRequest, TimelineEffect, TimelineHook, TimelineSound
+from .audio_edit import PROCEDURAL_SOUNDS
 
 
 SCHEMA_VERSION = 3
 HOOK_STYLE = ('hook_position', 'hook_x', 'hook_y', 'hook_font_size', 'hook_font',
               'hook_color', 'hook_outline', 'hook_shadow', 'hook_box', 'hook_box_opacity',
               'hook_padding', 'hook_wrap')
+SPATIAL_EFFECTS = {'punch_in', 'animated_zoom', 'crop'}
+TEMPORAL_EFFECTS = {'freeze_frame', 'slow_motion', 'replay'}
+AUDIO_EFFECTS = {'gain', 'audio_fade'}
+OVERLAY_EFFECTS = {'image_overlay', 'video_overlay'}
+VISUAL_EFFECTS = SPATIAL_EFFECTS | TEMPORAL_EFFECTS | {'visual_accent', 'text_overlay'}
 TRACKS = {'primary_video': {'scene'}, 'game_audio': {'original', 'silent', 'voiceover'},
           'music': {'music'}, 'sound_effects': {'sound'}, 'captions': {'captions'},
           'hooks': {'hook', 'automatic_hook'}, 'branding': {'logo', 'cta'},
-          'transitions': {'cut', 'fade'}}
-SOUND_DURATIONS = {'impact': 240, 'comedic_accent': 270, 'whoosh': 320, 'bass_hit': 400}
+          'effects': VISUAL_EFFECTS | AUDIO_EFFECTS, 'secondary_video': {'video_overlay'},
+          'image_overlays': {'image_overlay'},
+          'transitions': {'cut', 'fade', 'crossfade'}}
+SOUND_DURATIONS = {kind: sound[0] for kind, sound in PROCEDURAL_SOUNDS.items()}
+
+
+@dataclass
+class SceneRender:
+    candidate: dict
+    request: JobRequest
+    automatic_hook: str | None
+    sounds: list[TimelineSound]
+    effects: list[TimelineEffect]
+    fade_seconds: float | None
+    start_ms: int
+    end_ms: int
+    overlap_ms: int
 
 
 def fingerprint(data):
@@ -30,6 +52,24 @@ def validate_scene_edits(scene, duration):
         sound = TimelineSound.model_validate(sound)
         if sound.start + SOUND_DURATIONS[sound.kind] / 1000 > duration + 1e-8:
             raise ValueError('Sound effect must fit inside the scene')
+    effects = sorted((TimelineEffect.model_validate(effect) for effect in scene.get('effects', [])),
+                     key=lambda effect: effect.start)
+    previous_end = {'spatial': 0, 'temporal': 0}
+    for effect in effects:
+        if not 0 <= effect.start < effect.end <= duration + 1e-8 or effect.end - effect.start < .099:
+            raise ValueError('Effect interval must be at least 100 ms and inside the scene')
+        kind = effect.kind
+        if kind == 'replay' and (effect.replay_start is None or effect.replay_start + effect.end - effect.start > effect.start + 1e-8):
+            raise ValueError('Replay must reference footage earlier in the same scene')
+        if kind == 'text_overlay' and not effect.text.strip():
+            raise ValueError('Text overlay requires text')
+        if kind in OVERLAY_EFFECTS and (not effect.asset or not effect.asset.endswith('.png' if kind == 'image_overlay' else '.mp4')):
+            raise ValueError('Overlay requires a matching library asset')
+        group = 'spatial' if kind in SPATIAL_EFFECTS else 'temporal' if kind in TEMPORAL_EFFECTS else None
+        if group:
+            if effect.start < previous_end[group]:
+                raise ValueError(f'Overlapping {group} effects are unsupported')
+            previous_end[group] = effect.end
 
 
 def build(candidates, request, source_limits, revision, target_duration=None):
@@ -44,16 +84,22 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         end = round((offset + candidate['end_seconds']) * 1000)
         duration = end - start
         validate_scene_edits(candidate, candidate['end_seconds'] - candidate['start_seconds'])
+        if request.silence_removal and any(candidate.get(key) for key in ('hook', 'sounds', 'effects')):
+            raise ValueError('Manual timed events require pause removal to be disabled')
+        transition = candidate.get('transition', request.transition)
+        seconds = candidate.get('transition_duration')
+        overlap = round((seconds or .5) * 1000) if transition == 'crossfade' else 0
+        position -= overlap
         finishing = position + duration
         video_id = scene_id + ':video'
 
-        def event(track, kind, *, name=None, begin=0, finish=duration, asset=source, **parameters):
+        def event(track, kind, *, name=None, begin=0, finish=duration, asset=source, dependencies=None, **parameters):
             events.append({'id': scene_id + ':' + (name or kind), 'scene_id': scene_id,
                            'track_id': track, 'type': kind, 'source_asset_id': asset,
                            'source_start_ms': start, 'source_end_ms': end,
                            'start_ms': position + begin, 'end_ms': position + finish,
                            'parameters': parameters, 'revision': revision,
-                           'dependencies': [] if kind == 'scene' else [video_id]})
+                           'dependencies': dependencies if dependencies is not None else ([] if kind == 'scene' else [video_id])})
 
         event('primary_video', 'scene', name='video', candidate=candidate, source_offset=offset,
               silence_removal=request.silence_removal)
@@ -66,7 +112,13 @@ def build(candidates, request, source_limits, revision, target_duration=None):
             begin = round(sound.start * 1000)
             event('sound_effects', 'sound', name=f'sound-{sound.id or sound_index}', begin=begin,
                   finish=begin + SOUND_DURATIONS[sound.kind], asset='procedural:' + sound.kind,
-                  kind_name=sound.kind, gain=sound.gain)
+                  kind_name=sound.kind, gain=sound.gain, license='original procedural')
+        for effect_index, spec in enumerate(candidate.get('effects', []), 1):
+            effect = TimelineEffect.model_validate(spec)
+            track = {'video_overlay': 'secondary_video', 'image_overlay': 'image_overlays'}.get(effect.kind, 'effects')
+            event(track, effect.kind, name=f'effect-{effect.id or effect_index}', begin=round(effect.start * 1000),
+                  finish=round(effect.end * 1000), asset=effect.asset if effect.kind in OVERLAY_EFFECTS else source,
+                  **effect.model_dump(exclude={'kind', 'start', 'end', 'asset'}))
         if request.captions:
             event('captions', 'captions', style=request.caption_style,
                   appearance=request.caption_appearance.model_dump(), language=request.subtitle_language)
@@ -88,8 +140,12 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         if (text or automatic) and begin < finish:
             event('hooks', 'automatic_hook' if automatic else 'hook', begin=begin, finish=finish,
                   text=text, **{key: getattr(request, key) for key in HOOK_STYLE})
-        transition = candidate.get('transition', request.transition)
-        event('transitions', transition, duration_ms=min(250, duration // 4) if transition == 'fade' else 0)
+        if overlap:
+            adjacent = [video_id, segments[-1]['segment_id'] + ':video'] if segments else [video_id]
+            event('transitions', 'crossfade', finish=overlap, duration_ms=overlap, dependencies=adjacent)
+        else:
+            fade = round(seconds * 1000) if seconds else min(250, duration // 4)
+            event('transitions', transition, duration_ms=fade if transition == 'fade' else 0)
         segments.append({'segment_id': scene_id, 'source_id': source, 'source_start_ms': start,
                          'source_end_ms': end, 'output_start_ms': position, 'output_end_ms': finishing,
                          'edit_start_ms': position, 'edit_end_ms': finishing, 'transition': transition,
@@ -129,13 +185,16 @@ def compile_scenes(timeline, request):
         begin, finish = video['start_ms'], video['end_ms']
         if source not in timeline['source_limits'] or not 0 <= start < end <= timeline['source_limits'][source]:
             raise ValueError(f'Scene is outside its source bounds: {source}')
-        if begin != position or finish - begin != end - start:
-            raise ValueError('Primary video must be contiguous and match the source duration')
+        if finish - begin != end - start:
+            raise ValueError('Primary video must match the source duration')
         scene_events = defaultdict(list)
         for event in by_scene[video['scene_id']]:
             if not begin <= event['start_ms'] < event['end_ms'] <= finish:
                 raise ValueError(f"Event is outside its scene: {event['id']}")
-            if event is not video and event['dependencies'] != [video['id']]:
+            expected = [video['id']]
+            if event['type'] == 'crossfade' and scenes:
+                expected.append(primary[len(scenes) - 1]['id'])
+            if event is not video and event['dependencies'] != expected:
                 raise ValueError(f"Event has invalid scene dependencies: {event['id']}")
             scene_events[event['track_id']].append(event)
         for track in ('game_audio', 'music', 'captions', 'hooks', 'transitions'):
@@ -146,7 +205,9 @@ def compile_scenes(timeline, request):
                    'audio_mode': 'silent', 'transition': 'cut', 'silence_removal': video['parameters']['silence_removal']}
         automatic_hook = None
         transition_seconds = None
+        overlap = 0
         sounds = []
+        effects = []
         for event in by_scene[video['scene_id']]:
             kind, params = event['type'], event['parameters']
             local_start = event['start_ms'] - begin
@@ -166,24 +227,39 @@ def compile_scenes(timeline, request):
                 options['logo_asset'] = event['source_asset_id']
             elif kind == 'cta':
                 options['cta_text'] = params['text']
-            elif kind in ('cut', 'fade'):
-                length_ok = (0 < params['duration_ms'] <= (finish - begin) / 2 if kind == 'fade'
+            elif kind in ('cut', 'fade', 'crossfade'):
+                length_ok = (0 < params['duration_ms'] <= (finish - begin) / 2 if kind != 'cut'
                              else params['duration_ms'] == 0)
                 if not length_ok:
                     raise ValueError('Transition duration exceeds the scene')
-                options['transition'] = kind
-                transition_seconds = params['duration_ms'] / 1000
+                if kind == 'crossfade':
+                    overlap = params['duration_ms']
+                    if (not scenes or request.mode != 'longs' or request.silence_removal or
+                            local_start != 0 or overlap != length or
+                            overlap + scenes[-1].overlap_ms >= scenes[-1].end_ms - scenes[-1].start_ms):
+                        raise ValueError('Crossfade requires adjacent Longs scenes, with pause removal disabled')
+                else:
+                    options['transition'] = kind
+                    transition_seconds = params['duration_ms'] / 1000
             elif kind == 'sound':
                 sound = TimelineSound(kind=params['kind_name'], start=local_start / 1000, gain=params['gain'])
                 if length != SOUND_DURATIONS[sound.kind] or event['source_asset_id'] != 'procedural:' + sound.kind:
                     raise ValueError('Invalid procedural sound duration')
                 sounds.append(sound)
+            elif kind in VISUAL_EFFECTS | AUDIO_EFFECTS | OVERLAY_EFFECTS:
+                effect = TimelineEffect(kind=kind, start=local_start / 1000, end=(local_start + length) / 1000,
+                                        asset=event['source_asset_id'] if kind in OVERLAY_EFFECTS else None, **params)
+                effects.append(effect)
         if scene_events['music']:
             options.update(audio_mode='music', music_asset=scene_events['music'][0]['source_asset_id'])
+        if begin != position - overlap or begin < 0:
+            raise ValueError('Primary video must be contiguous except at a crossfade')
         offset = video['parameters']['source_offset']
         candidate = {**video['parameters']['candidate'], 'source_id': source, 'source_offset': offset,
                      'start_seconds': start / 1000 - offset, 'end_seconds': end / 1000 - offset}
-        scenes.append((candidate, request.model_copy(update=options), automatic_hook, sounds, transition_seconds))
+        validate_scene_edits({'effects': effects}, (finish - begin) / 1000)
+        scenes.append(SceneRender(candidate, request.model_copy(update=options), automatic_hook,
+                                  sounds, effects, transition_seconds, begin, finish, overlap))
         position = finish
     if position != timeline['duration_ms']:
         raise ValueError('Timeline duration does not match the primary video track')

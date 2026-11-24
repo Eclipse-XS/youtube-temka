@@ -418,14 +418,16 @@ def process(claim,assets=None):
         if not revision_path.is_file():
             write_json_atomic(revision_path,timeline,ensure_ascii=True)
         write_json_atomic(timeline_path,timeline,ensure_ascii=True)
-        candidates=[candidate for candidate,*_ in scenes]
+        candidates=[scene.candidate for scene in scenes]
         update(result={'timeline_revision':timeline['revision']})
-        force_audio=request.mode=='longs' and any(scene[3] for scene in scenes)
+        force_audio=request.mode=='longs' and any(scene.sounds for scene in scenes)
         outputs=[];raw_sources={}
         last_source = None
         compilation_position = 0
         compilation_ranges = []
-        for i,(candidate,clip_request,automatic_hook,sounds,transition_seconds) in enumerate(scenes):
+        for i,scene in enumerate(scenes):
+            candidate,clip_request=scene.candidate,scene.request
+            automatic_hook,sounds,transition_seconds=scene.automatic_hook,scene.sounds,scene.fade_seconds
             progress.source_id = candidate.get('source_id','source-1')
             operation=f'clip-{i+1}'
             clip_transcript = transcript
@@ -451,9 +453,10 @@ def process(claim,assets=None):
                     append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],candidate['start_seconds'])
             if compiling:
                 length = candidate['end_seconds']-candidate['start_seconds']
-                append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],compilation_position)
-                compilation_ranges.append({**candidate,'start_seconds':compilation_position,'end_seconds':compilation_position+length})
-                compilation_position += length
+                scene_start = scene.start_ms / 1000
+                append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],scene_start)
+                compilation_ranges.append({**candidate,'start_seconds':scene_start,'end_seconds':scene_start+length})
+                compilation_position = scene.end_ms / 1000
             hook_candidates=None
             if automatic_hook:
                 from .hooks import suggest
@@ -476,7 +479,7 @@ def process(claim,assets=None):
             clip_checkpoint=clip.with_suffix('.json')
             source_changed=not clip_checkpoint.is_file() or json.loads(clip_checkpoint.read_text(encoding='utf-8'))!=source_key
             render_key=render_timeline.fingerprint([source_key,clip_request.model_dump(),[sound.model_dump() for sound in sounds],
-                                                    force_audio,transition_seconds])
+                                                    force_audio,transition_seconds,[effect.model_dump() for effect in scene.effects]])
             progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
             if source_changed:
                 clip.unlink(missing_ok=True)
@@ -522,7 +525,8 @@ def process(claim,assets=None):
                              clip_request,background,progress.tick,stage=render_stage,
                              music_path=assets.get('music') if assets is not None else None,
                              logo_path=assets.get('logos') if assets is not None else None,
-                             timeline_sounds=sounds,force_audio=force_audio,transition_seconds=transition_seconds)
+                             timeline_sounds=sounds,force_audio=force_audio,transition_seconds=transition_seconds,
+                             timeline_effects=scene.effects,asset_paths=assets)
                 report_path=output.with_suffix('.validation.json')
                 if report_path.is_file():
                     report=json.loads(report_path.read_text(encoding='utf-8'))
@@ -554,13 +558,14 @@ def process(claim,assets=None):
             update(result={'language':transcript['language']})
         if request.mode=='longs' and len(outputs)>1:
             progress.begin('rendering','RENDERING',operation='assemble-long')
-            final=root/'long.mp4';media.concatenate([root/o['name'] for o in outputs],final,progress.tick)
+            final=root/'long.mp4';media.assemble_timeline([root/o['name'] for o in outputs],final,scenes,request,progress.tick)
             progress.done()
             progress.begin('validation','RENDERING',operation='assemble-long')
-            validation=media.validate_output(final,sum(o['duration'] for o in outputs),request=request)
+            duration=sum(o['duration'] for o in outputs)-sum(s.overlap_ms for s in scenes)/1000
+            validation=media.validate_output(final,duration,request=request)
             progress.done()
             progress.begin('retrieval','RENDERING',operation='assemble-edit-source')
-            raw=root/'long-source.mp4';media.concatenate(list(raw_sources.values()),raw,progress.tick)
+            raw=root/'long-source.mp4';media.assemble_timeline(list(raw_sources.values()),raw,scenes,request,progress.tick)
             progress.done()
             raw_sources[final.name]=raw
             progress.begin('thumbnail','RENDERING',operation='assemble-long')
@@ -568,14 +573,13 @@ def process(claim,assets=None):
             progress.done()
             from .compilation import append_transcript
             edit_speech=empty_transcript()
-            offset=0
-            for item in outputs:
+            for item,scene in zip(outputs,scenes):
                 if item.get('edit_transcript'):
                     part=json.loads((root/item['edit_transcript']).read_text(encoding='utf-8'))
-                    append_transcript(edit_speech,part,0,item['edit_duration'],offset)
-                offset+=item['edit_duration']
-            retained=save_edit_transcript(root,'edit-long.json',edit_speech,0,offset)
-            outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':sum(c['end_seconds']-c['start_seconds'] for c in candidates),'validation':validation,'thumbnail':{'name':thumb.name,**thumbnail_report}}]
+                    append_transcript(edit_speech,part,0,item['edit_duration'],scene.start_ms/1000)
+            edit_duration=timeline['duration_ms']/1000
+            retained=save_edit_transcript(root,'edit-long.json',edit_speech,0,edit_duration)
+            outputs=[{'name':final.name,'title':metadata['title'],'approved':False,'duration':validation['duration'],'edit_duration':edit_duration,'validation':validation,'thumbnail':{'name':thumb.name,**thumbnail_report}}]
             if retained:
                 outputs[0]['edit_transcript']=retained
             digest=media.media_fingerprint(final)['sha256']

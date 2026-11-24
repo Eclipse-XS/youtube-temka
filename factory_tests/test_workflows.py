@@ -138,6 +138,103 @@ def test_saved_timeline_revision_changes_visible_hook_and_audible_effect(owned_s
     assert lit>100 and peak>.03
 
 
+def test_crossfade_overlaps_decoded_video_and_original_audio(tmp_path,monkeypatch):
+    import av
+    import numpy as np
+    from factory.render_timeline import build, compile_scenes
+
+    monkeypatch.setenv('FFMPEG_ENCODER','x264')
+    paths=[]
+    for color,frequency in [('green',250),('red',400),('blue',800)]:
+        path=tmp_path/f'{color}.mp4'
+        media.run([media.ffmpeg(),'-y','-v','error','-f','lavfi','-i',f'color={color}:s=160x90:r=30',
+                   '-f','lavfi','-i',f'sine=frequency={frequency}:sample_rate=48000',
+                   '-t','5','-c:v','libx264','-threads','2','-c:a','aac',str(path)])
+        paths.append(path)
+    request=JobRequest(source='upload:owned.mp4',rights_confirmed=True,mode='longs')
+    candidates=[{'start_seconds':i*5,'end_seconds':i*5+5,'transition':'cut'} for i in range(3)]
+    candidates[-1].update(transition='crossfade',transition_duration=1)
+    timeline=build(candidates,request,{'source-1':15},1)
+    scenes=compile_scenes(timeline,request)
+    output=tmp_path/'crossfade.mp4'
+    media.assemble_timeline(paths,output,scenes,request)
+    report=media.validate_output(output,14,request,expected_audio=True)
+    assert abs(report['duration']-14)<.1
+
+    with av.open(str(output)) as container:
+        frame=next(frame for frame in container.decode(video=0) if frame.time>=9.5)
+        rgb=frame.to_ndarray(format='rgb24').mean(axis=(0,1))
+    assert rgb[0]>80 and rgb[2]>80 and rgb[1]<30
+    with av.open(str(output)) as container:
+        audio=np.concatenate([frame.to_ndarray()[0] for frame in container.decode(audio=0)
+                              if 9.4<=frame.time<=9.6])
+    frequencies=np.fft.rfftfreq(len(audio),1/48000)
+    spectrum=np.abs(np.fft.rfft(audio))
+    assert all(max(spectrum[abs(frequencies-frequency)<8])>10 for frequency in (400,800))
+
+
+def test_timeline_effects_change_decoded_frames_and_audio(tmp_path,monkeypatch):
+    import av
+    import numpy as np
+    from factory.render_timeline import build, compile_scenes
+
+    monkeypatch.setattr(config,'DATA',tmp_path)
+    monkeypatch.setenv('FFMPEG_ENCODER','x264')
+    (tmp_path/'logos').mkdir()
+    (tmp_path/'backgrounds').mkdir()
+    ffmpeg=[media.ffmpeg(),'-y','-v','error','-f','lavfi']
+    source=tmp_path/'source.mp4'
+    media.run([*ffmpeg,'-i','color=black:s=160x90:r=30','-f','lavfi','-i','sine=f=440:r=48000',
+               '-vf',"geq=lum='16+12*T+40*gte(X,W/3)+30*gte(Y,H/3)':cb=128:cr=128",
+               '-t','10.5','-c:v','libx264','-threads','2','-c:a','aac',str(source)])
+    media.run([*ffmpeg,'-i','color=lime:s=160x90','-frames:v','1','-threads','1',str(tmp_path/'logos'/'green.png')])
+    media.run([*ffmpeg,'-i','color=blue:s=160x90','-t','1','-c:v','libx264','-threads','2',
+               str(tmp_path/'backgrounds'/'blue.mp4')])
+    effects=[{'kind':'gain','start':.25,'end':.75,'gain':0},
+             {'kind':'freeze_frame','start':1,'end':2}, {'kind':'slow_motion','start':3,'end':4},
+             {'kind':'replay','start':5,'end':6,'replay_start':1},
+             {'kind':'punch_in','start':6,'end':6.5,'scale':2},
+             {'kind':'animated_zoom','start':6.5,'end':7,'scale':2},
+             {'kind':'crop','start':7,'end':7.5,'scale':2,'x':1,'y':1},
+             {'kind':'visual_accent','start':7.5,'end':8,'color':'#FF0000'},
+             {'kind':'text_overlay','start':8,'end':8.5,'text':'TIMELINE'},
+             {'kind':'image_overlay','start':8.5,'end':9,'asset':'green.png'},
+             {'kind':'video_overlay','start':9,'end':9.5,'asset':'blue.mp4'},
+             {'kind':'audio_fade','start':9.5,'end':10.5,'fade_direction':'out'}]
+    request=JobRequest(source='upload:owned.mp4',rights_confirmed=True,mode='longs',captions=False)
+    timeline=build([{'start_seconds':0,'end_seconds':10.5,'effects':effects}],request,{'source-1':10.5},1)
+    scene=compile_scenes(timeline,request)[0]
+    output=tmp_path/'effects.mp4'
+    media.render(source,output,{'language':None,'segments':[]},0,10.5,scene.request,timeline_effects=scene.effects)
+    samples={}
+    times=[.9,1.3,1.8,3.1,3.8,4.1,5.35,6.25,6.75,7.2,7.8,8.25,8.75,9.25]
+    with av.open(str(output)) as container:
+        for frame in container.decode(video=0):
+            if len(samples)<len(times) and frame.time>=times[len(samples)]:
+                samples[times[len(samples)]]=frame.to_ndarray(format='rgb24')
+
+    def corner(at):
+        return float(samples[at][80,120,0])
+
+    assert abs(corner(1.3)-corner(1.8))<3
+    assert 0<corner(3.8)-corner(3.1)<9
+    assert corner(4.1)-corner(5.35)>25
+    assert corner(6.25)>corner(.9)+45 and corner(6.75)>corner(.9)+45
+    assert corner(7.2)>corner(6.75)+25
+    assert samples[7.8][4,40,0]>200 and samples[7.8][4,40,1]<60
+    assert (samples[8.25][:,:,0]>240).sum()>500
+    assert samples[8.75][360,640,1]>200 and samples[8.75][360,640,0]<60
+    assert samples[9.25][360,640,2]>180 and samples[9.25][360,640,0]<60
+    with av.open(str(output)) as container:
+        peaks={}
+        audio_times=[.4,.88,1.5,3.5,9.6,10.4]
+        for frame in container.decode(audio=0):
+            if len(peaks)<len(audio_times) and frame.time>=audio_times[len(peaks)]:
+                peaks[audio_times[len(peaks)]]=float(np.abs(frame.to_ndarray()).max())
+    assert peaks[.4]<.001 and peaks[.88]>.01 and peaks[1.5]<.001 and peaks[3.5]>.01
+    assert peaks[10.4]<peaks[9.6]*.25
+
+
 def test_render_recovers_after_transient_failure_without_rerendering_first_clip(owned_sources,monkeypatch):
     request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,
                        workflow='highlights',minimum=5,maximum=6,intervals=[(0,5),(1,6)],

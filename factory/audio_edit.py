@@ -3,6 +3,14 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+PROCEDURAL_SOUNDS = {
+    'impact': (240, 'sin(2*PI*(95*t-110*t*t))*exp(-14*t)'),
+    'bass_hit': (400, 'sin(2*PI*(64*t-36*t*t))*exp(-8*t)'),
+    'comedic_accent': (270, 'sin(2*PI*(390*t+1300*t*t))*exp(-8*t)'),
+    'whoosh': (320, 'sin(2*PI*(130*t+2400*t*t))*sin(PI*t/.32)^2'),
+    'suspense': (900, '(sin(2*PI*90*t)+sin(2*PI*(135*t+30*t*t)))*sin(PI*t/.9)^2/2'),
+}
+
 
 def speech_timeline(transcript,start,end,padding=.18,min_gap=.8):
     ranges=[]

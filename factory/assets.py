@@ -17,7 +17,7 @@ def asset_path(kind, name):
     return path
 
 
-def manifest(request):
+def manifest(request, timeline=None):
     """Only assets needed by this job; automatic layout uses the controller library."""
     wanted=[]
     if request.get('logo_asset'):wanted.append(('logos',request['logo_asset']))
@@ -28,8 +28,12 @@ def manifest(request):
         if name:wanted.append(('backgrounds',name))
     if request.get('audio_mode')=='music' and request.get('music_asset'):
         wanted.append(('music',request['music_asset']))
+    for event in (timeline or {}).get('events', []):
+        library = {'image_overlay':'logos','video_overlay':'backgrounds'}.get(event['type'])
+        if library:
+            wanted.append((library,event['source_asset_id']))
     result=[]
-    for kind,name in wanted:
+    for kind,name in dict.fromkeys(wanted):
         path=asset_path(kind,name)
         with path.open('rb') as source:digest=hashlib.file_digest(source,'sha256').hexdigest()
         result.append({'kind':kind,'name':name,'size':path.stat().st_size,'sha256':digest})
@@ -75,5 +79,6 @@ def sync(client, items, tick=lambda:None):
                 if count!=size or digest.hexdigest()!=item['sha256']:raise ValueError('Asset integrity verification failed')
                 temporary.replace(path)
             finally:temporary.unlink(missing_ok=True)
-        paths[item['kind']]=path
+        paths.setdefault(item['kind'],path)
+        paths[(item['kind'],item['name'])]=path
     return paths
