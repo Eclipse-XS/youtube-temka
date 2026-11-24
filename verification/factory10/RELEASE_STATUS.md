@@ -1,32 +1,46 @@
 # Factory 10 release status
 
-This branch delivers a draft implementation milestone based on the open
-Factory 9 pull request. Keep it out of production pending completion of the
-remaining implementation and acceptance gates.
+Factory 10 remains a draft. The head is `denusbtw/youtube-temka:codex/factory-10`.
+The existing review targets `Eclipse-XS/youtube-temka:main`.
+[Factory 10 draft PR](https://github.com/Eclipse-XS/youtube-temka/pull/4)
 
-GitHub reported no write access to `Eclipse-XS/youtube-temka` and confirmed
-write access to the configured `denusbtw/youtube-temka` fork, which also hosts
-the Factory 9 PR head. Factory 10 uses `codex/factory-10` in that fork as its
-head branch and targets `Eclipse-XS/youtube-temka:main` for review.
+## Delivered
 
-## Implemented in this milestone
+- Reviewed timeline revisions drive source selection, ordering, trim, visual
+  effects, crossfades, mixing, hooks, captions, and branding. The worker saves
+  approved revisions and can replay the current approved local edit.
+- Gameplay Longs use a source-aware planner with visible evidence, contribution
+  limits, and explicit uncertainty. Operators can revise the order and timing.
+- Longs support rendered title cards, chapter labels, and audio/video fades.
+  Gameplay editing profiles can use visible payoff evidence for optional effects.
+- Caption cues and styles are versioned per scene. Composited proxies use the
+  same edit decisions, and a later render can reuse analysis and selected ranges.
+- Persistent checkpoints reuse eligible analysis and scene outputs. The report
+  records timeline and input hashes, settings, runtime measurements and checks.
 
-- Source and attempt operation telemetry, streaming Ollama observations, and bounded request budgets.
-- Independent ranges and source controls for compilation, plus estimated work before processing.
-- Full-range sampling in Gameplay Only, visual candidate evidence, optional frame review, and ASR after selection when needed.
-- One-pass local range normalization, verified render replay, and encoder information for final clip renders.
-- Editable hook timing and presentation, caption styles and retained ASR reuse, and rendered Longs track export.
+## Open release gates
 
-## Remaining implementation
+- Review on authorized GTA recordings, including silent physics anomalies,
+  NPC comedy, and other specified events. Human editorial quality remains open.
+- Live vision and end-to-end model benchmarking on the target 4 GiB GPU.
+  The measured cold-cache CPU workload improved 8.2%, below the 30% target.
+- Live Drive acceptance and external publishing are pending. Recovery and
+  idempotency were exercised against controlled test clients.
 
-- Gameplay rank profiles beyond Gameplay Only and general highlights, richer grounded hook generation, and a manual versioned caption track editor.
-- A narrative planner for cross-source Longs and a multitrack editor that renders directly from its edited timeline. The current manifest describes the existing clip renderer's output.
-- A composited proxy preview, additional editing effects and transitions, expanded audio direction, and configurable intro/outro and branding tracks.
-- Persistent reusable caches for all processing stages and a richer resource and throughput profiler.
+The local Neverball review package covers three Shorts, a two-source export,
+and an edited revision with a composited preview.
+Linux regression passed 2,307 tests with 66 skips and zero failures.
 
-## Open verification gates
+See [acceptance evidence](ACCEPTANCE.md), [machine-readable requirements](ACCEPTANCE.json),
+[performance](PERFORMANCE.md), and [editorial acceptance](EDITORIAL_ACCEPTANCE.md).
 
-- Human review and ranking metrics on authorized real GTA footage.
-- Live vision-model, 4 GB RTX 3050 and Docker/WSL acceptance, with peak process, container and GPU measurements.
-- Repeated comparable real-media benchmarks, including model workload reduction and the 30% median wall-time target.
-- Live Drive workflow and the two upstream subtitle API checks that require a POSIX runtime.
+## Implementation commits
+
+- `690042548c3be7854571776425828e5cddc3540f` approved timeline rendering
+- `9e2c525ee2d861b48e0d2757ea84d258a756818f` gameplay narrative planning
+- `278d49a2a4168942022ed718b3cbe1d3cc5c4228` effects, mixer and crossfades
+- `9ed68170540290131801313d78d52cf89c6854a9` branding and gameplay hooks
+- `b1c389b969caf35c2d957efec8f170c1e47b766e` independent caption revisions
+- `e1dc01086b88117d5aea8bebd71251a03f906288` draft video proxies
+- `7f42aabf58a027d3c3378557d7413b16946b4fd4` reusable checkpoints and reproducibility
+- `dbe0f229fb3276f074aa4de64abbdfc4a6d27e17` evidence-led effects, profiles and asset compatibility

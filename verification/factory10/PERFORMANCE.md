@@ -1,5 +1,61 @@
 # Factory 10 performance observations
 
+## Matched 12-second timeline benchmark
+
+Three runs per condition compared the initial continuation commit `bb066c6`
+with `7f42aab`. Both used the same generated 640×360, 30 fps input and audio
+tone, two six-second scenes, 720p delivery, libx264, and disabled text model
+calls. Every output passed video and audio decoding and duration checks.
+
+- Fresh cache per run: median 15.300 s at baseline and 14.043 s with the new
+  renderer, an 8.2% reduction.
+- Repeated identical jobs after a priming run: median 14.189 s at baseline
+  and 6.013 s with shared checkpoints, a 57.6% reduction. The worker reported
+  hits for source metadata, both selected ranges and both rendered scenes.
+- The fresh-cache workload missed the 30% target. Live LLM call savings and
+  gameplay recall require separate measurements.
+- The Windows host reported an NVIDIA GeForce RTX 3050 Laptop GPU with 6,144
+  MiB. The requested physical 4,096 MiB device was unavailable. Job evidence
+  samples host RAM, device-wide VRAM and worker cgroup memory when available.
+
+```powershell
+New-Item -ItemType Directory -Path scratch/f10-baseline-src -Force
+git archive --format=tar -o scratch/f10-baseline-src.tar bb066c6
+tar.exe -xf scratch/f10-baseline-src.tar -C scratch/f10-baseline-src
+.venv/Scripts/python.exe verification/factory10/benchmark_timeline.py --repo scratch/f10-baseline-src --workspace verification/test-output/f10-bench-baseline
+.venv/Scripts/python.exe verification/factory10/benchmark_timeline.py --repo . --workspace verification/test-output/f10-bench-current
+```
+
+Each destination must be a new directory. `results.json` records each run and
+its MP4 path. `--source` can supply the same saved authorized input to both
+variants. The measurements above used the generated fixture.
+
+## Live repeated text selection
+
+The test ran two identical requests against each revision using CPU Ollama
+and `qwen2.5:3b`. The model digest was
+`357c53fb659c5076de1d65ccb0b397446227b71a42be9d1603d46168015c9e4b`.
+All four accepted selections were identical. Each live inference evaluated
+497 input tokens and generated 119 tokens.
+
+- Baseline first and repeated selection: 1 request in 74.817 s, then 1 request
+  in 63.835 s.
+- Current first and repeated selection: 1 request in 60.067 s, then 0 requests
+  in 0.048 s. The second selection hit the persisted cache.
+- This eliminates 100% of repeat-call tokens for this fixed transcript and
+  50% of the text requests across the first and second selections together.
+  The broader end-to-end and vision-model workload targets remain unverified.
+
+With a local Ollama instance exposing that model, use `--ollama` to select
+the endpoint. The example uses the isolated verification server's port.
+
+```powershell
+.venv/Scripts/python.exe verification/factory10/benchmark_llm.py --repo scratch/f10-baseline-src --workspace verification/test-output/f10-llm-baseline --transcript verification/transcript-en.json --ollama http://127.0.0.1:11445
+.venv/Scripts/python.exe verification/factory10/benchmark_llm.py --repo . --workspace verification/test-output/f10-llm-current --transcript verification/transcript-en.json --ollama http://127.0.0.1:11445
+```
+
+## Earlier 900-second and connected-story observations
+
 Both runs used `python -m verification.check_v9`, the same generated media and
 request settings, CPU libx264, and the same Windows machine. Each run was one
 observation and shared the host with tests. The edited run measured the local

@@ -61,8 +61,15 @@ renderer. Edits on retained sources can reuse the original timed transcript
 when the source alignment and ASR settings match. Older exports without a
 retained per-output transcript may still require ASR.
 
-The rendered Longs manifest adds video, audio, caption, overlay and transition
-tracks, while keeping the existing segment positions used by editors. Gameplay
-beats include possible trigger and payoff timestamps where available. The
-renderer continues to apply the existing clip effects, audio processing and
-clip assembly. The manifest is an export of those decisions.
+The worker compiles a persisted timeline before retrieving and rendering its
+scenes. The timeline includes stable event identities, source and output
+intervals, scene dependencies and revision metadata. Editing an event changes
+the compiled video, audio or caption filters. The same decisions feed the
+draft proxy and final export. Approved local revisions can be replayed.
+
+The gameplay planner retains source provenance and visible evidence for beats.
+Procedural branding, timed effects, audio overlap, and manually versioned
+captions are rendered into the MP4. Cross-job caching on the same volume reuses
+eligible analysis and rendered scenes. A reproducibility file records source
+checksums where available, the compiled revision, encoder, validation and
+sampled resources.
