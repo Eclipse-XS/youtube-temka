@@ -6,7 +6,7 @@
     "llm_model": "qwen2.5:3b",
     "max_visual_model_calls": 8,
     "max_text_model_calls": 4,
-    "max_model_context_tokens": 24576,
+    "max_model_context_tokens": 36864,
     "max_model_output_tokens": 4096,
     "max_model_seconds": 600,
     "gameplay_scan_fps": 2,

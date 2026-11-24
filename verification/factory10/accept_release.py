@@ -385,7 +385,8 @@ def main():
                                    'Corpus prerequisites', missing=missing or ([] if jobs else ['configured jobs']))
         gpu = result['hardware']['gpu'] or {}
         target_gpu = 'RTX 3050' in gpu.get('name', '') and gpu.get('total_mib') == 4096
-        checks['target_gpu_probe'] = outcome('PASS' if target_gpu else 'BLOCKED', 'Physical RTX 3050 4096 MiB detection')
+        target_status = 'PASS' if target_gpu else 'BLOCKED' if args.hardware_profile == 'rtx3050-4gib' else 'UNVERIFIED'
+        checks['target_gpu_probe'] = outcome(target_status, 'Physical RTX 3050 4096 MiB detection')
         checks['drive'] = outcome('UNVERIFIED', 'Live Drive delivery has not run')
         run_drive = args.enable_drive and drive_available()
         if args.enable_drive and not run_drive:
@@ -423,7 +424,9 @@ def main():
                                           metric, value=value)
                 checks['human_editorial'] = outcome('BLOCKED', 'Independent timestamped Short and Longs reviews required')
         if run_drive:
-            verified = {job['kind'] for job in result['jobs'] if job.get('cloud_verified') is True}
+            delivered_jobs = result['jobs'] + [entry for workload in result['benchmarks'].values()
+                                               for label in ('cold', 'warm') for entry in workload[label]]
+            verified = {job['kind'] for job in delivered_jobs if job.get('cloud_verified') is True}
             attempted = any(job.get('drive') for job in jobs)
             status = 'PASS' if {'shorts', 'longs'} <= verified else 'FAIL' if attempted else 'UNVERIFIED'
             checks['drive'] = outcome(status,

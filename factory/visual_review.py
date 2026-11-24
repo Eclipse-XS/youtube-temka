@@ -12,6 +12,10 @@ from .inference import ModelBudgetExceeded, generate, model_session
 from .models import GameplayCategory
 
 
+INITIAL_CONTEXT = 4096
+EXPANDED_CONTEXT = 8192
+
+
 class ActionFocus(BaseModel):
     x: float = Field(ge=0,le=1,allow_inf_nan=False)
     y: float = Field(ge=0,le=1,allow_inf_nan=False)
@@ -63,7 +67,8 @@ def frame_images(source, timestamps, resolution, work, tick):
         frame=work/f'frame-{index}.jpg'
         media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','1',
                    '-ss',str(at-origin),'-i',str(path),'-map','0:v:0','-frames:v','1',
-                   '-vf','scale=384:-2','-q:v','5','-threads','1',str(frame)],tick,timeout=30)
+                   '-vf',"scale='if(gte(iw,ih),384,224)':'if(gte(iw,ih),224,384)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                   '-q:v','5','-threads','1',str(frame)],tick,timeout=30)
         if not frame.is_file() or not 0 < frame.stat().st_size <= 256*1024:
             raise ValueError('No bounded preview frame at the requested timestamp')
         images.append(base64.b64encode(frame.read_bytes()).decode('ascii'))
@@ -91,7 +96,7 @@ def review_candidates(groups, request, progress):
             item, source, resolution, root = entry
             if len(set(timestamps)) != len(timestamps):
                 return
-            context = 2048 if len(timestamps) == 3 else 4096
+            context = INITIAL_CONTEXT if len(timestamps) == 3 else EXPANDED_CONTEXT
             progress.source_id = item['source_id']
             try:
                 with TemporaryDirectory(prefix='visual-', dir=root) as folder:
@@ -137,24 +142,29 @@ def review_candidates(groups, request, progress):
             ambiguous = []
             for index, entry in enumerate([*first, *extra]):
                 remaining = request.max_visual_model_calls - progress.model_usage.get('visual', 0)
+                remaining_context = request.max_model_context_tokens - progress.model_usage.get('context', 0)
                 if remaining <= 0:
                     break
-                if index >= len(first) and remaining == 1 and ambiguous and not session['layers']:
+                if (index >= len(first) and remaining == 1 and ambiguous and not session['layers'] and
+                        remaining_context >= EXPANDED_CONTEXT):
                     break
                 review = review_one(entry, entry[0]['source_frame_times'])
                 if review and (review.uncertain or not review.payoff_frame):
                     ambiguous.append(entry)
             remaining_context = request.max_model_context_tokens - progress.model_usage.get('context', 0)
-            if (ambiguous and not session['layers'] and remaining_context >= 4096 and
+            if (ambiguous and not session['layers'] and remaining_context >= EXPANDED_CONTEXT and
                     progress.model_usage.get('visual', 0) < request.max_visual_model_calls):
                 promising = max(ambiguous, key=lambda entry: entry[0]['heuristic_score'])
                 scene = promising[0]
                 offset = scene.get('source_offset', request.start)
                 start, end = scene['start_seconds'] + offset, scene['end_seconds'] + offset
-                distributed = [round(start + (end - start - .04) * i / 4, 3) for i in range(5)]
-                timestamps = sorted(set(distributed + scene['source_frame_times']))
-                if len(timestamps) >= 6:
-                    review_one(promising, timestamps)
+                distributed = {round(start + (end - start - .04) * i / 5, 3) for i in range(6)}
+                timestamps = set(scene['source_frame_times'])
+                while len(timestamps) < 6:
+                    # Fill the largest gaps without dropping the original evidence.
+                    timestamps.add(max(distributed - timestamps,
+                                       key=lambda sample: (min(abs(sample - chosen) for chosen in timestamps), -sample)))
+                review_one(promising, sorted(timestamps))
         except ModelBudgetExceeded:
             pass
         finally:

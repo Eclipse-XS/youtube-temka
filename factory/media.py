@@ -474,7 +474,7 @@ def media_fingerprint(path,request=None,*,preview=False):
     profile=[request.mode,request.output_height,request.destination,config.SHORTS_MAX_SECONDS] if request else None
     if preview and profile:
         profile.append('preview')
-    return {'sha256':digest,'validation_version':1,'profile':profile}
+    return {'sha256':digest,'validation_version':2 if request and request.gameplay_only else 1,'profile':profile}
 
 
 def verify_checkpoint(path,report,request,*,preview=False):
@@ -531,7 +531,9 @@ def validate_output(path,duration,request=None,expected_audio=None,*,preview=Fal
         report.update(audio_peak=peak,audio_clipped_fraction=clipped/samples,audio_silence_fraction=silent/samples,audio_samples_decoded=samples,audio_silence_threshold_db=-60)
         if video_end is not None and audio_end is not None:
             delta=abs(video_end-audio_end);report['audio_video_end_delta_seconds']=delta
-            if delta>.25:raise RuntimeError('Rendered audio/video duration differs by more than 250 ms; inspect synchronization')
+            tolerance = .1 if request and request.gameplay_only else .25
+            if delta > tolerance + 1e-6:
+                raise RuntimeError(f'Rendered audio/video duration differs by more than {tolerance * 1000:g} ms; inspect synchronization')
     return report
 
 

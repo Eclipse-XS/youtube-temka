@@ -169,7 +169,7 @@ def test_gameplay_visual_budget_reviews_each_source_before_expansion(tmp_path, m
 
     def generate(client, url, payload, session):
         import httpx
-        calls.append((progress.source_id, len(payload['images'])))
+        calls.append((progress.source_id, len(payload['images']), payload['options']['num_ctx']))
         assert progress.reserve_model('visual', payload['options']['num_ctx'], 400)
         last = len(payload['images'])
         review = {'category': 'unknown_event' if last == 3 else 'physics_glitch', 'observation': 'A wheel floats',
@@ -189,8 +189,8 @@ def test_gameplay_visual_budget_reviews_each_source_before_expansion(tmp_path, m
     second = candidate('source-2', 5)
     visual_review.review_candidates([([first, candidate('source-1', 20)], 'upload:one.mp4', 480, tmp_path),
                                     ([second], 'upload:two.mp4', 480, tmp_path)], request, progress)
-    assert calls[:2] == [('source-1', 3), ('source-2', 3)]
-    assert calls[2][0] == 'source-1' and 6 <= calls[2][1] <= 12
+    assert calls[:2] == [('source-1', 3, 4096), ('source-2', 3, 4096)]
+    assert calls[2] == ('source-1', 6, 8192)
     assert first['payoff_seconds'] == first['source_frame_times'][-1]
     assert second['visual_review_state'] == 'uncertain'
 
@@ -251,6 +251,18 @@ def test_release_detection_counts_unique_events_and_reports_missing_payoff():
     assert metrics['precision_at_k'] == 1 / 3
     assert metrics['recall_at_k'] == metrics['payoff_preservation'] == .5
     assert metrics['low_motion_recall'] == 1
+
+
+def test_gameplay_validation_enforces_100ms_stream_end_alignment(workspace):
+    path = workspace / 'skew.mp4'
+    media.run([media.ffmpeg(), '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
+               '-i', 'color=blue:size=1280x720:duration=2', '-f', 'lavfi', '-i', 'sine=duration=1.8',
+               '-c:v', 'libx264', '-threads', '2', '-c:a', 'aac', str(path)])
+    request = JobRequest(source='upload:owned.mp4', rights_confirmed=True, workflow='highlights',
+                         mode='longs', ranking_profile='gameplay_only')
+    assert media.validate_output(path, 2, expected_audio=True)['validated']
+    with pytest.raises(RuntimeError, match='more than 100 ms'):
+        media.validate_output(path, 2, request, expected_audio=True)
 
 
 def test_gameplay_hooks_are_diverse_and_require_payoff_inside_scene():
