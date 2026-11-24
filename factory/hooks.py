@@ -15,6 +15,60 @@ NEUTRAL={
     'uk':['Погляньте на цей момент','Розгляньмо уважніше','Що буде далі?','Момент, який варто переглянути','Перегляньте повний контекст'],
 }
 
+GAMEPLAY_HOOKS = {
+    'vehicle_crash': [('direct', 'THE COLLISION', 'ЗІТКНЕННЯ'), ('irony', 'SMOOTH DRIVING…', 'ПЛАВНЕ ВОДІННЯ…'),
+                      ('question', 'HOW DID THEY COLLIDE?', 'ЯК ВОНИ ЗІТКНУЛИСЯ?')],
+    'stunt_fail': [('failure', 'THE STUNT WENT WRONG', 'ТРЮК ПІШОВ НЕ ЗА ПЛАНОМ'),
+                   ('irony', 'JUST LIKE I PLANNED…', 'УСЕ ЗА ПЛАНОМ…'),
+                   ('question', 'WHERE DID THE STUNT GO WRONG?', 'ДЕ ТРЮК ПІШОВ НЕ ТАК?')],
+    'physics_glitch': [('anomaly', 'PHYSICS GLITCH', 'ЗБІЙ ФІЗИКИ'), ('irony', 'PERFECTLY NORMAL PHYSICS', 'ЦІЛКОМ НОРМАЛЬНА ФІЗИКА'),
+                       ('question', 'WHY DID IT MOVE LIKE THAT?', 'ЧОМУ ВОНО ТАК РУХАЄТЬСЯ?')],
+    'animation_glitch': [('anomaly', 'THE ANIMATION GLITCHED', 'АНІМАЦІЯ ЗБИЛАСЯ'),
+                         ('irony', 'VERY NATURAL MOVEMENT…', 'ДУЖЕ ПРИРОДНИЙ РУХ…'),
+                         ('question', 'CAN YOU SPOT THE GLITCH?', 'ПОМІТИШ ЗБІЙ?')],
+    'npc_behavior': [('anomaly', 'THAT NPC DID WHAT?', 'ЩО ЗРОБИВ ЦЕЙ NPC?'),
+                     ('irony', 'GREAT DECISION, NPC', 'ГЕНІАЛЬНЕ РІШЕННЯ, NPC'),
+                     ('challenge', 'WATCH THE NPC', 'СТЕЖ ЗА NPC')],
+    'ragdoll': [('anomaly', 'RAGDOLL PHYSICS', 'ФІЗИКА РЕГДОЛУ'), ('irony', 'PERFECT BALANCE…', 'ІДЕАЛЬНА РІВНОВАГА…'),
+                ('question', 'WHY DID THEY FALL LIKE THAT?', 'ЧОМУ ТАКЕ ПАДІННЯ?')],
+    'unexpected_survival': [('question', 'HOW DID THEY SURVIVE?', 'ЯК ВДАЛОСЯ ВИЖИТИ?'),
+                            ('contrast', 'THEY WALKED AWAY FROM THAT?', 'І ПІСЛЯ ЦЬОГО ВДАЛОСЯ ВИЖИТИ?'),
+                            ('direct', 'UNEXPECTED SURVIVAL', 'НЕСПОДІВАНЕ ВИЖИВАННЯ')],
+    'police_chase_fail': [('failure', 'THE CHASE WENT WRONG', 'ПОГОНЯ ПІШЛА НЕ ЗА ПЛАНОМ'),
+                          ('question', 'WHERE DID THE CHASE FALL APART?', 'ДЕ ВСЕ ПІШЛО НЕ ТАК?'),
+                          ('irony', 'FLAWLESS PURSUIT…', 'БЕЗДОГАННА ПОГОНЯ…')],
+    'unexpected_collision': [('question', 'WHAT DID THEY HIT?', 'З ЧИМ СТАЛОСЯ ЗІТКНЕННЯ?'),
+                             ('direct', 'UNEXPECTED COLLISION', 'НЕСПОДІВАНЕ ЗІТКНЕННЯ'),
+                             ('challenge', 'WATCH THE POINT OF IMPACT', 'СТЕЖ ЗА МІСЦЕМ УДАРУ')],
+}
+
+
+def suggest_gameplay(candidate, language='en'):
+    review = candidate.get('visual_review') or {}
+    observed = ' '.join(review.get('observation', '').split())
+    category = review.get('category', 'unknown_event')
+    language = language or 'en'
+    base = language.split('-')[0]
+    local = 'uk' if base == 'uk' else 'en'
+    pool = []
+    times = candidate.get('source_frame_times', [])
+    trigger, payoff = review.get('trigger_frame'), review.get('payoff_frame')
+    offset = candidate.get('source_offset', 0)
+    bounded = (len(times) == 3 and trigger in (1, 2) and payoff in (2, 3) and
+               candidate['start_seconds'] + offset <= times[trigger - 1] < times[payoff - 1] < candidate['end_seconds'] + offset)
+    if observed and not review.get('uncertain', True) and bounded:
+        for style, english, ukrainian in GAMEPLAY_HOOKS.get(category, ()):
+            pool.append({'text': ukrainian if local == 'uk' else english, 'language': local, 'style': style,
+                         'factual_support': observed, 'reason': f'Uses the observed {category} event'})
+        if not pool and local == 'en' and len(observed) <= 100 and category != 'unknown_event':
+            pool.append({'text': observed, 'language': local, 'style': 'direct',
+                         'factual_support': observed, 'reason': 'Uses the observation verbatim'})
+    warnings = [] if pool else ['A visible payoff could not be grounded. Review the scene or leave the hook off.']
+    if local != base:
+        warnings.append('Gameplay hook templates are available in English and Ukrainian.')
+    return {'schema_version': 1, 'language': local, 'method': 'gameplay_evidence' if pool else 'no_hook',
+            'candidates': pool, 'review_required': True, 'warnings': warnings}
+
 
 class Hook(BaseModel):
     text:str=Field(min_length=1,max_length=120)

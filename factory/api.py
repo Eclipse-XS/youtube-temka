@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import config, store, media
-from .models import JobRequest, TimelineEffect, TimelineHook, TimelineSound
+from .models import JobRequest, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
 from .resources import preflight, usage
 
 
@@ -460,6 +460,9 @@ class EditPlanUpdate(BaseModel):
     revision: int = Field(ge=1)
     segments: list[EditSegment] = Field(min_length=1, max_length=30)
     target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
+    intro: TimelineCard | None = None
+    outro: TimelineCard | None = None
+    chapter_titles: bool = False
 
 
 @app.get('/api/jobs/{jid}/edit-plan')
@@ -486,7 +489,8 @@ def save_edit_plan(jid, body, approve=False):
     try:
         return store.edit_plan(jid,body.revision,[item.model_dump(exclude_unset=True) |
                                                   {'transition':item.transition} for item in body.segments],
-                               body.target_duration,approve)
+                               body.target_duration,approve,
+                               branding=body.model_dump(include=body.model_fields_set & {'intro','outro','chapter_titles'}))
     except KeyError:
         raise HTTPException(404,'Job not found') from None
     except InterruptedError as error:
@@ -533,12 +537,20 @@ def generate_metadata(jid:str):
 @app.post('/api/jobs/{jid}/outputs/{index}/hooks')
 def suggest_hooks(jid:str,index:int):
     from .drafts import contexts_for_job
-    from .hooks import suggest
+    from .hooks import suggest, suggest_gameplay
     from .heavy import HEAVY_LOCK
     if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current processing stage')
     try:
         job=get_job(jid)
         if index<0:raise ValueError('Invalid output')
+        request=JobRequest.model_validate(job['request'])
+        if request.gameplay_only:
+            if index>=len(job['result'].get('outputs',[])):
+                raise ValueError('Invalid output')
+            candidates=job['result'].get('candidates',[])
+            candidate={'source_offset':request.start,**candidates[index]} if index<len(candidates) else {}
+            return suggest_gameplay(candidate,
+                                    request.metadata_language or request.language or 'en')
         ctx=contexts_for_job(job)[index]
         return suggest(ctx['transcript'],ctx['metadata_language'],job['request'].get('llm_model'),ctx['source_title'])
     except (ValueError,IndexError,KeyError) as error:raise HTTPException(409,str(error)) from None

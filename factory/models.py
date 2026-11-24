@@ -5,7 +5,8 @@ from . import config
 
 GameplayCategory = Literal['vehicle_crash', 'stunt_fail', 'physics_glitch', 'animation_glitch',
                            'unexpected_collision', 'police_chase_fail', 'unexpected_survival',
-                           'unexpected_death', 'combat_fail', 'absurd_interaction', 'visual_reaction', 'unknown_event']
+                           'unexpected_death', 'combat_fail', 'absurd_interaction', 'visual_reaction', 'unknown_event',
+                           'npc_behavior', 'ragdoll']
 
 
 class CompilationSource(BaseModel):
@@ -17,7 +18,7 @@ class CompilationSource(BaseModel):
     priority: float = Field(default=1, ge=.5, le=2, allow_inf_nan=False)
     max_contribution: float | None = Field(default=None, ge=5, le=3600, allow_inf_nan=False)
     exclude: list[tuple[float,float]] = Field(default_factory=list,max_length=30)
-    event_categories: list[GameplayCategory] = Field(default_factory=list, max_length=12)
+    event_categories: list[GameplayCategory] = Field(default_factory=list, max_length=14)
     preferred_event_duration: float | None = Field(default=None, ge=5, le=600, allow_inf_nan=False)
 
     @model_validator(mode='after')
@@ -72,6 +73,22 @@ class TimelineEffect(BaseModel):
     fade_direction: Literal['in', 'out'] = 'in'
 
 
+class TimelineCard(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    duration: float = Field(default=2, ge=.5, le=8, allow_inf_nan=False)
+    background: str = Field(default='#14172A', pattern=r'^#[a-fA-F0-9]{6}$')
+    foreground: str = Field(default='#FFFFFF', pattern=r'^#[a-fA-F0-9]{6}$')
+    font: Literal['sans', 'serif', 'mono'] = 'sans'
+    animation: Literal['slide', 'fade'] = 'slide'
+    after_cold_open: bool = False
+
+    @model_validator(mode='after')
+    def title_is_visible(self):
+        if not self.title.strip():
+            raise ValueError('Card title must include visible text')
+        return self
+
+
 class JobRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     rights_confirmed: bool
@@ -112,6 +129,9 @@ class JobRequest(BaseModel):
     target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
     logo_asset: str | None = Field(default=None,pattern=r'^[a-zA-Z0-9_-]+\.png$')
     cta_text: str = Field(default='',max_length=120)
+    intro: TimelineCard | None = None
+    outro: TimelineCard | None = None
+    chapter_titles: bool = False
     background_mode: Literal['auto','none','specific','random'] = 'auto'
     background_category: str | None = Field(default=None,max_length=80)
     preserve_fps: bool = False
@@ -132,6 +152,7 @@ class JobRequest(BaseModel):
     source_attribution: str = Field(default='',max_length=1000)
     source_category: Literal['auto','podcast','stream','gameplay','visual'] = 'auto'
     ranking_profile: Literal['general_highlights','gameplay_only'] = 'general_highlights'
+    gameplay_focus: Literal['balanced','comedy','physics','stunts'] = 'balanced'
     gameplay_scan_fps: Literal[1,2,4] = 2
     gameplay_low_signal_fraction: float = Field(default=.2,ge=0,le=.5,allow_inf_nan=False)
     visual_model: str | None = Field(default=None,pattern=r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$')
@@ -184,6 +205,10 @@ class JobRequest(BaseModel):
             self.series_mode = 'connected'
         elif self.workflow:
             self.series_mode = 'independent'
+        if (self.intro or self.outro) and (self.mode != 'longs' or self.silence_removal):
+            raise ValueError('Intro and outro cards require Longs with pause removal disabled')
+        if self.outro and self.outro.after_cold_open:
+            raise ValueError('The outro follows the final scene')
         if self.destination == 'youtube_shorts' and (
             self.mode != 'shorts' or self.maximum > config.SHORTS_MAX_SECONDS
             or any(b-a > config.SHORTS_MAX_SECONDS for a,b in self.intervals)

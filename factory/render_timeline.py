@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 
-from .models import JobRequest, TimelineEffect, TimelineHook, TimelineSound
+from .models import JobRequest, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
 from .audio_edit import PROCEDURAL_SOUNDS
 
 
@@ -19,11 +19,14 @@ OVERLAY_EFFECTS = {'image_overlay', 'video_overlay'}
 VISUAL_EFFECTS = SPATIAL_EFFECTS | TEMPORAL_EFFECTS | {'visual_accent', 'text_overlay'}
 TRACKS = {'primary_video': {'scene'}, 'game_audio': {'original', 'silent', 'voiceover'},
           'music': {'music'}, 'sound_effects': {'sound'}, 'captions': {'captions'},
-          'hooks': {'hook', 'automatic_hook'}, 'branding': {'logo', 'cta'},
+          'hooks': {'hook', 'automatic_hook'}, 'branding': {'logo', 'cta', 'chapter_title'},
           'effects': VISUAL_EFFECTS | AUDIO_EFFECTS, 'secondary_video': {'video_overlay'},
           'image_overlays': {'image_overlay'},
+          'intro': {'card'}, 'outro': {'card'},
           'transitions': {'cut', 'fade', 'crossfade'}}
 SOUND_DURATIONS = {kind: sound[0] for kind, sound in PROCEDURAL_SOUNDS.items()}
+CHAPTER_TITLES = {'vehicles': ('Vehicles', 'Транспорт'), 'physics': ('Physics', 'Фізика'),
+                  'survival': ('Survival', 'Виживання'), 'interactions': ('Interactions', 'Взаємодії')}
 
 
 @dataclass
@@ -37,6 +40,31 @@ class SceneRender:
     start_ms: int
     end_ms: int
     overlap_ms: int
+
+
+@dataclass
+class CardRender:
+    settings: TimelineCard
+    start_ms: int
+    end_ms: int
+    overlap_ms: int = 0
+
+
+def cards_for(timeline):
+    cards = {}
+    for event in timeline['events']:
+        if event['type'] != 'card':
+            continue
+        kind = event['track_id']
+        settings = TimelineCard.model_validate(event['parameters'])
+        length = round(settings.duration * 1000)
+        if (kind not in ('intro', 'outro') or kind in cards or
+                (kind == 'outro' and settings.after_cold_open) or
+                event['source_asset_id'] != 'procedural:' + kind or event['dependencies'] or
+                event['end_ms'] - event['start_ms'] != length):
+            raise ValueError('Invalid timeline card')
+        cards[kind] = CardRender(settings, event['start_ms'], event['end_ms'])
+    return cards
 
 
 def fingerprint(data):
@@ -76,6 +104,18 @@ def build(candidates, request, source_limits, revision, target_duration=None):
     events = []
     segments = []
     position = 0
+
+    def add_card(kind, settings):
+        length = round(settings.duration * 1000)
+        events.append({'id': kind, 'scene_id': kind, 'track_id': kind, 'type': 'card',
+                       'source_asset_id': 'procedural:' + kind, 'source_start_ms': 0,
+                       'source_end_ms': length, 'start_ms': position, 'end_ms': position + length,
+                       'parameters': settings.model_dump(), 'revision': revision, 'dependencies': []})
+        return length
+
+    if request.intro and not request.intro.after_cold_open:
+        position += add_card('intro', request.intro)
+    previous_theme = None
     for index, candidate in enumerate(candidates):
         scene_id = str(candidate.get('id', index + 1))
         source = candidate.get('source_id', 'source-1')
@@ -124,6 +164,12 @@ def build(candidates, request, source_limits, revision, target_duration=None):
                   appearance=request.caption_appearance.model_dump(), language=request.subtitle_language)
         if request.logo_asset:
             event('branding', 'logo', asset=request.logo_asset)
+        theme = (candidate.get('narrative_event') or {}).get('theme')
+        if request.chapter_titles and theme in CHAPTER_TITLES and theme != previous_theme:
+            language = request.metadata_language or request.language
+            text = CHAPTER_TITLES[theme][int(language == 'uk')]
+            event('branding', 'chapter_title', finish=min(2500, duration), text=text)
+        previous_theme = theme
         if request.cta_text and (request.mode != 'longs' or index == len(candidates) - 1):
             event('branding', 'cta', begin=max(0, duration - 4000), text=request.cta_text)
         manual = candidate.get('hook')
@@ -152,6 +198,10 @@ def build(candidates, request, source_limits, revision, target_duration=None):
                          'subtitle_track': request.captions, 'overlay_assets': [request.logo_asset] if request.logo_asset else [],
                          'audio_settings': {'mode': mode}})
         position = finishing
+        if index == 0 and request.intro and request.intro.after_cold_open:
+            position += add_card('intro', request.intro)
+    if request.outro:
+        position += add_card('outro', request.outro)
     timeline = {'schema_version': SCHEMA_VERSION, 'revision': revision, 'events': events,
                 'source_limits': {key: round(end * 1000) for key, end in source_limits.items()},
                 'segments': segments, 'duration_ms': position}
@@ -164,6 +214,9 @@ def compile_scenes(timeline, request):
     if timeline['schema_version'] != SCHEMA_VERSION:
         raise ValueError('Unsupported render timeline version')
     events = timeline['events']
+    cards = cards_for(timeline)
+    if cards and (request.mode != 'longs' or request.silence_removal):
+        raise ValueError('Intro and outro cards require Longs with pause removal disabled')
     ids = {event['id'] for event in events}
     if len(ids) != len(events):
         raise ValueError('Timeline contains duplicate event IDs')
@@ -173,12 +226,18 @@ def compile_scenes(timeline, request):
             raise ValueError(f"Unsupported timeline event: {event['track_id']}/{event['type']}")
         if event['revision'] != timeline['revision'] or not set(event['dependencies']) <= ids:
             raise ValueError('Invalid timeline event revision or dependency')
-        by_scene[event['scene_id']].append(event)
+        if event['type'] != 'card':
+            by_scene[event['scene_id']].append(event)
     primary = sorted((event for event in events if event['type'] == 'scene'), key=lambda event: event['start_ms'])
     if not primary or len(primary) != len(by_scene):
         raise ValueError('Each scene requires one primary video event')
     scenes = []
     position = 0
+    intro = cards.get('intro')
+    if intro and not intro.settings.after_cold_open:
+        if intro.start_ms != 0:
+            raise ValueError('Intro must start at the beginning of the timeline')
+        position = intro.end_ms
     for video in primary:
         source = video['source_asset_id']
         start, end = video['source_start_ms'], video['source_end_ms']
@@ -227,6 +286,9 @@ def compile_scenes(timeline, request):
                 options['logo_asset'] = event['source_asset_id']
             elif kind == 'cta':
                 options['cta_text'] = params['text']
+            elif kind == 'chapter_title':
+                effects.append(TimelineEffect(kind='text_overlay', start=local_start / 1000,
+                                              end=(local_start + length) / 1000, text=params['text'], x=.07, y=.85))
             elif kind in ('cut', 'fade', 'crossfade'):
                 length_ok = (0 < params['duration_ms'] <= (finish - begin) / 2 if kind != 'cut'
                              else params['duration_ms'] == 0)
@@ -236,6 +298,7 @@ def compile_scenes(timeline, request):
                     overlap = params['duration_ms']
                     if (not scenes or request.mode != 'longs' or request.silence_removal or
                             local_start != 0 or overlap != length or
+                            position != scenes[-1].end_ms or
                             overlap + scenes[-1].overlap_ms >= scenes[-1].end_ms - scenes[-1].start_ms):
                         raise ValueError('Crossfade requires adjacent Longs scenes, with pause removal disabled')
                 else:
@@ -261,6 +324,14 @@ def compile_scenes(timeline, request):
         scenes.append(SceneRender(candidate, request.model_copy(update=options), automatic_hook,
                                   sounds, effects, transition_seconds, begin, finish, overlap))
         position = finish
+        if len(scenes) == 1 and intro and intro.settings.after_cold_open:
+            if intro.start_ms != position:
+                raise ValueError('Cold-open intro must follow the first scene')
+            position = intro.end_ms
+    if 'outro' in cards:
+        if cards['outro'].start_ms != position:
+            raise ValueError('Outro must follow the last scene')
+        position = cards['outro'].end_ms
     if position != timeline['duration_ms']:
         raise ValueError('Timeline duration does not match the primary video track')
     return scenes

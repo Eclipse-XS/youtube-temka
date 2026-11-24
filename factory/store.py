@@ -296,9 +296,9 @@ def retry(jid):
         return cur.rowcount == 1
 
 
-def edit_plan(jid, revision, edits, target, approve=False):
+def edit_plan(jid, revision, edits, target, approve=False, *, branding=None):
     from .assets import asset_path
-    from .models import JobRequest
+    from .models import JobRequest, TimelineCard
     from .render_timeline import build, compile_scenes, validate_scene_edits
 
     with connect() as db:
@@ -360,6 +360,10 @@ def edit_plan(jid, revision, edits, target, approve=False):
         plan.update(revision=revision+1,segments=selected,approved=approve)
         if target is not None:
             plan['target_duration']=target
+        plan.update(branding or {})
+        card_options = {key: TimelineCard.model_validate(plan[key]) if plan[key] else None
+                        for key in ('intro','outro') if key in plan}
+        request = request.model_copy(update={**card_options,'chapter_titles':plan.get('chapter_titles',request.chapter_titles)})
         timeline = build(selected,request,{key:source['end'] for key,source in plan['sources'].items()},
                          plan['revision'],plan['target_duration'])
         compile_scenes(timeline,request)

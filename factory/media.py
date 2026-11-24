@@ -529,8 +529,38 @@ def concatenate(paths,output,tick=lambda *_:None):
         temporary.unlink(missing_ok=True)
 
 
-def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None):
-    if not any(scene.overlap_ms for scene in scenes):
+def render_card(output, card, request, tick=lambda *_:None):
+    from ffmpeg_utils import escape_filter_value, video_encode_args
+    from .timeline_filters import font_option
+
+    height = request.output_height
+    width = height * 16 // 9 // 2 * 2
+    duration = (card.end_ms - card.start_ms) / 1000
+    size = height // 12
+    spec = card.settings
+    title = output.with_suffix('.txt')
+    title.write_text('\n'.join(textwrap.wrap(spec.title, width=32)), encoding='utf-8', newline='')
+    enter = min(.4, duration / 3)
+    offset = f'+w*.15*max(0,1-t/{enter})' if spec.animation == 'slide' else ''
+    graph = (f"drawtext={font_option(spec.font)}textfile='{escape_filter_value(str(title.resolve()))}':"
+             f"expansion=none:fontcolor={spec.foreground}:fontsize={size}:line_spacing=10:"
+             f"x='(w-tw)/2{offset}':y='(h-th)/2',fade=t=in:d={enter},"
+             f"fade=t=out:st={duration - enter}:d={enter}")
+    temporary = output.with_suffix('.rendering.mp4')
+    args = [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+            '-i', f'color=c=0x{spec.background[1:]}:s={width}x{height}:r=30', '-vf', graph,
+            '-t', str(duration), '-an', *video_encode_args(), '-pix_fmt', 'yuv420p',
+            '-threads', '2', '-progress', 'pipe:1', str(temporary)]
+    try:
+        run(args, tick, duration)
+        validate_output(temporary, duration, request=request, expected_audio=False)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None, *, reencode=False):
+    if not reencode and not any(scene.overlap_ms for scene in scenes):
         return concatenate(paths, output, tick)
 
     import av

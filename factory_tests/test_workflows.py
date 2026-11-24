@@ -235,6 +235,35 @@ def test_timeline_effects_change_decoded_frames_and_audio(tmp_path,monkeypatch):
     assert peaks[10.4]<peaks[9.6]*.25
 
 
+def test_timeline_cards_appear_at_configured_positions(owned_sources):
+    import av
+
+    request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,workflow='highlights',mode='longs',
+                       minimum=5,maximum=6,intervals=[(0,5)],review_before_render=True,save_drive=False,
+                       audio_mode='silent',captions=False,max_text_model_calls=0)
+    job=store.create(request.model_dump())
+    process(store.claim('fixture'))
+    plan=store.get(job['id'])['result']['edit_plan']
+    store.edit_plan(job['id'],plan['revision'],[{'id':plan['segments'][0]['id'],'start_seconds':0,'end_seconds':5}],
+                    None,approve=True,branding={'intro':{'title':'INTRO','background':'#FF0000','duration':1,
+                                                         'after_cold_open':True},
+                                                'outro':{'title':'OUTRO','background':'#0000FF','duration':1}})
+    process(store.claim('fixture'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    timeline=done['result']['render_timeline']
+    assert timeline['duration_ms']==7000
+    assert [(event['track_id'],event['start_ms'],event['end_ms']) for event in timeline['events']
+            if event['type']=='card']==[('intro',5000,6000),('outro',6000,7000)]
+    with av.open(str(config.SCRATCH/job['id']/'long.mp4')) as container:
+        frames=iter(container.decode(video=0))
+        intro=next(frame for frame in frames if frame.time>=5.5).to_ndarray(format='rgb24')
+        outro=next(frame for frame in frames if frame.time>=6.5).to_ndarray(format='rgb24')
+        assert intro[40,40,0]>200 and intro[40,40,2]<30
+        assert outro[40,40,2]>200 and outro[40,40,0]<30
+        assert abs(container.duration/av.time_base-7)<.1
+
+
 def test_render_recovers_after_transient_failure_without_rerendering_first_clip(owned_sources,monkeypatch):
     request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,
                        workflow='highlights',minimum=5,maximum=6,intervals=[(0,5),(1,6)],

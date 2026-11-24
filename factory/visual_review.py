@@ -89,5 +89,10 @@ def review_candidates(candidates, source, request, resolution, root, progress):
                         visual_review=review.model_dump(),analysis_model=model)
             if not review.uncertain:
                 item['category']=review.category
+                item['editorial_uncertainty']='model_hypothesis'
+                components=item['evidence']['score_components']
+                components.update(visible_payoff=bool(review.payoff_frame),context_clarity=bool(review.setup),
+                                  visual_comprehensibility=review.comprehensible_without_speech,
+                                  event_completeness=bool(review.setup and review.trigger_frame and review.payoff_frame))
                 if review.payoff_frame is not None:
                     item['payoff_seconds']=round(timestamps[review.payoff_frame-1]-request.start,3)

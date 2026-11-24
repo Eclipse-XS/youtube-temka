@@ -16,6 +16,33 @@ const effectKinds = {
   gain:"Зміна гучності", audio_fade:"Плавна зміна гучності",
 };
 
+function CardEditor({label,card,onChange,coldOpen=false}) {
+  const update=(key,value)=>onChange({...card,[key]:value});
+  return <fieldset>
+    <legend>{label}</legend>
+    <label><input type="checkbox" checked={!!card} onChange={e=>onChange(e.target.checked?
+      {title:"",duration:2,background:"#14172a",foreground:"#ffffff",font:"sans",animation:"slide"}:null)}/>
+      Додати до відео
+    </label>
+    {card && <div className="grid">
+      <label>Текст<input maxLength="100" value={card.title} onChange={e=>update("title",e.target.value)}/></label>
+      <label>Тривалість, сек<input type="number" min=".5" max="8" step=".1" value={card.duration}
+        onChange={e=>update("duration",+e.target.value)}/></label>
+      <label>Фон<input type="color" value={card.background} onChange={e=>update("background",e.target.value)}/></label>
+      <label>Колір тексту<input type="color" value={card.foreground} onChange={e=>update("foreground",e.target.value)}/></label>
+      <label>Шрифт<select value={card.font} onChange={e=>update("font",e.target.value)}>
+        <option value="sans">Без засічок</option><option value="serif">Із засічками</option>
+        <option value="mono">Моноширинний</option>
+      </select></label>
+      <label>Анімація<select value={card.animation} onChange={e=>update("animation",e.target.value)}>
+        <option value="slide">Зсув</option><option value="fade">Плавна поява</option>
+      </select></label>
+      {coldOpen && <label><input type="checkbox" checked={!!card.after_cold_open}
+        onChange={e=>update("after_cold_open",e.target.checked)}/> Після першої сцени</label>}
+    </div>}
+  </fieldset>;
+}
+
 export default function EditPlan({ job, api, post, act, onSaved }) {
   const plan = job.result.edit_plan;
   const [segments,setSegments] = useState(plan.segments);
@@ -23,8 +50,12 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
   const [preview,setPreview] = useState(null);
   const [saving,setSaving] = useState(false);
   const [library,setLibrary] = useState(null);
+  const [intro,setIntro] = useState(("intro" in plan?plan.intro:job.request.intro)??null);
+  const [outro,setOutro] = useState(("outro" in plan?plan.outro:job.request.outro)??null);
+  const [chapterTitles,setChapterTitles] = useState(plan.chapter_titles??job.request.chapter_titles??false);
   const path = "/jobs/"+job.id;
-  const length = segments.reduce((sum,s)=>sum+s.end_seconds-s.start_seconds,0);
+  const length = segments.reduce((sum,s)=>sum+s.end_seconds-s.start_seconds-
+    (s.transition==="crossfade"?(s.transition_duration??.5):0),(intro?.duration||0)+(outro?.duration||0));
   const change = (id,key,value) => setSegments(items=>items.map(s=>s.id===id?{...s,[key]:value}:s));
   const changeSound = (segment,index,key,value) => change(segment.id,"sounds",
     segment.sounds.map((sound,i)=>i===index?{...sound,[key]:value}:sound));
@@ -33,7 +64,7 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
   const save = (render) => act(async () => {
     setSaving(true);
     try {
-      const body = {revision:plan.revision,target_duration:target,segments:segments.map(
+      const body = {revision:plan.revision,target_duration:target,intro,outro,chapter_titles:chapterTitles,segments:segments.map(
         ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects})=>
           ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects}))};
       if (render) await post(path+"/render",body);
@@ -49,6 +80,13 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
     {target!==null && <label>Цільова тривалість, сек
       <input type="number" min="10" max="3600" value={target} onChange={e=>setTarget(+e.target.value)}/>
     </label>}
+    {job.request.mode==="longs" && !job.request.silence_removal && <details>
+      <summary>Заставка й кінцівка</summary>
+      <CardEditor label="Заставка" card={intro} onChange={setIntro} coldOpen/>
+      <CardEditor label="Кінцівка" card={outro} onChange={setOutro}/>
+      {job.result.narrative_plan && <label><input type="checkbox" checked={chapterTitles}
+        onChange={e=>setChapterTitles(e.target.checked)}/> Показувати назви розділів</label>}
+    </details>}
     {segments.map((s,index) => {
       const source = plan.sources[s.source_id];
       const start = s.start_seconds+s.source_offset, end = s.end_seconds+s.source_offset;

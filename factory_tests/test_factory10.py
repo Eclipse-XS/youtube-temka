@@ -146,6 +146,19 @@ def test_gameplay_plan_links_sources_and_leaves_unsupported_beats_empty():
     assert plan_gameplay([scarce],3,30,prefs)[:2]==([],0)
 
 
+def test_gameplay_hooks_are_diverse_and_require_payoff_inside_scene():
+    from factory.hooks import suggest_gameplay
+
+    candidate={'start_seconds':0,'end_seconds':8,'source_offset':40,'source_frame_times':[42,44,46],
+               'visual_review':{'category':'physics_glitch','observation':'The object moves through the floor',
+                                'trigger_frame':2,'payoff_frame':3,'uncertain':False}}
+    suggestions=suggest_gameplay(candidate,'uk')['candidates']
+    assert len({option['style'] for option in suggestions})==len(suggestions)==3
+    assert all('moves through the floor' in option['factual_support'] for option in suggestions)
+    assert suggest_gameplay({**candidate,'end_seconds':5})['method']=='no_hook'
+    assert suggest_gameplay({'category':'physics_glitch'})['candidates']==[]
+
+
 def test_caption_looks_and_retained_word_timings_are_independent(workspace):
     from factory.captions import appearance
     from subtitles import generate_ass

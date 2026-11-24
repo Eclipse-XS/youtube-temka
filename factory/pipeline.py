@@ -67,6 +67,15 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
         candidates=gameplay_candidates(events,scenes,request,duration,metadata['title'],coverage,progress.source_id)
         preview_resolution=max((r for r in metadata['resolutions'] if r<=min(resolution,480)),default=resolution)
         review_candidates(candidates,source,request,preview_resolution,root,progress)
+        preferred={'comedy':{'npc_behavior','ragdoll','absurd_interaction'},
+                   'physics':{'physics_glitch','animation_glitch','ragdoll'},
+                   'stunts':{'vehicle_crash','stunt_fail','police_chase_fail'}}.get(request.gameplay_focus, set())
+        for candidate in candidates:
+            components=candidate['evidence']['score_components']
+            bonus=6 if candidate['category'] in preferred else 0
+            components.update(profile_bonus=bonus,technical_quality=min(1,resolution/720))
+            candidate['score']=round(candidate['score']+bonus+5*bool(components['event_completeness']),3)
+        candidates.sort(key=lambda candidate:-candidate['score'])
         result={'candidates':candidates,'analysis':'gameplay_signals','analysis_outcome':'editorial_review_required',
                 'selection_summary':f'{len(candidates)} gameplay moments selected for review from sampled visual evidence.'}
     else:
@@ -389,6 +398,9 @@ def process(claim,assets=None):
                                   {'source-1':{'title':metadata['title'],'source':request.source,'end':end}})
                 review = {'version':1,'revision':1,'approved':False,'sources':review_sources,
                           'target_duration':result.get('target_duration'),
+                          'intro':request.intro.model_dump() if request.intro else None,
+                          'outro':request.outro.model_dump() if request.outro else None,
+                          'chapter_titles':request.chapter_titles,
                           'segments':[{**candidate,'id':i+1,'source_id':candidate.get('source_id','source-1'),
                                        'source_offset':candidate.get('source_offset',request.start),
                                        'transition':request.transition} for i,candidate in enumerate(candidates)]}
@@ -414,6 +426,7 @@ def process(claim,assets=None):
             candidates,request,source_limits,job['result'].get('edit_plan',{}).get('revision',1),
             result.get('target_duration') if compiling else None)
         scenes=render_timeline.compile_scenes(timeline,request)
+        cards=render_timeline.cards_for(timeline)
         revision_path=root/f"timeline-r{timeline['revision']}.json"
         if not revision_path.is_file():
             write_json_atomic(revision_path,timeline,ensure_ascii=True)
@@ -423,8 +436,8 @@ def process(claim,assets=None):
         force_audio=request.mode=='longs' and any(scene.sounds for scene in scenes)
         outputs=[];raw_sources={}
         last_source = None
-        compilation_position = 0
         compilation_ranges = []
+        hook_bindings=dict(job['result'].get('timeline_hook_bindings') or {})
         for i,scene in enumerate(scenes):
             candidate,clip_request=scene.candidate,scene.request
             automatic_hook,sounds,transition_seconds=scene.automatic_hook,scene.sounds,scene.fade_seconds
@@ -456,21 +469,29 @@ def process(claim,assets=None):
                 scene_start = scene.start_ms / 1000
                 append_transcript(transcript,clip_transcript,candidate['start_seconds'],candidate['end_seconds'],scene_start)
                 compilation_ranges.append({**candidate,'start_seconds':scene_start,'end_seconds':scene_start+length})
-                compilation_position = scene.end_ms / 1000
             hook_candidates=None
             if automatic_hook:
-                from .hooks import suggest
+                from .hooks import suggest, suggest_gameplay
                 progress.begin('hooks','ANALYZING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
                 evidence=' '.join(s['text'] for s in clip_transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds'])
-                hook_key=render_timeline.fingerprint([automatic_hook,evidence,request.metadata_language,
-                                                      clip_transcript['language'],request.llm_model,metadata['title']])
+                language=request.metadata_language or clip_transcript['language'] or 'en'
+                basis=candidate.get('visual_review') if request.gameplay_only else evidence
+                hook_key=render_timeline.fingerprint([automatic_hook,basis,language,request.llm_model,metadata['title']])
                 hook_checkpoint=root/f'hook-{hook_key}.json'
-                if hook_checkpoint.is_file():
+                binding=hook_bindings.get(automatic_hook)
+                if binding and binding['key']==hook_key:
+                    hook_candidates=binding['decision']
+                elif hook_checkpoint.is_file():
                     hook_candidates=json.loads(hook_checkpoint.read_text(encoding='utf-8'))
                 else:
-                    hook_candidates=suggest(evidence,request.metadata_language or clip_transcript['language'] or 'en',request.llm_model,metadata['title'])
+                    hook_candidates=(suggest_gameplay(candidate,language) if request.gameplay_only else
+                                     suggest(evidence,language,request.llm_model,metadata['title']))
                     write_json_atomic(hook_checkpoint,hook_candidates,ensure_ascii=True)
-                clip_request.hook=hook_candidates['candidates'][0]['text']
+                if not binding or binding['key']!=hook_key:
+                    hook_bindings[automatic_hook]={'key':hook_key,'decision':hook_candidates}
+                    update(result={'timeline_hook_bindings':hook_bindings})
+                suggestions=hook_candidates['candidates']
+                clip_request.hook=suggestions[0]['text'] if suggestions else ''
                 progress.done(message=hook_candidates['method'])
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'
@@ -554,18 +575,32 @@ def process(claim,assets=None):
             transcript['segments'].sort(key=lambda segment:segment['start'])
             transcript['text'] = ' '.join(s['text'] for s in transcript['segments'])
             write_json_atomic(root/'transcript.json',transcript,ensure_ascii=True)
-            transcript_artifacts(root,transcript,compilation_position if compiling else end-request.start)
+            transcript_artifacts(root,transcript,timeline['duration_ms']/1000 if compiling else end-request.start)
             update(result={'language':transcript['language']})
-        if request.mode=='longs' and len(outputs)>1:
+        if request.mode=='longs' and (len(outputs)>1 or cards):
+            playlist=[*scenes]
+            video_paths=[root/o['name'] for o in outputs]
+            source_paths=list(raw_sources.values())
+            for kind,card in cards.items():
+                key=render_timeline.fingerprint([card.settings.model_dump(),request.output_height])[:24]
+                path=root/f'card-{kind}-{key}.mp4'
+                progress.begin('rendering','RENDERING',operation=f'card-{kind}')
+                if not path.is_file():
+                    media.render_card(path,card,request,progress.tick)
+                progress.done()
+                index=int(card.settings.after_cold_open) if kind=='intro' else len(playlist)
+                playlist.insert(index,card)
+                video_paths.insert(index,path)
+                source_paths.insert(index,path)
             progress.begin('rendering','RENDERING',operation='assemble-long')
-            final=root/'long.mp4';media.assemble_timeline([root/o['name'] for o in outputs],final,scenes,request,progress.tick)
+            final=root/'long.mp4';media.assemble_timeline(video_paths,final,playlist,request,progress.tick,reencode=bool(cards))
             progress.done()
             progress.begin('validation','RENDERING',operation='assemble-long')
-            duration=sum(o['duration'] for o in outputs)-sum(s.overlap_ms for s in scenes)/1000
+            duration=timeline['duration_ms']/1000 if cards else sum(o['duration'] for o in outputs)-sum(s.overlap_ms for s in scenes)/1000
             validation=media.validate_output(final,duration,request=request)
             progress.done()
             progress.begin('retrieval','RENDERING',operation='assemble-edit-source')
-            raw=root/'long-source.mp4';media.assemble_timeline(list(raw_sources.values()),raw,scenes,request,progress.tick)
+            raw=root/'long-source.mp4';media.assemble_timeline(source_paths,raw,playlist,request,progress.tick,reencode=bool(cards))
             progress.done()
             raw_sources[final.name]=raw
             progress.begin('thumbnail','RENDERING',operation='assemble-long')

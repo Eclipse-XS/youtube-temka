@@ -85,6 +85,7 @@ const gameplayCategories = {
   police_chase_fail: "Невдала погоня", unexpected_survival: "Несподіване виживання",
   unexpected_death: "Несподівана смерть", combat_fail: "Невдалий бій",
   absurd_interaction: "Абсурдна взаємодія", visual_reaction: "Візуальна реакція",
+  npc_behavior: "Поведінка NPC", ragdoll: "Регдол",
   unknown_event: "Невизначена подія",
 };
 
@@ -466,6 +467,12 @@ export default function CreatePage({
             <label>Встановлена візуальна модель Ollama
               <input value={form.visual_model || ''} placeholder="Необов’язково, наприклад qwen3-vl:2b"
                 onChange={(e)=>set('visual_model',e.target.value.trim() || null)}/>
+            </label>
+            <label>Пріоритет добору
+              <select value={form.gameplay_focus||"balanced"} onChange={e=>set("gameplay_focus",e.target.value)}>
+                <option value="balanced">Усі ігрові події</option><option value="comedy">Комедія та NPC</option>
+                <option value="physics">Збої фізики й анімації</option><option value="stunts">Трюки й транспорт</option>
+              </select>
             </label>
           </>}
         </div>}

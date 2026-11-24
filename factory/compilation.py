@@ -6,10 +6,10 @@ from .render_timeline import fingerprint
 
 GAMEPLAY_THEMES = {
     'vehicle_crash': 'vehicles', 'stunt_fail': 'vehicles', 'police_chase_fail': 'vehicles',
-    'physics_glitch': 'physics', 'animation_glitch': 'physics',
+    'physics_glitch': 'physics', 'animation_glitch': 'physics', 'ragdoll': 'physics',
     'unexpected_survival': 'survival', 'unexpected_death': 'survival', 'combat_fail': 'survival',
     'absurd_interaction': 'interactions', 'unexpected_collision': 'interactions',
-    'visual_reaction': 'interactions',
+    'visual_reaction': 'interactions', 'npc_behavior': 'interactions',
 }
 
 

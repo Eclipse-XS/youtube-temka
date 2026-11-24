@@ -109,8 +109,7 @@ def gameplay_candidates(events, scenes, request, duration, title, coverage, sour
         scene_cut=cut_at<len(scenes) and scenes[cut_at]<=at+.5
         visible=min(35,175*increase)
         follow_through=min(15,len(following)*5)
-        sound=min(7,audio*35)
-        score=visible+follow_through+sound-(12 if scene_cut else 0)
+        score=visible+follow_through-(12 if scene_cut else 0)
         if score<=0:
             continue
         length=min(duration,request.maximum,max(request.minimum,8+(max(following,default=at)-at)*2))
@@ -122,10 +121,15 @@ def gameplay_candidates(events, scenes, request, duration, title, coverage, sour
                 'title':(title or 'Gameplay event')[:100],'language':'und',
                 'reason':'Visual activity and temporal context suggest a moment for review.',
                 'selection_method':'gameplay_signals','editorial_review_required':True,
+                'editorial_uncertainty':'sampled_signals',
                 'evidence':{'motion':round(motion,4),'motion_increase':round(increase,4),
                             'audio_onset':round(audio,4),'possible_cut':scene_cut,'follow_through_samples':following,
-                            'score_components':{'visual_change':round(visible,3),'follow_through':follow_through,
-                                                'sound':round(sound,3),'scene_cut_penalty':12 if scene_cut else 0}},
+                            'score_components':{'visual_change':round(visible,3),'surprise':round(visible,3),
+                                                'follow_through':follow_through,'visible_payoff':None,
+                                                'context_clarity':None,'visual_comprehensibility':None,
+                                                'comedic_contrast':None,'event_completeness':None,
+                                                'novelty':None,'hook_correspondence':None,
+                                                'scene_cut_penalty':12 if scene_cut else 0}},
                 'source_frame_times':[round(min(end-.02,max(start,point))+request.start,3)
                                       for point in (at-1,at,max(following,default=at+1))],
                 'coverage':coverage,'analysis_model':None}
