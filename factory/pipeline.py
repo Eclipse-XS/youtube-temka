@@ -115,7 +115,7 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
     if request.gameplay_only:
         proposal_limit = gameplay_proposal_limit(request) if proposal_limit is None else proposal_limit
         controls += (proposal_limit, request.workflow, request.metadata_language or request.language)
-    shared=stage_cache.cache_path('selection',[5 if request.gameplay_only else 3,identity,request.start,end,resolution,progress.source_id,controls,
+    shared=stage_cache.cache_path('selection',[6 if request.gameplay_only else 3,identity,request.start,end,resolution,progress.source_id,controls,
                                                request.gameplay_only,model,digest,signals,transcript]) if shareable else None
     cached=stage_cache.read_json(shared)
     if cached is not None:

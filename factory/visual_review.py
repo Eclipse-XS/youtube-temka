@@ -14,6 +14,7 @@ from .models import GameplayCategory
 
 INITIAL_CONTEXT = 4096
 EXPANDED_CONTEXT = 8192
+REVIEW_READ_TIMEOUT_SECONDS = 180
 
 
 class ActionFocus(BaseModel):
@@ -67,7 +68,7 @@ def frame_images(source, timestamps, resolution, work, tick):
         frame=work/f'frame-{index}.jpg'
         media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','1',
                    '-ss',str(at-origin),'-i',str(path),'-map','0:v:0','-frames:v','1',
-                   '-vf',"scale='if(gte(iw,ih),384,224)':'if(gte(iw,ih),224,384)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                   '-vf',"scale='if(gte(iw,ih),256,160)':'if(gte(iw,ih),160,256)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                    '-q:v','5','-threads','1',str(frame)],tick,timeout=30)
         if not frame.is_file() or not 0 < frame.stat().st_size <= 256*1024:
             raise ValueError('No bounded preview frame at the requested timestamp')
@@ -89,7 +90,7 @@ def review_candidates(groups, request, progress):
         extra.remove(localized)
         extra.insert(0, localized)
     url=config.OLLAMA+'/api/generate'
-    with httpx.Client(timeout=90,trust_env=False) as client, model_session(client,url,model) as session:
+    with httpx.Client(timeout=REVIEW_READ_TIMEOUT_SECONDS,trust_env=False) as client, model_session(client,url,model) as session:
         previous_source = progress.source_id
 
         def review_one(entry, timestamps):
