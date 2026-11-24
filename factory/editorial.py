@@ -25,6 +25,8 @@ def _speech_intervals(transcript,candidates):
 
 def assess(output,transcript,candidates,request,metadata,previous=(),preferences=None):
     preferences=preferences or {};technical=[];issues=[]
+    if request.subtitle_language:issues.append('translated_subtitles_require_review')
+    if output.get('hook_candidates'):issues.append('generated_hook_requires_review')
     validation=output.get('validation',{})
     if not validation.get('validated'):technical.append('output_not_technically_validated')
     if request.audio_mode=='silent' and validation.get('audio'):technical.append('silent_mode_has_audio')

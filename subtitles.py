@@ -149,7 +149,7 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
-def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0):
+def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0, max_words=None, *, preserve_cues=False):
     """
     Flatten transcript words for a clip range and group them into short blocks
     suitable for vertical video. Returns a list of blocks; each block is a list
@@ -159,9 +159,18 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     from old jobs on disk store unmerged tokens (the leading space is still
     present, so the boundary signal survives).
     """
+    if preserve_cues:
+        return [block for segment in transcript.get('segments', [])
+                for block in _collect_word_blocks({'segments':[segment]}, clip_start, clip_end,
+                                                  max_chars, max_duration, max_words)]
     flat_words = []
     for segment in transcript.get('segments', []):
-        flat_words.extend(segment.get('words', []))
+        timed=segment.get('words', [])
+        if timed:flat_words.extend(timed)
+        elif segment.get('text','').strip():
+            # Translated captions retain phrase boundaries, not fabricated
+            # per-word synchronization. Render the complete phrase as one event.
+            flat_words.append({'word':' '+segment['text'].strip(),'start':segment['start'],'end':segment['end']})
     flat_words = merge_continuation_words(flat_words)
 
     words = []
@@ -173,7 +182,7 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
             words.append({
                 'word': cleaned_word,
                 'start': max(0, word_info['start'] - clip_start),
-                'end': max(0, word_info['end'] - clip_start),
+                'end': max(0, min(clip_end,word_info['end']) - clip_start),
             })
 
     blocks = []
@@ -189,7 +198,8 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
         current_text_len = sum(len(w['word']) + 1 for w in current_block)
         duration = word['end'] - block_start
 
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration:
+        if (current_text_len + len(word['word']) > max_chars or duration > max_duration
+                or (max_words is not None and len(current_block) >= max_words)):
             blocks.append(current_block)
             current_block = [word]
             block_start = word['start']
@@ -201,12 +211,12 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     return blocks
 
 
-def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0):
+def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0, *, preserve_cues=False):
     """
     Generates an SRT file from the transcript for a specific time range.
     Groups words into short lines suitable for vertical video.
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration, preserve_cues=preserve_cues)
     if not blocks:
         return False
 
@@ -355,7 +365,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
                  margin_v=SAFE_MARGIN_V, split_ranges=None,
-                 reveal=False, shadow=0):
+                 reveal=False, shadow=0, max_words=None, *, preserve_cues=False):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -375,7 +385,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     0 it is the soft "clean" look; a hard outline does not need it.
     max_chars=1 puts one word on screen at a time.
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration, max_words,
+                                  preserve_cues=preserve_cues)
     if not blocks:
         return False
 

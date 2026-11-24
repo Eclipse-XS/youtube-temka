@@ -99,14 +99,35 @@ def test_worker_survives_first_job_and_processes_second(tmp_path,monkeypatch):
     assert len(done)==2 and {j['state'] for j in store.list_jobs()}=={'FAILED','READY'}
 
 
-def test_expired_processing_lease_preserves_checkpoints_for_manual_recovery(tmp_path,monkeypatch):
+def test_expired_processing_lease_requeues_and_fences_after_backoff(tmp_path,monkeypatch):
     monkeypatch.setattr(config,'DATA',tmp_path);monkeypatch.setattr(config,'SCRATCH',tmp_path/'scratch');monkeypatch.setattr(config,'DB',tmp_path/'db')
     job=store.create(req().model_dump());claim=store.claim('dead-worker')
     store.update(job['id'],claim['lease'],state='TRANSCRIBING',stage_update={'key':'transcription','status':'running','current':900,'total':1800,'unit':'seconds'})
     with store.connect() as db:db.execute('UPDATE jobs SET seen=0 WHERE id=?',(job['id'],))
     assert store.claim('replacement') is None
-    assert store.get(job['id'])['stages'][0]['current']==900
-    assert store.retry(job['id'])
+    recovering = store.get(job['id'])
+    assert recovering['stages'][0]['current']==900
+    assert recovering['state']=='QUEUED'
+    assert recovering['result']['failure']['code']=='WORKER_LEASE_EXPIRED'
+    monkeypatch.setattr(store.time,'time',lambda:recovering['result']['retry_at']+1)
     fresh=store.claim('replacement')
     with pytest.raises(InterruptedError):store.update(job['id'],claim['lease'],state='READY')
     assert fresh['lease']!=claim['lease']
+
+
+def test_transient_stage_retries_are_persisted_and_bounded(tmp_path,monkeypatch):
+    monkeypatch.setattr(config,'DATA',tmp_path)
+    monkeypatch.setattr(config,'SCRATCH',tmp_path/'scratch')
+    monkeypatch.setattr(config,'DB',tmp_path/'db')
+    now = 100
+    monkeypatch.setattr(store.time,'time',lambda:now)
+    job=store.create(req().model_dump())
+    failure={'code':'DOWNLOAD_RATE_LIMITED','stage':'retrieval','message':'rate limited','retryable':True}
+    for expected in ('QUEUED','QUEUED','FAILED'):
+        claim=store.claim('worker')
+        store.update(job['id'],claim['lease'],state='QUEUED',result={'failure':failure})
+        recovering=store.get(job['id'])
+        assert recovering['state']==expected
+        assert store.claim('worker') is None
+        now = recovering['result'].get('retry_at',now)+1
+    assert recovering['result']['failure']['attempt']==3

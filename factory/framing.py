@@ -18,7 +18,7 @@ def trajectory(source,duration):
         import cv2
     except ImportError:
         return None,{'strategy':'blur_fallback','reason':'Face detector unavailable'}
-    capture=cv2.VideoCapture(str(source))
+    capture=cv2.VideoCapture(str(source),cv2.CAP_FFMPEG,[cv2.CAP_PROP_N_THREADS,2])
     width=int(capture.get(cv2.CAP_PROP_FRAME_WIDTH));height=int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if not width or not height:
         capture.release()

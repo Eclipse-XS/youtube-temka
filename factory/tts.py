@@ -54,6 +54,11 @@ def setup():
 
 
 def synthesize(text,voice,speed,language,path,tick=lambda *_:None):
+    from .heavy import HEAVY_LOCK
+    with HEAVY_LOCK:return _synthesize(text,voice,speed,language,path,tick)
+
+
+def _synthesize(text,voice,speed,language,path,tick=lambda *_:None):
     if VOICES.get(voice)!=language:raise ValueError('Choose a Kokoro voice matching the detected EN/ES language. Other languages retain original audio.')
     state=status()
     if not state['runtime'] or not state['ready']:raise ValueError('Optional Kokoro is not ready. Complete its one-time setup in Settings or select Original Audio.')

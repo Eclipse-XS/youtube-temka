@@ -27,9 +27,10 @@ export default function PublisherPanel({
     });
   const refresh = async () => setData(await api("/publisher"));
   useEffect(() => {
-    refresh().catch(() => {});
-    const t = setInterval(() => refresh().catch(() => {}), 3000);
-    return () => clearInterval(t);
+    let stopped=false,t;
+    const poll=async()=>{try{await refresh();}catch{}if(!stopped)t=setTimeout(poll,3000);};
+    poll();
+    return () => {stopped=true;clearTimeout(t);};
   }, []);
   useEffect(() => {
     if (!channel && data.channels.length === 1)
@@ -119,6 +120,7 @@ export default function PublisherPanel({
         {channel && (
           <details>
             <summary>Правила каналу</summary>
+            <div className="grid"><label>Назва профілю<input value={policy.preferences.profile_name||''} onChange={e=>preference('profile_name',e.target.value)}/></label><label>Регіон<input value={policy.preferences.target_region||''} onChange={e=>preference('target_region',e.target.value)}/></label><label>Мова каналу<select value={policy.preferences.metadata_language||''} onChange={e=>preference('metadata_language',e.target.value||null)}><option value="">Мова джерела</option>{['en','es','pt-BR','de','ru','uk'].map(l=><option key={l}>{l}</option>)}</select></label><label>Макет за замовчуванням<select value={policy.preferences.editing_preset||'auto'} onChange={e=>preference('editing_preset',e.target.value)}>{['auto','smart','blur','gameplay','crop'].map(p=><option key={p}>{p}</option>)}</select></label></div>
             <div className="grid">
               <label>
                 Ліміт на добу
@@ -270,7 +272,7 @@ export default function PublisherPanel({
                 </select>
               </label>
               <label>
-                Публічний реліз · час браузера
+                Публічний реліз · {timezone}
                 <input
                   type="datetime-local"
                   disabled={!policy.public_allowed}
@@ -279,6 +281,7 @@ export default function PublisherPanel({
                 />
               </label>
             </div>
+            {!policy.public_allowed&&<p className="warning">Публічні публікації та розклад вимкнені для цього каналу. У «Правилах каналу» можна окремо дозволити ручний Public; автоматична публікація залишається незалежною.</p>}
             <button
               className="primary"
               disabled={
@@ -286,12 +289,14 @@ export default function PublisherPanel({
               }
               onClick={() =>
                 act(async () => {
+                  const target=data.channels.find(c=>c.id===channel);
+                  if(!window.confirm(`Підтвердити публікацію на каналі ${target?.title||channel} (${channel})? Режим: ${when?'scheduled':privacy}.`))return;
                   await post("/publisher/queue", {
                     job: current.job.id,
                     output: current.index,
                     channel,
                     privacy,
-                    publish_at: when ? new Date(when).toISOString() : null,
+                    publish_at_local: when || null,
                   });
                   await refresh();
                 })

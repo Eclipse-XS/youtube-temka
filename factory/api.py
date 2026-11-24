@@ -9,11 +9,12 @@ import time
 import uuid
 import re
 import mimetypes
+from typing import Literal
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import config, store, media
-from .models import JobRequest
+from .models import JobRequest, TimelineCaptionTrack, TimelineCard, TimelineEffect, TimelineHook, TimelineSound
 from .resources import preflight, usage
 
 
@@ -28,12 +29,17 @@ async def lifespan(app):
         app.state.local_worker=thread
     if os.environ.get('FACTORY_PUBLISHER','1')=='1':
         from .publisher import loop
-        threading.Thread(target=loop,args=(stop,),daemon=True).start()
+        app.state.publisher=threading.Thread(target=loop,args=(stop,),daemon=True)
+        app.state.publisher.start()
     if os.environ.get('FACTORY_ANALYTICS','1')=='1':
         from .analytics import loop as analytics_loop
-        threading.Thread(target=analytics_loop,args=(stop,),daemon=True).start()
+        app.state.analytics=threading.Thread(target=analytics_loop,args=(stop,),daemon=True)
+        app.state.analytics.start()
     yield
     stop.set()
+    for name in ('local_worker','publisher','analytics'):
+        thread=getattr(app.state,name,None)
+        if thread:thread.join(timeout=5)
 
 
 app=FastAPI(title='AI Content Factory',lifespan=lifespan)
@@ -68,6 +74,17 @@ class Login(BaseModel):
     token: str = Field(max_length=256)
 
 
+@app.get('/api/readiness')
+def deployment_readiness():
+    from .deployment import readiness
+    result=readiness()
+    result['services']={}
+    for name in ('local_worker','publisher','analytics'):
+        thread=getattr(app.state,name,None)
+        result['services'][name]='RUNNING' if thread and thread.is_alive() else 'DISABLED_OR_STOPPED'
+    return result
+
+
 @app.post('/api/session')
 def login(body:Login):
     from fastapi.responses import JSONResponse
@@ -91,7 +108,7 @@ def settings():
     from .model_setup import status
     from .publisher import channels
     from .tts import status as tts_status
-    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':15,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
+    return {'storage':usage(),'workers':store.workers(),'channels':channels(),'drive_configured':drive_is_configured(),'inference_mode':os.environ.get('OLLAMA_GPU_LAYERS','0'),'ollama_model':config.MODEL,'whisper_model':config.ASR_MODEL,'model_setup':status(),'tts':tts_status(),'publishing':{'enabled':bool(list(Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube')).glob('*.json'))),'state':'CONNECTED' if channels() else 'YOUTUBE_AUTH_REQUIRED','reason':'Use the one-time Desktop OAuth consent, discover the channel, then approve a versioned publishing draft. Public publishing requires explicit channel authorization.'},'limits':{'interval_minutes':1440,'audio_chunk_minutes':config.AUDIO_CHUNK_SECONDS/60,'concurrent_jobs':1},'notes':['Smart Crop samples faces on CPU; no-face footage falls back to a blurred background.','GPU inference is sequential; CPU/int8 is the default.','Remote workers process URL jobs with Drive enabled; uploaded local sources stay on controller.','Failed/cancelled scratch workspaces expire after 72 hours; running jobs are excluded.']}
 
 
 @app.post('/api/settings/check-ollama')
@@ -124,9 +141,12 @@ def voice_preview(body:VoicePreview):
     text='A clear, friendly voice for your next video.' if language=='en' else 'Una voz clara y agradable para tu próximo vídeo.'
     folder=config.DATA/'voice-previews';folder.mkdir(parents=True,exist_ok=True)
     path=folder/(body.voice+'.wav')
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Processing slot busy; try the voice preview after the current task')
     try:
         if not path.is_file():synthesize(text,body.voice,1,language,path)
     except (ValueError,RuntimeError) as error:raise HTTPException(409,str(error)) from None
+    finally:HEAVY_LOCK.release()
     return {'url':'/api/tts/previews/'+body.voice+'.wav'}
 
 
@@ -190,13 +210,14 @@ def probe(body:Source):
 
 
 @app.post('/api/uploads')
-async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False),music:bool=Form(False)):
+async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), background:bool=Form(False),music:bool=Form(False),logo:bool=Form(False),license:str=Form('Operator-confirmed rights; license documentation not supplied'),category:str=Form('custom')):
     if not rights_confirmed:
         raise HTTPException(422,'Source/background rights confirmation is required')
     suffix=Path(file.filename or '').suffix.lower()
-    if suffix not in (('.mp3','.wav','.mp4') if music else ('.mp4','.mkv','.mov')) or (background and suffix!='.mp4'):
+    if sum((background,music,logo))>1:raise HTTPException(422,'Choose only one asset type')
+    if suffix not in (('.png',) if logo else (('.mp3','.wav','.mp4') if music else ('.mp4','.mkv','.mov'))) or (background and suffix!='.mp4'):
         raise HTTPException(422,'Upload MP4/MKV/MOV; backgrounds must be MP4')
-    folder=config.DATA/'music' if music else ((config.DATA/'backgrounds') if background else config.SCRATCH/'uploads')
+    folder=config.DATA/'logos' if logo else (config.DATA/'music' if music else ((config.DATA/'backgrounds') if background else config.SCRATCH/'uploads'))
     folder.mkdir(parents=True,exist_ok=True)
     name=uuid.uuid4().hex+suffix
     target=folder/name
@@ -207,16 +228,60 @@ async def upload(file:UploadFile=File(...), rights_confirmed:bool=Form(...), bac
                 if target.stat().st_size+len(chunk)>2*1024**3:
                     raise ValueError('Upload exceeds 2 GB; use a bounded source URL or a smaller file')
                 output.write(chunk)
-        if not background and not music:
+        if not background and not music and not logo:
             metadata=media.probe('upload:'+name)
         else:
             metadata=None
+            from .library import register
+            name,duplicate=register(target,'logos' if logo else ('music' if music else 'backgrounds'),license[:1000],'Operator upload',category[:80])
     except Exception:
         target.unlink(missing_ok=True)
         raise HTTPException(400,'Upload failed validation or exceeded available storage') from None
     finally:
         await file.close()
-    return {'source':'upload:'+name,'name':name,'metadata':metadata}
+    return {'source':'upload:'+name,'name':name,'metadata':metadata,'duplicate':duplicate if background or music or logo else False}
+
+
+@app.get('/api/library')
+def library():
+    from .library import entries
+    return entries()
+
+
+@app.post('/api/library/bootstrap')
+def starter_library():
+    from .library import bootstrap
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current heavy task before creating starter assets')
+    try:return bootstrap()
+    finally:HEAVY_LOCK.release()
+
+
+@app.get('/api/library/{kind}/{name}')
+def library_file(kind:str,name:str):
+    from .assets import asset_path
+    try:return FileResponse(asset_path(kind,name))
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+
+
+@app.get('/api/library/{kind}/{name}/frame')
+def library_frame(kind:str,name:str):
+    from .assets import asset_path
+    from .heavy import HEAVY_LOCK
+    try:source=asset_path(kind,name)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+    folder=config.DATA/'asset-previews';folder.mkdir(parents=True,exist_ok=True)
+    target=folder/(kind+'-'+name+'.jpg')
+    if not target.is_file():
+        if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Preview waits for the active processing task')
+        try:
+            temporary=target.with_suffix('.part.jpg')
+            try:
+                media.run([media.ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','1','-i',str(source),'-vf','scale=270:-2','-frames:v','1','-threads','1',str(temporary)],timeout=30)
+                temporary.replace(target)
+            finally:temporary.unlink(missing_ok=True)
+        finally:HEAVY_LOCK.release()
+    return FileResponse(target)
 
 
 @app.get('/api/backgrounds')
@@ -224,9 +289,78 @@ def backgrounds():
     return [p.name for p in (config.DATA/'backgrounds').glob('*.mp4')]
 
 
+@app.get('/api/source-preview/{name}')
+def source_preview(name:str):
+    try:
+        path=media.local_source('upload:'+name)
+        return FileResponse(path)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/assets/music')
 def music_assets():
     return [p.name for p in (config.DATA/'music').glob('*') if p.suffix in ('.mp3','.wav','.mp4')]
+
+
+@app.post('/api/preflight')
+def preflight_job(body: JobRequest):
+    import math
+    from .models import CompilationSource
+    from .signals import MAX_WINDOWS, WINDOW_SECONDS
+    from .timeline import story_part_count
+
+    sources = body.sources or [CompilationSource(source=body.source,start=body.start,end=body.end)]
+    checked = []
+    for index, item in enumerate(sources,1):
+        record = {'source_id':item.source_id or f'source-{index}'}
+        try:
+            data = media.probe(item.source)
+            end = min(data['duration'], item.end or data['duration'])
+            span = end-item.start
+            if not 0 < span <= 86400:
+                raise ValueError('Choose a selected range of up to 24 hours inside the source')
+            if body.resolution != 'best' and data['platform']!='local' and not any(r<=body.resolution for r in data['resolutions']):
+                raise ValueError('No source format matches the selected input resolution')
+            if body.workflow=='story':
+                record['story_count'] = story_part_count(body,span)
+            if any(b>end for _,b in body.intervals):
+                raise ValueError('A manual interval extends beyond the source')
+            if any(b>end for _,b in item.exclude):
+                raise ValueError('An excluded interval extends beyond the source')
+            windows=math.ceil(span/WINDOW_SECONDS)
+            if not body.gameplay_only:
+                windows=min(windows,MAX_WINDOWS)
+            if body.intervals:
+                windows=0
+            audio=span if data.get('has_audio',True) else 0
+            if body.gameplay_only:
+                audio=min(audio,body.maximum*body.count) if body.captions or (body.audio_mode=='voiceover' and not body.tts_text) else 0
+            resolutions=data['resolutions']
+            limit=max(resolutions) if body.resolution=='best' else body.resolution
+            resolution=min(max(resolutions),limit) if data['platform']=='local' else max(r for r in resolutions if r<=limit)
+            record.update(title=data['title'],duration=data['duration'],selected_seconds=span,
+                          selected_start=item.start,selected_end=end,audio_seconds_upper_bound=audio,
+                          signal_windows=windows,input_resolution=resolution)
+        except (ValueError, media.MediaFailure) as error:
+            record['error'] = str(error)[:500]
+        except Exception:
+            record['error'] = 'Media is unavailable. Check access, format or connection.'
+        checked.append(record)
+    audio=sum(item.get('audio_seconds_upper_bound',0) for item in checked)
+    if body.gameplay_only:
+        audio=min(audio,body.maximum*body.count)
+    target=body.target_duration or (900 if body.workflow=='compilation' else body.maximum*body.count)
+    return {'sources':checked,'ready':all('error' not in item for item in checked),
+            'shorts_max_seconds':config.SHORTS_MAX_SECONDS,
+            'estimate':{'selected_seconds':sum(item.get('selected_seconds',0) for item in checked),
+                        'audio_seconds_upper_bound':audio,
+                        'asr_blocks':body.count*math.ceil(body.maximum/config.AUDIO_CHUNK_SECONDS)
+                                     if body.gameplay_only and audio else math.ceil(audio/config.AUDIO_CHUNK_SECONDS),
+                        'signal_windows':sum(item.get('signal_windows',0) for item in checked),
+                        'signal_fps':body.gameplay_scan_fps if body.gameplay_only else 2,
+                        'text_call_limit':body.max_text_model_calls,
+                        'visual_call_limit':body.max_visual_model_calls if body.gameplay_only and body.visual_model else 0,
+                        'output_target_seconds':target,'output_fps':None if body.preserve_fps else 30}}
 
 
 @app.post('/api/jobs',status_code=201)
@@ -234,13 +368,27 @@ def create(body:JobRequest):
     body.asr_model=body.asr_model or config.ASR_MODEL
     body.llm_model=body.llm_model or config.MODEL
     if body.publish_channel:body.metadata_preferences=store.preferences(body.publish_channel)
+    if body.background_mode=='random' or (body.background_category and body.background_mode=='auto'):
+        import random
+        from .library import entries
+        choices=[a['name'] for a in entries() if a['kind']=='backgrounds' and a['availability']=='AVAILABLE' and (not body.background_category or a['category']==body.background_category)]
+        if not choices:raise HTTPException(409,'No licensed asset in this category; import authorized media or choose another category')
+        body.background=random.choice(choices) if choices else None
+        body.background_mode='specific'
     if body.publish_automatic:
         from .publisher import channels
         policy=next((c for c in channels() if c['id']==body.publish_channel),None)
         if not policy or not policy['public_allowed'] or not policy['automatic']:
             raise HTTPException(409,'Explicitly enable automatic public publishing for this authenticated channel first')
     try:
-        if body.source.startswith('edit:'):
+        if body.workflow=='compilation':
+            for index, item in enumerate(body.sources,1):
+                try:
+                    if not media.local_source(item.source):
+                        media.validate_url(item.source)
+                except ValueError as error:
+                    raise ValueError(f'Source {index}: {error}') from error
+        elif body.source.startswith('edit:'):
             _,origin,index=body.source.split(':')
             original=store.get(origin)
             if not original or original['state']!='READY' or not original['result']['outputs'][int(index)].get('edit_source'):raise ValueError('Editable source unavailable; re-upload this older source once')
@@ -252,12 +400,14 @@ def create(body:JobRequest):
         preflight()
     except RuntimeError as error:
         raise HTTPException(409,str(error)) from None
-    return store.create(body.model_dump())
+    try:return store.create(body.model_dump())
+    except ValueError as error:raise HTTPException(409,str(error)) from None
 
 
 @app.get('/api/jobs')
-def jobs():
-    return store.list_jobs()
+def jobs(limit:int=50,offset:int=0):
+    if not 1<=limit<=200 or offset<0:raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
+    return store.list_jobs(limit,offset)
 
 
 @app.get('/api/jobs/{jid}')
@@ -274,6 +424,14 @@ def events(jid:str):
     return store.events(jid)
 
 
+@app.get('/api/jobs/{jid}/operations')
+def job_operations(jid:str,limit:int=200,offset:int=0):
+    if not 1<=limit<=200 or offset<0:
+        raise HTTPException(422,'Use limit 1-200 and a nonnegative offset')
+    get_job(jid)
+    return store.operations(jid,limit,offset)
+
+
 @app.post('/api/jobs/{jid}/cancel')
 def cancel(jid:str):
     store.cancel(jid)
@@ -285,6 +443,137 @@ def retry(jid:str):
     if not store.retry(jid):
         raise HTTPException(409,'Only failed, blocked or cancelled jobs can be retried')
     return get_job(jid)
+
+
+class EditSegment(BaseModel):
+    id: int = Field(ge=1, le=30)
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    transition: Literal['cut','fade','crossfade'] = 'cut'
+    transition_duration: float | None = Field(default=None, ge=.1, le=2, allow_inf_nan=False)
+    hook: TimelineHook | None = None
+    sounds: list[TimelineSound] = Field(default_factory=list, max_length=8)
+    effects: list[TimelineEffect] = Field(default_factory=list, max_length=12)
+    caption_track: TimelineCaptionTrack | None = None
+
+
+class EditPlanUpdate(BaseModel):
+    revision: int = Field(ge=1)
+    segments: list[EditSegment] = Field(min_length=1, max_length=30)
+    target_duration: float | None = Field(default=None,ge=10,le=3600,allow_inf_nan=False)
+    intro: TimelineCard | None = None
+    outro: TimelineCard | None = None
+    chapter_titles: bool = False
+
+
+@app.get('/api/jobs/{jid}/edit-plan')
+def get_edit_plan(jid: str):
+    plan = get_job(jid)['result'].get('edit_plan')
+    if not plan:
+        raise HTTPException(404,'No edit plan available')
+    return plan
+
+
+@app.get('/api/jobs/{jid}/timeline/{revision}')
+def timeline_revision(jid: str, revision: int):
+    job = get_job(jid)
+    timeline = job['result'].get('render_timeline')
+    if timeline and timeline['revision'] == revision:
+        return timeline
+    snapshot = config.SCRATCH/jid/f'timeline-r{revision}.json'
+    if snapshot.is_file():
+        return FileResponse(snapshot, media_type='application/json')
+    raise HTTPException(404,'Timeline revision not found')
+
+
+@app.post('/api/jobs/{jid}/timeline/{revision}/render')
+def replay_timeline(jid: str, revision: int):
+    try:
+        store.replay_timeline(jid,revision)
+    except KeyError:
+        raise HTTPException(404,'Job not found') from None
+    except InterruptedError as error:
+        raise HTTPException(409,str(error)) from None
+    return get_job(jid)
+
+
+@app.get('/api/jobs/{jid}/edit-plan/{segment_id}/captions')
+def edit_caption_cues(jid: str, segment_id: int):
+    from .compilation import append_transcript
+    from .models import CaptionCue
+
+    job = get_job(jid)
+    plan = job['result'].get('edit_plan') or {}
+    segment = next((item for item in plan.get('segments', []) if item['id'] == segment_id), None)
+    if segment is None:
+        raise HTTPException(404,'Scene not found')
+    track = segment.get('caption_track') or {}
+    if track.get('mode') == 'manual':
+        return {'cues':track.get('cues',[])}
+    root = config.SCRATCH/jid
+    timeline_path = root/'timeline.json'
+    transcript = {'segments':[], 'language':None}
+    start, end = segment['start_seconds'], segment['end_seconds']
+    if timeline_path.is_file():
+        timeline = json.loads(timeline_path.read_text(encoding='utf-8'))
+        for index, scene in enumerate(timeline.get('segments', []), 1):
+            if scene['segment_id'] != str(segment_id):
+                continue
+            retained = root/f'edit-clip-{index}.json'
+            offset = segment['source_offset']
+            if (retained.is_file() and scene['source_id'] == segment['source_id'] and
+                    scene['source_start_ms'] == round((offset+start)*1000) and scene['source_end_ms'] == round((offset+end)*1000)):
+                transcript = json.loads(retained.read_text(encoding='utf-8'))
+            break
+    if not transcript['segments'] and not JobRequest.model_validate(job['request']).gameplay_only:
+        folder = root/segment['source_id'] if job['request'].get('workflow') == 'compilation' else root
+        source = folder/'transcript.json'
+        if source.is_file():
+            append_transcript(transcript,json.loads(source.read_text(encoding='utf-8')),start,end,0)
+    cues = []
+    position = 0
+    for speech in transcript['segments'][:400]:
+        begin, finish = max(position, speech['start']), min(end-start, speech['end'])
+        if finish <= begin or not speech['text'].strip():
+            continue
+        cue = {'text':speech['text'][:300], 'start':begin, 'end':finish, 'words':speech.get('words',[])}
+        try:
+            value = CaptionCue.model_validate(cue)
+        except ValueError:
+            value = CaptionCue.model_validate({**cue,'words':[]})
+        cues.append(value.model_dump())
+        position = finish
+    return {'cues':cues}
+
+
+def save_edit_plan(jid, body, approve=False, *, preview=False):
+    try:
+        return store.edit_plan(jid,body.revision,[item.model_dump(exclude_unset=True) |
+                                                  {'transition':item.transition} for item in body.segments],
+                               body.target_duration,approve,
+                               branding=body.model_dump(include=body.model_fields_set & {'intro','outro','chapter_titles'}),
+                               preview=preview)
+    except KeyError:
+        raise HTTPException(404,'Job not found') from None
+    except InterruptedError as error:
+        raise HTTPException(409,str(error)) from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
+
+
+@app.patch('/api/jobs/{jid}/edit-plan')
+def revise_edit_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body)
+
+
+@app.post('/api/jobs/{jid}/render')
+def render_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body,approve=True)
+
+
+@app.post('/api/jobs/{jid}/preview')
+def preview_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body,preview=True)
 
 
 class Approval(BaseModel):
@@ -309,6 +598,29 @@ def generate_metadata(jid:str):
     if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'The processing slot is busy. Metadata regeneration can run after the current GPU task finishes.')
     try:return regenerate(jid)
     except (ValueError,KeyError,IndexError) as error:raise HTTPException(409,str(error)) from None
+    finally:HEAVY_LOCK.release()
+
+
+@app.post('/api/jobs/{jid}/outputs/{index}/hooks')
+def suggest_hooks(jid:str,index:int):
+    from .drafts import contexts_for_job
+    from .hooks import suggest, suggest_gameplay
+    from .heavy import HEAVY_LOCK
+    if not HEAVY_LOCK.acquire(False):raise HTTPException(409,'Wait for the current processing stage')
+    try:
+        job=get_job(jid)
+        if index<0:raise ValueError('Invalid output')
+        request=JobRequest.model_validate(job['request'])
+        if request.gameplay_only:
+            if index>=len(job['result'].get('outputs',[])):
+                raise ValueError('Invalid output')
+            candidates=job['result'].get('candidates',[])
+            candidate={'source_offset':request.start,**candidates[index]} if index<len(candidates) else {}
+            return suggest_gameplay(candidate,
+                                    request.metadata_language or request.language or 'en')
+        ctx=contexts_for_job(job)[index]
+        return suggest(ctx['transcript'],ctx['metadata_language'],job['request'].get('llm_model'),ctx['source_title'])
+    except (ValueError,IndexError,KeyError) as error:raise HTTPException(409,str(error)) from None
     finally:HEAVY_LOCK.release()
 
 
@@ -344,7 +656,8 @@ def output(jid:str,name:str,request:Request):
         if item.get('thumbnail'):
             manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
     manifests.update(job['result'].get('artifacts',{}))
-    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt'}
+    preview=job['result'].get('preview') or {}
+    allowed=set(manifests)|set(preview.get('files',[]))|{'transcript.json','transcript.srt','transcript.vtt','timeline.json','reproducibility.json'}
     if name not in allowed:
         raise HTTPException(404,'Artifact not found')
     root=config.SCRATCH/jid
@@ -409,9 +722,12 @@ def claim(body:Worker):
         from .assets import manifest
         try:
             result=claimed['job']['result']
-            if 'asset_manifest' not in result:
-                result['asset_manifest']=manifest(claimed['job']['request'])
-                store.update(claimed['job']['id'],claimed['lease'],result={'asset_manifest':result['asset_manifest']})
+            timeline=result.get('render_timeline')
+            revision=timeline['revision'] if timeline else None
+            if 'asset_manifest' not in result or result.get('asset_timeline_revision')!=revision:
+                result['asset_manifest']=manifest(claimed['job']['request'],timeline)
+                store.update(claimed['job']['id'],claimed['lease'],result={'asset_manifest':result['asset_manifest'],
+                                                                       'asset_timeline_revision':revision})
             claimed['assets']=result['asset_manifest']
         except ValueError as error:
             store.update(claimed['job']['id'],claimed['lease'],state='BLOCKED',error=str(error))
@@ -443,13 +759,18 @@ class Checkpoint(BaseModel):
 
 @app.post('/api/workers/jobs/{jid}')
 def checkpoint(jid:str,body:Checkpoint):
-    states={'PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED'}
+    states={'QUEUED','PROBING','DOWNLOADING','TRANSCRIBING','ANALYZING','RENDERING','UPLOADING','READY','FAILED','BLOCKED','REVIEW'}
     if body.state and body.state not in states:
         raise HTTPException(422,'Invalid worker state')
     try:
         store.update(jid,**body.model_dump())
     except InterruptedError:
         raise HTTPException(409,'Worker lease lost or job cancelled') from None
+    except ValueError as error:
+        raise HTTPException(422,str(error)) from None
+    if body.state=='READY':
+        from .retention import register
+        register(store.get(jid))
     return {'ok':True}
 
 
@@ -485,6 +806,10 @@ def sync_analytics(channel:str):
 
 
 class ChannelPreferences(BaseModel):
+    profile_name:str=Field(default='',max_length=100)
+    target_region:str=Field(default='',max_length=20)
+    content_category:str=Field(default='auto',max_length=40)
+    editing_preset:str=Field(default='auto',pattern=r'^(auto|smart|crop|blur|gameplay)$')
     metadata_language:str|None=Field(default=None,pattern=r'^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$')
     category_id:str|None=Field(default=None,pattern=r'^\d{1,3}$')
     description_footer:str=Field(default='',max_length=500)
@@ -492,6 +817,39 @@ class ChannelPreferences(BaseModel):
     auto_approve:bool=False
     max_silence_fraction:float=Field(default=.65,ge=.1,le=.8)
     timezone:str=Field(default='Europe/Kyiv',max_length=80)
+
+
+class RetentionPolicy(BaseModel):
+    enabled:bool=False
+    maximum_packages:int=Field(default=50,ge=1,le=10000)
+    grace_days:int=Field(default=7,ge=1,le=365)
+
+
+@app.get('/api/storage/retention')
+def retention_status():
+    from .retention import snapshot
+    return snapshot()
+
+
+@app.post('/api/storage/retention/settings')
+def retention_settings(body:RetentionPolicy):
+    from .retention import configure
+    return configure(body.model_dump())
+
+
+@app.post('/api/storage/retention/run')
+def retention_run(dry_run:bool=True):
+    from .retention import cleanup
+    try:return cleanup(dry_run)
+    except ValueError as error:raise HTTPException(409,str(error)) from None
+
+
+@app.post('/api/storage/retention/{jid}/protect')
+def retention_protect(jid:str,body:Approval):
+    from .retention import protect
+    try:protect(jid,body.approved)
+    except ValueError as error:raise HTTPException(404,str(error)) from None
+    return {'protected':body.approved}
 
 
 class Policy(BaseModel):
@@ -526,15 +884,21 @@ class Publication(BaseModel):
     description:str|None=Field(default=None,max_length=5000)
     privacy:str='private'
     publish_at:str|None=None
+    publish_at_local:str|None=None
 
 
 @app.post('/api/publisher/queue')
 def queue_publication(body:Publication):
     from .publisher import enqueue
     values=body.model_dump()
+    local=values.pop('publish_at_local')
     values['jid']=values.pop('job')
     values['index']=values.pop('output')
     try:
+        if local:
+            if values['publish_at']:raise ValueError('Choose either UTC or channel-local time')
+            from .calendar import local_time
+            values['publish_at']=local_time(local,store.preferences(body.channel).get('timezone','Europe/Kyiv'))
         return {'id':enqueue(**values)}
     except ValueError as error:
         raise HTTPException(409,str(error)) from None
