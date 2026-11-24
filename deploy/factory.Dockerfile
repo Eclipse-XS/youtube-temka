@@ -4,6 +4,8 @@ FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf22
 # installed EJS solver runs with restricted runtime permissions.
 COPY --from=denoland/deno:bin@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 /deno /usr/local/bin/deno
 WORKDIR /app
+ARG FACTORY_BUILD_COMMIT
+ENV FACTORY_BUILD_COMMIT=${FACTORY_BUILD_COMMIT}
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY requirements-factory.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 300 --retries 8 -r requirements-factory.lock

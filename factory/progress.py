@@ -18,13 +18,20 @@ class Progress:
         self.model_requests=0
         self.model_limits=None
         self.model_usage={}
+        self.installed_models=None
+        self.cache_hits={}
+        self.stage_seconds={}
+        self.inference_metrics=[]
+
+    def reused(self, stage):
+        self.cache_hits[stage]=self.cache_hits.get(stage,0)+1
 
     def begin(self,key,state=None,total=None,unit=None,message=None,*,operation=None,**details):
         self.active=key
         self.last_tick=time.monotonic()
         self.model_requests=0
         s={'key':key,'status':'running','current':None,'total':total,'unit':unit,'message':message,
-           'source_id':self.source_id,'operation_id':operation or key,'details':details}
+           'source_id':self.source_id,'operation_id':operation or key,'details':details,'started_at':self.last_tick}
         self.counters[key]=s
         self.update(state,result={'active_stage':key},stage_update=s)
 
@@ -48,6 +55,9 @@ class Progress:
            'status':status,'error_code':error_code}
         if message is not None:s['message']=message
         if status=='completed' and s.get('total') is not None:s['current']=s['total']
+        started=s.pop('started_at',None)
+        if started is not None:
+            self.stage_seconds[key]=self.stage_seconds.get(key,0)+time.monotonic()-started
         self.update(stage_update=s)
         self.counters.pop(key,None)
         if key==self.active:self.active=None
@@ -75,6 +85,9 @@ class Progress:
         return remaining
 
     def model(self,operation,status,details,*,error_code=None):
+        if status in ('completed','failed','skipped'):
+            self.inference_metrics.append({'operation':operation,'source_id':self.source_id,
+                                           'status':status,'error_code':error_code,**details})
         self.update(stage_update={'key':self.active or 'inference','source_id':self.source_id,
                                  'operation_id':operation,'status':status,'project':False,
                                  'error_code':error_code,'details':details})

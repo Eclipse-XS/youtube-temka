@@ -297,6 +297,16 @@ def test_manual_caption_track_revises_without_speech_analysis(owned_sources,monk
     assert revised['segments'][0]['caption_revision']==3
     corrected=output.read_text(encoding='utf-8-sig')
     assert 'Corrected action' in corrected and 'First action' not in corrected
+    evidence=json.loads((output.parent/'reproducibility.json').read_text(encoding='utf-8'))
+    assert len(evidence['sources']['source-1']['sha256'])==64
+    assert evidence['timeline_revision']==revised['revision']
+    monkeypatch.setattr(media,'render',lambda *_args,**_kwargs:pytest.fail('Unexpected scene re-encode'))
+    store.replay_timeline(job['id'],revised['revision'])
+    process(store.claim('fixture'))
+    replayed=store.get(job['id'])
+    assert replayed['state']=='READY',replayed['error']
+    assert replayed['result']['outputs'][0]['output_hash']==done['result']['outputs'][0]['output_hash']
+    assert replayed['result']['cache_hits']['scene_render']==1
 
 
 def test_preview_uses_edited_timeline_and_final_reuses_source_clip(owned_sources,monkeypatch):

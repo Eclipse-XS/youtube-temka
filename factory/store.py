@@ -396,6 +396,26 @@ def edit_plan(jid, revision, edits, target, approve=False, *, branding=None, pre
         return plan
 
 
+def replay_timeline(jid, revision):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT state,request,result FROM jobs WHERE id=?',(jid,)).fetchone()
+        if row is None:
+            raise KeyError(jid)
+        result = json.loads(row['result'])
+        timeline = result.get('render_timeline')
+        if (row['state'] != 'READY' or json.loads(row['request']).get('save_drive',True) or
+                not timeline or timeline['revision'] != revision):
+            raise InterruptedError('Only the current approved local timeline can be replayed')
+        result['previous_timeline_outputs'] = result.pop('outputs',[])
+        result.pop('clips_completed',None)
+        result.pop('publishing_state',None)
+        now = time.time()
+        db.execute("UPDATE jobs SET state='QUEUED',result=?,seen=?,error=NULL WHERE id=?",
+                   (json.dumps(result,ensure_ascii=False),now,jid))
+        db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,now,'QUEUED',f'Replay of approved revision {revision}'))
+
+
 def approve(jid,index,value):
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')

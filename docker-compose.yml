@@ -52,6 +52,7 @@ services:
       dockerfile: deploy/factory.Dockerfile
       args:
         WITH_TTS: ${WITH_TTS:-0}
+        FACTORY_BUILD_COMMIT: ${FACTORY_BUILD_COMMIT:-}
     environment:
       <<: *worker-environment
       WORKER_ID: ${CONTROLLER_WORKER_ID:-worker-a}
@@ -90,6 +91,7 @@ services:
       dockerfile: deploy/factory.Dockerfile
       args:
         WITH_TTS: ${WITH_TTS:-0}
+        FACTORY_BUILD_COMMIT: ${FACTORY_BUILD_COMMIT:-}
     environment:
       <<: *worker-environment
       CONTROLLER_URL: ${CONTROLLER_URL:-}

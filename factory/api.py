@@ -486,6 +486,17 @@ def timeline_revision(jid: str, revision: int):
     raise HTTPException(404,'Timeline revision not found')
 
 
+@app.post('/api/jobs/{jid}/timeline/{revision}/render')
+def replay_timeline(jid: str, revision: int):
+    try:
+        store.replay_timeline(jid,revision)
+    except KeyError:
+        raise HTTPException(404,'Job not found') from None
+    except InterruptedError as error:
+        raise HTTPException(409,str(error)) from None
+    return get_job(jid)
+
+
 @app.get('/api/jobs/{jid}/edit-plan/{segment_id}/captions')
 def edit_caption_cues(jid: str, segment_id: int):
     from .compilation import append_transcript
@@ -646,7 +657,7 @@ def output(jid:str,name:str,request:Request):
             manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
     manifests.update(job['result'].get('artifacts',{}))
     preview=job['result'].get('preview') or {}
-    allowed=set(manifests)|set(preview.get('files',[]))|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
+    allowed=set(manifests)|set(preview.get('files',[]))|{'transcript.json','transcript.srt','transcript.vtt','timeline.json','reproducibility.json'}
     if name not in allowed:
         raise HTTPException(404,'Artifact not found')
     root=config.SCRATCH/jid

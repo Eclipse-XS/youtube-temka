@@ -108,6 +108,15 @@ def test_gameplay_processing_scans_every_window_and_skips_speech(workspace,monke
     event=done['result']['candidates'][0]
     assert event['category']=='unknown_event' and event['editorial_review_required']
 
+    monkeypatch.setattr(signals,'scan',lambda *args,**kwargs:pytest.fail('unexpected rescan'))
+    again=store.create(request.model_dump())
+    pipeline.process(store.claim('fixture'))
+    repeated=store.get(again['id'])
+    assert repeated['state']=='READY',repeated['error']
+    assert set(repeated['result']['cache_hits']) >= {'source_metadata','visual_signals','candidate_discovery',
+                                                    'selected_media','scene_render'}
+    assert repeated['result']['outputs'][0]['output_hash']==done['result']['outputs'][0]['output_hash']
+
 
 def test_visual_review_cannot_point_to_an_unseen_or_earlier_payoff():
     decision={'category':'unexpected_collision','observation':'Two cars touch','setup':'Two cars approach',

@@ -40,6 +40,26 @@ def manifest(request, timeline=None):
     return result
 
 
+def timeline_asset_files(request, background, effects, synced=None):
+    synced = synced or {}
+    paths = {'background':background} if request.mode == 'shorts' and background else {}
+    requested = [('music',request.music_asset),('logos',request.logo_asset)]
+    for effect in effects:
+        if effect.kind in ('video_overlay','image_overlay'):
+            requested.append(('backgrounds' if effect.kind == 'video_overlay' else 'logos',effect.asset))
+    for library,name in requested:
+        if name:
+            paths[library+':'+name] = synced.get((library,name)) or config.DATA/library/name
+    return paths
+
+
+def timeline_asset_identities(request, background, effects, synced=None):
+    from .stage_cache import file_identity
+
+    paths = timeline_asset_files(request,background,effects,synced)
+    return {key:file_identity(path) if path.is_file() else None for key,path in paths.items()}
+
+
 def sync(client, items, tick=lambda:None):
     """One worker pipeline owns its cache. Keep only current-job assets, max 2 GiB."""
     root=config.DATA/'asset-cache'

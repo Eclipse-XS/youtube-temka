@@ -434,6 +434,10 @@ function App() {
                   <summary>Редагувати збережений монтаж</summary>
                   <EditPlan key={chosen.id+':'+chosen.result.edit_plan.revision}
                     job={chosen} api={api} post={post} act={act} onSaved={refresh}/>
+                  {chosen.result.render_timeline && <button type="button" onClick={()=>act(async()=>{
+                    await post(`/jobs/${chosen.id}/timeline/${chosen.result.render_timeline.revision}/render`,{});
+                    await refresh();
+                  })}>Повторити експорт цієї ревізії</button>}
                 </details>}
                 {!!chosen.result.outputs?.length && <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>}
                 <div className="outputs">

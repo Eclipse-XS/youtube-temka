@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $oldTTS=$env:WITH_TTS
+$previousFactoryBuildCommit=$env:FACTORY_BUILD_COMMIT
 Push-Location $root
 function DockerRun([string[]]$Arguments) {
     & docker @Arguments
@@ -22,6 +23,7 @@ function WaitHttp([string]$Url) {
     throw "Readiness timeout: $Url"
 }
 try {
+    $env:FACTORY_BUILD_COMMIT=(& git rev-parse HEAD)
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Install Docker Desktop with WSL2 support.' }
     $engineReady=Test-DockerEngine
     if (-not $engineReady -and -not $Status) {
@@ -208,4 +210,4 @@ try {
     Write-Error $_ -ErrorAction Continue
     Write-Host 'OVERALL: FAILED. Inspect scripts/logs-factory.ps1; credentials are not printed.'
     exit 1
-} finally { $env:WITH_TTS=$oldTTS; Pop-Location }
+} finally { $env:WITH_TTS=$oldTTS; $env:FACTORY_BUILD_COMMIT=$previousFactoryBuildCommit; Pop-Location }

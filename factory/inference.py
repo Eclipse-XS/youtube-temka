@@ -7,10 +7,25 @@ import httpx
 from contextlib import contextmanager
 from .heavy import HEAVY_LOCK
 from .progress import MODEL_PROGRESS
+from . import config
 
 
 class ModelBudgetExceeded(httpx.RequestError):
     pass
+
+
+def installed_model_digest(progress, model):
+    if progress.installed_models is None:
+        progress.installed_models = {}
+        try:
+            with httpx.Client(timeout=2,trust_env=False) as client:
+                response = client.get(config.OLLAMA+'/api/tags')
+                response.raise_for_status()
+            progress.installed_models = {item['name']:item['digest'] for item in response.json()['models']
+                                         if item.get('name') and item.get('digest')}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            pass
+    return progress.installed_models.get(model) or progress.installed_models.get(model+':latest')
 
 
 def gpu_layers(model=None):

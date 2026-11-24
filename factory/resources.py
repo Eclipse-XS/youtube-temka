@@ -24,14 +24,44 @@ def preflight(extra=0):
 
 def hardware():
     memory=memory_status()
-    result={**usage(),'memory':memory,'memory_admission':'READY' if memory_ready(memory) else 'WAITING_MEMORY','cpu_count':os.cpu_count(),'os':platform.system(),'gpu':None,'heavy_task_limit':1}
+    return {**usage(),'memory':memory,'memory_admission':'READY' if memory_ready(memory) else 'WAITING_MEMORY',
+            'cpu_count':os.cpu_count(),'os':platform.system(),'gpu':gpu_status(),'heavy_task_limit':1}
+
+
+def gpu_status():
     try:
         response=subprocess.run(['nvidia-smi','--query-gpu=name,memory.total,memory.free','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=3,check=True)
         name,total,free=response.stdout.splitlines()[0].rsplit(',',2)
-        result['gpu']={'name':name.strip(),'total_mib':int(total),'free_mib':int(free)}
+        return {'name':name.strip(),'total_mib':int(total),'free_mib':int(free)}
     except (OSError,ValueError,subprocess.SubprocessError,IndexError):
         pass
-    return result
+    return None
+
+
+class ResourcePeaks:
+    def __init__(self):
+        self.samples = 0
+        self.peak = {}
+        self.gpu = None
+
+    def sample(self):
+        memory = memory_status()
+        gpu = gpu_status()
+        values = {}
+        if 'host_available_bytes' in memory:
+            values['host_ram_used_bytes'] = memory['host_total_bytes'] - memory['host_available_bytes']
+        if 'container_used_bytes' in memory:
+            values['container_memory_used_bytes'] = memory['container_used_bytes']
+        if gpu:
+            if self.gpu is None:
+                self.gpu = gpu
+            values['device_vram_used_mib'] = gpu['total_mib'] - gpu['free_mib']
+        for metric,value in values.items():
+            self.peak[metric] = max(self.peak.get(metric,0),value)
+        self.samples += 1
+
+    def report(self):
+        return {'samples':self.samples,'peak':dict(self.peak),'initial_gpu':self.gpu}
 
 
 def memory_status():

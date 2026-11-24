@@ -5,10 +5,11 @@ import os
 import re
 import sys
 import threading
-from . import config,store,media,render_timeline
+import time
+from . import config,store,media,render_timeline,stage_cache
 from .models import JobRequest
 from .highlights import analyze
-from .resources import preflight
+from .resources import ResourcePeaks, preflight
 from .cleanup import remove_workspace
 from .progress import MODEL_PROGRESS, Progress
 from jsonfile import write_json_atomic
@@ -21,10 +22,22 @@ class NeedsReview(ValueError):
 def source_plan(source, request, root, progress):
     progress.begin('source','PROBING',message=source if source.startswith('upload:') else None)
     checkpoint = root/'source.json'
+    identity=stage_cache.source_identity(source)
+    shared=stage_cache.cache_path('probe',[1,identity]) if identity else None
     if checkpoint.is_file():
         metadata = json.loads(checkpoint.read_text(encoding='utf-8'))
+        progress.reused('source_metadata')
+        if metadata.get('local_identity') is not None and metadata['local_identity']!=identity:
+            raise media.MediaFailure('SOURCE_CHANGED','The original upload changed after analysis. Submit the changed file as a new job.')
     else:
-        metadata = media.probe(source)
+        metadata=stage_cache.read_json(shared)
+        if metadata is not None:
+            progress.reused('source_metadata')
+        else:
+            metadata = media.probe(source)
+            if identity:
+                metadata['local_identity']=identity
+                stage_cache.save_json(shared,metadata)
         write_json_atomic(checkpoint, metadata, ensure_ascii=True)
     end = min(request.end or metadata['duration'],metadata['duration'])
     if end <= request.start:
@@ -47,20 +60,44 @@ def media_signals(source, request, metadata, end, resolution, root, progress):
     path = root/('gameplay-signals-v1.json' if request.gameplay_only else 'signals.json')
     if path.is_file():
         data = json.loads(path.read_text(encoding='utf-8'))
+        progress.reused('visual_signals')
         return data['events'],data['scenes'],data['coverage']
     windows = math.ceil((end-request.start)/WINDOW_SECONDS)
     progress.begin('signals','ANALYZING',windows if request.gameplay_only else min(windows,MAX_WINDOWS),'windows')
-    events,scenes,coverage = scan(source,request,metadata,end,resolution,root,progress.tick)
-    write_json_atomic(path,{'events':events,'scenes':scenes,'coverage':coverage})
+    identity=metadata.get('local_identity')
+    shared=stage_cache.cache_path('signals',[2,identity,request.start,end,resolution,request.gameplay_only,
+                                            request.gameplay_scan_fps,WINDOW_SECONDS,MAX_WINDOWS]) if identity else None
+    cached=stage_cache.read_json(shared)
+    if cached is None:
+        events,scenes,coverage = scan(source,request,metadata,end,resolution,root,progress.tick)
+        cached={'events':events,'scenes':scenes,'coverage':coverage}
+        stage_cache.save_json(shared,cached)
+    else:
+        progress.reused('visual_signals')
+    write_json_atomic(path,cached)
     progress.done()
-    return events,scenes,coverage
+    return cached['events'],cached['scenes'],cached['coverage']
 
 
 def rank_media(transcript, request, metadata, source, end, resolution, root, progress, signals):
     from .signals import gameplay_candidates, propose
+    from .inference import installed_model_digest
 
     events,scenes,coverage=signals
     duration=end-request.start
+    identity=metadata.get('local_identity')
+    model=(request.visual_model if request.max_visual_model_calls else None) if request.gameplay_only else request.llm_model or config.MODEL
+    digest=installed_model_digest(progress,model) if identity and model and (request.gameplay_only or request.max_text_model_calls) else None
+    controls=(request.minimum,request.maximum,request.count,request.gameplay_focus,request.gameplay_low_signal_fraction,
+              request.max_text_model_calls,request.max_visual_model_calls,request.max_model_context_tokens,
+              request.max_model_output_tokens,request.max_model_seconds)
+    shareable=bool(identity and (digest or (request.gameplay_only and not model)))
+    shared=stage_cache.cache_path('selection',[3,identity,request.start,end,resolution,progress.source_id,controls,
+                                               request.gameplay_only,model,digest,signals,transcript]) if shareable else None
+    cached=stage_cache.read_json(shared)
+    if cached is not None:
+        progress.reused('candidate_discovery')
+        return cached
     if request.gameplay_only:
         from .visual_review import review_candidates
 
@@ -80,7 +117,12 @@ def rank_media(transcript, request, metadata, source, end, resolution, root, pro
                 'selection_summary':f'{len(candidates)} gameplay moments selected for review from sampled visual evidence.'}
     else:
         result=analyze(transcript,request,duration,progress.tick,propose(events,scenes,request,duration,metadata['title']))
-    return {**result,'signal_coverage':coverage}
+    result={**result,'signal_coverage':coverage}
+    complete_vision = not model or all(c.get('visual_review_state') in ('uncertain','model_hypothesis')
+                                      for c in result['candidates'][:request.max_visual_model_calls])
+    if (request.gameplay_only and complete_vision) or result['analysis']=='ollama':
+        stage_cache.save_json(shared,result)
+    return result
 
 
 def compilation_plan(request, root, progress, update, previous=None):
@@ -200,6 +242,7 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
     path=root/'transcript.json'
     if path.is_file():
         progress.done('extraction',message='Reused transcript checkpoint');progress.done('transcription',message='Reused transcript checkpoint')
+        progress.reused('asr')
         return json.loads(path.read_text(encoding='utf-8'))
     duration=end-request.start
     segments=[];language=request.language
@@ -216,19 +259,34 @@ def transcribe_chunks(source,request,root,metadata,end,resolution,progress,updat
             chunk_seconds=900 if legacy else config.AUDIO_CHUNK_SECONDS
             write_json_atomic(plan,{'seconds':chunk_seconds})
         chunks=math.ceil(duration/chunk_seconds)
+        identity=metadata.get('local_identity')
+        model=request.asr_model or config.ASR_MODEL
         for index in range(chunks):
             offset=index*chunk_seconds;chunk_end=min(offset+chunk_seconds,duration)
             partial=root/f'transcript-{offset}.json'
+            dependency=[1,identity,request.start+offset,request.start+chunk_end,resolution,request.language,model,
+                        os.environ.get('WHISPER_DEVICE'),os.environ.get('WHISPER_COMPUTE'),os.environ.get('WHISPER_MODEL_PATH')]
+            shared=stage_cache.cache_path('asr',dependency) if identity else None
+            if not partial.is_file():
+                retained=stage_cache.read_json(shared)
+                if retained is not None:
+                    write_json_atomic(partial,retained)
+                    progress.reused('asr')
             if not partial.is_file():
                 operation=f'{operation_prefix}chunk-{offset}'
                 progress.begin('extraction','DOWNLOADING',message=f'Audio chunk {index+1}/{chunks}',operation=operation)
                 audio=root/f'audio-{offset}.mka'
-                media.download(source,audio,request.start+offset,request.start+chunk_end,resolution,True,progress.tick)
+                cached_audio=stage_cache.cache_path('audio',dependency[:5],'.mka') if identity else None
+                if stage_cache.restore_file(cached_audio,audio):
+                    progress.reused('audio_extraction')
+                else:
+                    media.download(source,audio,request.start+offset,request.start+chunk_end,resolution,True,progress.tick)
+                    stage_cache.save_file(cached_audio,audio)
                 progress.done()
-                model=request.asr_model or config.ASR_MODEL
                 progress.begin('transcription','TRANSCRIBING',chunk_end-offset,'seconds',
                                f'Chunk {index+1}/{chunks}',operation=operation,model=model)
                 media.run([sys.executable,'-m','factory.transcribe',str(audio),str(partial),language or 'auto'],progress.tick,duration=chunk_end-offset,env={**os.environ,'WHISPER_MODEL':model})
+                stage_cache.save_json(shared,json.loads(partial.read_text(encoding='utf-8')))
                 progress.done()
             (root/f'audio-{offset}.mka').unlink(missing_ok=True)
             part=json.loads(partial.read_text(encoding='utf-8'))
@@ -273,11 +331,16 @@ def process(claim,assets=None):
         if state:stage=state
         store.update(jid,lease,state=state,**kwargs)
     progress=Progress(update)
+    peaks=ResourcePeaks()
     model_context=MODEL_PROGRESS.set(progress)
     def renew():
-        while not cancel_event.wait(15):
-            try:store.update(jid,lease)
-            except Exception:return
+        renewal=time.monotonic()+15
+        while not cancel_event.wait(2):
+            if time.monotonic()>=renewal:
+                try:store.update(jid,lease)
+                except Exception:return
+                renewal=time.monotonic()+15
+            peaks.sample()
     heartbeat=threading.Thread(target=renew,daemon=True);heartbeat.start()
     try:
         request=JobRequest.model_validate(job['request'])
@@ -295,12 +358,13 @@ def process(claim,assets=None):
             if not original.get('edit_source'):raise NeedsReview('This older output has no preserved editable source. Re-upload the original once.')
             editable=original['edit_source']
             if editable.get('local'):
-                import shutil
                 name=editable['local']
                 if not re.fullmatch(r'(selected-\d+|long-source)\.mp4',name):raise ValueError('Invalid preserved local source')
                 path=config.SCRATCH/origin/name
-                preflight(path.stat().st_size)
-                shutil.copyfile(path,root/'edit-source.mp4')
+                if not (root/'edit-source.mp4').is_file():
+                    preflight(path.stat().st_size)
+                    if not stage_cache.restore_file(path,root/'edit-source.mp4'):
+                        raise ValueError('Preserved editable source could not be copied')
             else:media.fetch_drive(editable,root/'edit-source.mp4',progress.tick)
             reuse_edit_transcript(root,origin_job,original,request,progress.tick)
             source='job-local:'+jid
@@ -481,7 +545,8 @@ def process(claim,assets=None):
                 evidence=' '.join(s['text'] for s in clip_transcript['segments'] if s['end']>candidate['start_seconds'] and s['start']<candidate['end_seconds'])
                 language=request.metadata_language or clip_transcript['language'] or 'en'
                 basis=candidate.get('visual_review') if request.gameplay_only else evidence
-                hook_key=render_timeline.fingerprint([automatic_hook,basis,language,request.llm_model,metadata['title']])
+                hook_key=render_timeline.fingerprint([2,automatic_hook,basis,language,request.llm_model,metadata['title'],
+                    candidate['start_seconds'],candidate['end_seconds'],candidate['source_offset']])
                 hook_checkpoint=root/f'hook-{hook_key}.json'
                 binding=hook_bindings.get(automatic_hook)
                 if binding and binding['key']==hook_key:
@@ -489,8 +554,19 @@ def process(claim,assets=None):
                 elif hook_checkpoint.is_file():
                     hook_candidates=json.loads(hook_checkpoint.read_text(encoding='utf-8'))
                 else:
-                    hook_candidates=(suggest_gameplay(candidate,language) if request.gameplay_only else
-                                     suggest(evidence,language,request.llm_model,metadata['title']))
+                    from .inference import installed_model_digest
+                    model=request.llm_model or config.MODEL
+                    digest=installed_model_digest(progress,model) if not request.gameplay_only and evidence and request.max_text_model_calls else None
+                    shared=stage_cache.cache_path('hooks',[2,basis,language,metadata['title'],digest,
+                        candidate['start_seconds'],candidate['end_seconds'],candidate['source_offset']]) if request.gameplay_only or digest else None
+                    hook_candidates=stage_cache.read_json(shared)
+                    if hook_candidates is None:
+                        hook_candidates=(suggest_gameplay(candidate,language) if request.gameplay_only else
+                                         suggest(evidence,language,request.llm_model,metadata['title']))
+                        if request.gameplay_only or hook_candidates['method']=='ollama':
+                            stage_cache.save_json(shared,hook_candidates)
+                    else:
+                        progress.reused('hooks')
                     write_json_atomic(hook_checkpoint,hook_candidates,ensure_ascii=True)
                 if not binding or binding['key']!=hook_key:
                     hook_bindings[automatic_hook]={'key':hook_key,'decision':hook_candidates}
@@ -501,21 +577,26 @@ def process(claim,assets=None):
             duration=candidate['end_seconds']-candidate['start_seconds']
             output=root/(f'proxy-clip-{i+1}.mp4' if preview else f'clip-{i+1}.mp4')
             clip=root/f'selected-{i+1}.mp4'
-            source_key=render_timeline.fingerprint([clip_source,offset+candidate['start_seconds'],
+            identity=stage_cache.source_identity(clip_source)
+            source_key=render_timeline.fingerprint([2,identity or [jid,clip_source],offset+candidate['start_seconds'],
                                                     offset+candidate['end_seconds'],resolution,request.output_height,compiling])
             clip_checkpoint=clip.with_suffix('.json')
-            source_changed=not clip_checkpoint.is_file() or json.loads(clip_checkpoint.read_text(encoding='utf-8'))!=source_key
-            render_key=render_timeline.fingerprint([source_key,clip_request.model_dump(),[sound.model_dump() for sound in sounds],
+            cached_clip=stage_cache.cache_path('selected',source_key,'.mp4')
+            source_binding=stage_cache.read_json(clip_checkpoint)
+            valid_clip=(clip.is_file() and isinstance(source_binding,dict) and source_binding.get('key')==source_key
+                        and source_binding.get('file')==stage_cache.file_identity(clip))
+            speech=[item for item in clip_transcript['segments'] if item['end']>candidate['start_seconds'] and item['start']<candidate['end_seconds']]
+            from .assets import timeline_asset_identities
+            asset_versions=timeline_asset_identities(clip_request,background,scene.effects,assets)
+            render_key=render_timeline.fingerprint([3,source_key,clip_request.model_dump(),[sound.model_dump() for sound in sounds],
                                                     force_audio,transition_seconds,[effect.model_dump() for effect in scene.effects],
-                                                    scene.caption_cues])
+                                                    scene.caption_cues,preview,speech,asset_versions,os.environ.get('FFMPEG_ENCODER')])
             progress.begin('retrieval','RENDERING',message=f'Clip {i+1}/{len(candidates)}',operation=operation)
-            if source_changed:
+            if not valid_clip:
                 clip.unlink(missing_ok=True)
-            if clip.is_file():
-                try:media.validate_output(clip,duration)
-                except Exception:clip.unlink()
-            if not clip.is_file():
-                if compiling:
+                if stage_cache.restore_file(cached_clip,clip):
+                    progress.reused('selected_media')
+                elif compiling:
                     local = media.local_source(clip_source)
                     if local:
                         media.normalize_compilation(local,clip,duration,request.output_height,progress.tick,
@@ -529,12 +610,26 @@ def process(claim,assets=None):
                             temporary.unlink(missing_ok=True)
                 else:
                     media.download(clip_source,clip,offset+candidate['start_seconds'],offset+candidate['end_seconds'],resolution,False,progress.tick)
-                write_json_atomic(clip_checkpoint,source_key)
+                write_json_atomic(clip_checkpoint,{'key':source_key,'file':stage_cache.file_identity(clip)})
+                stage_cache.save_file(cached_clip,clip)
+            else:
+                progress.reused('selected_media')
             raw_sources[output.name]=clip;progress.done()
             def render_stage(key,**details):
                 if progress.active in ('rendering','captions_audio'):progress.done()
                 progress.begin(key,'RENDERING',duration if key=='rendering' else None,'seconds' if key=='rendering' else None,
                                f'Clip {i+1}/{len(candidates)}',operation=operation,**details)
+            cache_render=stage_cache.cache_path('render',render_key,'.mp4')
+            report_path=output.with_suffix('.validation.json')
+            current_report=stage_cache.read_json(report_path)
+            if output.is_file() and (not current_report or current_report.get('timeline_render_key')!=render_key):
+                output.unlink()
+            if not output.is_file() and stage_cache.restore_file(cache_render.with_suffix('.json'),report_path):
+                if stage_cache.restore_file(cache_render,output):
+                    for suffix in ('.ass','.srt'):
+                        output.with_suffix(suffix).unlink(missing_ok=True)
+                        stage_cache.restore_file(cache_render.with_suffix(suffix),output.with_suffix(suffix))
+                    output.with_suffix('.jpg').unlink(missing_ok=True)
             if output.is_file():
                 try:
                     checkpoint=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
@@ -544,6 +639,7 @@ def process(claim,assets=None):
                     if refreshed is not checkpoint:
                         write_json_atomic(output.with_suffix('.validation.json'),refreshed)
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
+                    progress.reused('scene_render')
                     progress.begin('validation','RENDERING',operation=operation)
                 except Exception:output.unlink()
             if not output.is_file():
@@ -555,10 +651,15 @@ def process(claim,assets=None):
                              logo_path=assets.get('logos') if assets is not None else None,
                              timeline_sounds=sounds,force_audio=force_audio,transition_seconds=transition_seconds,
                              timeline_effects=scene.effects,asset_paths=assets,caption_cues=scene.caption_cues,preview=preview)
-                report_path=output.with_suffix('.validation.json')
                 if report_path.is_file():
                     report=json.loads(report_path.read_text(encoding='utf-8'))
                     write_json_atomic(report_path,{**report,'timeline_render_key':render_key})
+                    stage_cache.save_file(cache_render,output)
+                    if cache_render.is_file():
+                        stage_cache.save_json(cache_render.with_suffix('.json'),{**report,'timeline_render_key':render_key})
+                        for suffix in ('.ass','.srt'):
+                            if output.with_suffix(suffix).is_file():
+                                stage_cache.save_file(cache_render.with_suffix(suffix),output.with_suffix(suffix))
             progress.done('validation')
             validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
             if preview:
@@ -590,7 +691,7 @@ def process(claim,assets=None):
 
         def finish_preview(files):
             width,height=media.delivery_dimensions(request,True)
-            update('REVIEW',result={'preview_pending':None,
+            update('REVIEW',result={'preview_pending':None,'cache_hits':progress.cache_hits,
                                     'preview':{'revision':timeline['revision'],'files':files,'width':width,'height':height}})
 
         if request.mode=='longs' and (len(outputs)>1 or cards):
@@ -666,10 +767,23 @@ def process(claim,assets=None):
             output['editorial']=assess(output,transcript,evidence_ranges if request.mode=='longs' else evidence_ranges[i:i+1],request,draft,assessed,request.metadata_preferences)
             assessed.append(output['editorial']);progress.tick(i+1,len(outputs))
         progress.done()
-        update(result={'outputs':outputs,'publishing_state':'AWAITING_EDITORIAL_REVIEW'})
+        update(result={'outputs':outputs,'publishing_state':'AWAITING_EDITORIAL_REVIEW','cache_hits':progress.cache_hits})
+        from .reproducibility import record
+        progress.begin('validation','RENDERING',operation='reproducibility')
+        if not peaks.samples:
+            peaks.sample()
+        provenance_sources=sources if compiling else {'source-1':{'source':source,'metadata':metadata}}
+        evidence=record(jid,timeline,provenance_sources,request,scenes,background,assets,hook_bindings,outputs,progress,peaks)
+        write_json_atomic(root/'reproducibility.json',evidence,ensure_ascii=True)
+        progress.done()
+        update(result={'reproducibility':{'file':'reproducibility.json','timeline_sha256':evidence['timeline_sha256'],
+                                         'application_commit':evidence['application_commit'],'resources':evidence['resources']}})
         metadata_obj={'job_id':jid,'request':request.model_dump(),'source':metadata,'language':transcript['language'],'candidates':candidates,'outputs':outputs}
         if request.save_drive:
-            artifact_paths=[root/'transcript.json',root/'metadata.json',*root.glob('timeline.json'),*root.glob('*.srt'),*root.glob('*.vtt'),*root.glob('*.ass'),*root.glob('*.validation.json'),*(root/o['edit_transcript'] for o in outputs if o.get('edit_transcript'))]
+            artifact_paths=[root/'transcript.json',root/'metadata.json',root/'reproducibility.json',*root.glob('timeline.json'),
+                            *(p for suffix in ('.srt','.vtt','.ass','.validation.json') for p in root.glob('*'+suffix)
+                              if not p.name.startswith('proxy-')),
+                            *(root/o['edit_transcript'] for o in outputs if o.get('edit_transcript'))]
             total_files=sum(1+bool(o.get('thumbnail'))+int(o['name'] in raw_sources) for o in outputs)+sum(p.name=='metadata.json' or (p.is_file() and p.stat().st_size>0) for p in artifact_paths)
             progress.begin('drive','UPLOADING',total_files,'files');progress.tick(0,total_files)
             from .drive import Drive
