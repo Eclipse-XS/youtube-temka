@@ -430,6 +430,11 @@ function App() {
                 {chosen.state==='REVIEW' && chosen.result.edit_plan && <EditPlan
                   key={chosen.id+':'+chosen.result.edit_plan.revision}
                   job={chosen} api={api} post={post} act={act} onSaved={refresh}/>}
+                {chosen.state==='READY' && !chosen.request.save_drive && chosen.result.edit_plan && <details>
+                  <summary>Редагувати збережений монтаж</summary>
+                  <EditPlan key={chosen.id+':'+chosen.result.edit_plan.revision}
+                    job={chosen} api={api} post={post} act={act} onSaved={refresh}/>
+                </details>}
                 {!!chosen.result.outputs?.length && <label>Уривок<select value={outputIndex} onChange={e=>setOutputIndex(+e.target.value)}>{(chosen.result.outputs||[]).map((o,i)=><option key={o.name} value={i}>{i+1}. {o.title}</option>)}</select></label>}
                 <div className="outputs">
                   {(chosen.result.outputs || []).map((o, i) => i===Math.min(outputIndex,(chosen.result.outputs||[]).length-1) && (

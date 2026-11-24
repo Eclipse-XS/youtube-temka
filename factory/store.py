@@ -298,6 +298,7 @@ def retry(jid):
 
 def edit_plan(jid, revision, edits, target, approve=False):
     from .models import JobRequest
+    from .render_timeline import build, compile_scenes, validate_scene_edits
 
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -306,9 +307,10 @@ def edit_plan(jid, revision, edits, target, approve=False):
             raise KeyError(jid)
         result = json.loads(row['result'])
         plan = result.get('edit_plan')
-        if row['state']!='REVIEW' or not plan or plan['revision']!=revision:
-            raise InterruptedError('The edit plan changed or was submitted. Reload and try again.')
         request = JobRequest.model_validate_json(row['request'])
+        revising_local_output = row['state']=='READY' and not request.save_drive
+        if (row['state']!='REVIEW' and not revising_local_output) or not plan or plan['revision']!=revision:
+            raise InterruptedError('The edit plan changed or was submitted. Reload and try again.')
         limits = {item.source_id:item for item in request.sources}
         contributions = defaultdict(float)
         original = {segment['id']:segment for segment in plan['segments']}
@@ -333,6 +335,10 @@ def edit_plan(jid, revision, edits, target, approve=False):
                 if options.max_contribution is not None and contributions[source_id]>options.max_contribution+1e-8:
                     raise ValueError(f'Segment {edit["id"]}: the source exceeds its maximum contribution')
             selected.append({**segment,**edit})
+            validate_scene_edits(selected[-1],end-start)
+            if 'sounds' in selected[-1]:
+                selected[-1]['sounds'] = [{**sound,'id':sound.get('id') or uuid.uuid4().hex}
+                                          for sound in selected[-1]['sounds']]
             if (start,end)!=(segment['start_seconds'],segment['end_seconds']):
                 selected[-1].update(selection_method='manual_boundaries',reason='Boundaries edited by the operator')
                 selected[-1].pop('score',None)
@@ -345,6 +351,17 @@ def edit_plan(jid, revision, edits, target, approve=False):
         plan.update(revision=revision+1,segments=selected,approved=approve)
         if target is not None:
             plan['target_duration']=target
+        timeline = build(selected,request,{key:source['end'] for key,source in plan['sources'].items()},
+                         plan['revision'],plan['target_duration'])
+        compile_scenes(timeline,request)
+        if revising_local_output:
+            result['previous_timeline_outputs'] = result.pop('outputs',[])
+            result.pop('clips_completed',None)
+            result.pop('publishing_state',None)
+        if approve:
+            result['render_timeline'] = timeline
+        else:
+            result.pop('render_timeline',None)
         state = 'QUEUED' if approve else 'REVIEW'
         db.execute('UPDATE jobs SET state=?,result=?,seen=? WHERE id=?',
                    (state,json.dumps(result,ensure_ascii=False),time.time(),jid))

@@ -1,5 +1,12 @@
 import React, { useState } from "react";
 
+const soundKinds = {
+  impact: "Удар",
+  comedic_accent: "Комедійний акцент",
+  whoosh: "Свист",
+  bass_hit: "Басовий акцент",
+};
+
 export default function EditPlan({ job, api, post, act, onSaved }) {
   const plan = job.result.edit_plan;
   const [segments,setSegments] = useState(plan.segments);
@@ -9,11 +16,13 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
   const path = "/jobs/"+job.id;
   const length = segments.reduce((sum,s)=>sum+s.end_seconds-s.start_seconds,0);
   const change = (id,key,value) => setSegments(items=>items.map(s=>s.id===id?{...s,[key]:value}:s));
+  const changeSound = (segment,index,key,value) => change(segment.id,"sounds",
+    segment.sounds.map((sound,i)=>i===index?{...sound,[key]:value}:sound));
   const save = (render) => act(async () => {
     setSaving(true);
     try {
       const body = {revision:plan.revision,target_duration:target,segments:segments.map(
-        ({id,start_seconds,end_seconds,transition})=>({id,start_seconds,end_seconds,transition}))};
+        ({id,start_seconds,end_seconds,transition,hook,sounds})=>({id,start_seconds,end_seconds,transition,hook,sounds}))};
       if (render) await post(path+"/render",body);
       else await api(path+"/edit-plan",{method:"PATCH",body:JSON.stringify(body)});
       await onSaved();
@@ -30,6 +39,7 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
     {segments.map((s,index) => {
       const source = plan.sources[s.source_id];
       const start = s.start_seconds+s.source_offset, end = s.end_seconds+s.source_offset;
+      const duration = end-start;
       const local = source.source.startsWith("upload:");
       let sourceLink;
       if (!local && source.source.startsWith("https://")) {
@@ -56,6 +66,42 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
             </select>
           </label>
         </div>
+        <details>
+          <summary>Напис і звукові ефекти</summary>
+          <label><input type="checkbox" checked={s.hook!=null} onChange={e=>change(s.id,"hook",
+            e.target.checked?{text:job.request.hook||"",start:0,end:null}:null)}/> Власний напис</label>
+          {s.hook && <div className="grid">
+            <label>Текст
+              <input maxLength="120" value={s.hook.text} onChange={e=>change(s.id,"hook",{...s.hook,text:e.target.value})}/>
+            </label>
+            <label>Показати на секунді
+              <input type="number" min="0" max={duration} step=".1" value={s.hook.start}
+                onChange={e=>change(s.id,"hook",{...s.hook,start:+e.target.value})}/>
+            </label>
+            <label>Приховати на секунді
+              <input type="number" min=".1" max={duration} step=".1" value={s.hook.end??""} placeholder="До кінця сцени"
+                onChange={e=>change(s.id,"hook",{...s.hook,end:e.target.value===""?null:+e.target.value})}/>
+            </label>
+          </div>}
+          {(s.sounds||[]).map((sound,i)=><div className="grid" key={i}>
+            <label>Ефект
+              <select value={sound.kind} onChange={e=>changeSound(s,i,"kind",e.target.value)}>
+                {Object.entries(soundKinds).map(([kind,label])=><option key={kind} value={kind}>{label}</option>)}
+              </select>
+            </label>
+            <label>Початок, сек
+              <input type="number" min="0" max={duration} step=".1" value={sound.start}
+                onChange={e=>changeSound(s,i,"start",+e.target.value)}/>
+            </label>
+            <label>Гучність
+              <input type="number" min="0" max="1" step=".05" value={sound.gain}
+                onChange={e=>changeSound(s,i,"gain",+e.target.value)}/>
+            </label>
+            <button type="button" onClick={()=>change(s.id,"sounds",s.sounds.filter((_,index)=>index!==i))}>Прибрати ефект</button>
+          </div>)}
+          <button type="button" disabled={s.sounds?.length>=8} onClick={()=>change(s.id,"sounds",
+            [...(s.sounds||[]),{kind:"impact",start:0,gain:.25}])}>Додати звук</button>
+        </details>
         <div className="actions">
           <button type="button" disabled={!index} onClick={()=>setSegments(items=>{
             const ordered=[...items];

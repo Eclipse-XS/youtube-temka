@@ -34,6 +34,19 @@ class CaptionAppearance(BaseModel):
     duration: float | None = Field(default=None,ge=.5,le=8,allow_inf_nan=False)
 
 
+class TimelineHook(BaseModel):
+    text: str = Field(max_length=120)
+    start: float = Field(default=0, ge=0, le=600, allow_inf_nan=False)
+    end: float | None = Field(default=None, gt=0, le=600, allow_inf_nan=False)
+
+
+class TimelineSound(BaseModel):
+    id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+    kind: Literal['impact', 'comedic_accent', 'whoosh', 'bass_hit']
+    start: float = Field(ge=0, le=600, allow_inf_nan=False)
+    gain: float = Field(default=.25, ge=0, le=1, allow_inf_nan=False)
+
+
 class JobRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2048)
     rights_confirmed: bool

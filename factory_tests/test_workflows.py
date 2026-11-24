@@ -88,6 +88,56 @@ def test_compilation_reviews_and_renders_three_different_sources(owned_sources,m
     assert done['result']['duration_shortfall'] is False
 
 
+def test_saved_timeline_revision_changes_visible_hook_and_audible_effect(owned_sources):
+    import av
+    import numpy as np
+
+    request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,workflow='highlights',
+                       mode='longs',minimum=5,maximum=6,intervals=[(0,5)],review_before_render=True,
+                       save_drive=False,audio_mode='silent',captions=False,max_text_model_calls=0)
+    job=store.create(request.model_dump())
+    process(store.claim('fixture'))
+    root=config.SCRATCH/job['id']
+    output=root/'clip-1.mp4'
+
+    def render_revision(start):
+        plan=store.get(job['id'])['result']['edit_plan']
+        segment={'id':plan['segments'][0]['id'],'start_seconds':0,'end_seconds':5,'transition':'cut',
+                 'hook':{'text':'TIMELINE','start':start,'end':start+.5},
+                 'sounds':[{'kind':'impact','start':start,'gain':.5}]}
+        submitted=store.edit_plan(job['id'],plan['revision'],[segment],None,approve=True)
+        process(store.claim('fixture'))
+        done=store.get(job['id'])
+        assert done['state']=='READY',done['error']
+        revision=submitted['revision']
+        snapshot=root/f'timeline-r{revision}.json'
+        assert json.loads(snapshot.read_text())==done['result']['render_timeline']
+        return snapshot
+
+    def sample(at):
+        with av.open(str(output)) as container:
+            video=next(frame for frame in container.decode(video=0) if frame.time>=at)
+            lit=int((video.to_ndarray(format='gray')>180).sum())
+        with av.open(str(output)) as container:
+            audio=next(frame for frame in container.decode(audio=0) if frame.time>=at)
+            peak=float(np.abs(audio.to_ndarray()).max())
+        return lit,peak
+
+    first=render_revision(.5)
+    first_snapshot=first.read_bytes()
+    lit,peak=sample(.6)
+    assert lit>100 and peak>.03
+    lit,peak=sample(1.6)
+    assert lit==0 and peak<.001
+
+    second=render_revision(1.5)
+    assert first.read_bytes()==first_snapshot and second!=first
+    lit,peak=sample(.6)
+    assert lit==0 and peak<.001
+    lit,peak=sample(1.6)
+    assert lit>100 and peak>.03
+
+
 def test_render_recovers_after_transient_failure_without_rerendering_first_clip(owned_sources,monkeypatch):
     request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,
                        workflow='highlights',minimum=5,maximum=6,intervals=[(0,5),(1,6)],

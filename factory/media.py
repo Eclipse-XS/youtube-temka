@@ -241,13 +241,16 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
     return path
 
 
-def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
+           timeline_sounds=(),force_audio=False,transition_seconds=None):
     from .heavy import HEAVY_LOCK
     with HEAVY_LOCK:
-        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path)
+        return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path,
+                       timeline_sounds,force_audio,transition_seconds)
 
 
-def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None):
+def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
+            timeline_sounds=(),force_audio=False,transition_seconds=None):
     from subtitles import generate_ass, generate_srt
     from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
     from .captions import appearance
@@ -393,8 +396,30 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         audio_map='[audio]'
     elif has_audio and request.audio_mode!='silent':
         graph+=f';[0:a]{audio_filter}[audio]';audio_map='[audio]'
+    if timeline_sounds or force_audio:
+        from .render_timeline import SOUND_DURATIONS
+
+        if not audio_map:
+            graph+=';anullsrc=r=48000:cl=stereo[silence]'
+            audio_map='[silence]'
+        mixed=[audio_map]
+        effects={'impact':'sin(2*PI*(95*t-110*t*t))*exp(-14*t)',
+                 'bass_hit':'sin(2*PI*(64*t-36*t*t))*exp(-8*t)',
+                 'comedic_accent':'sin(2*PI*(390*t+1300*t*t))*exp(-8*t)',
+                 'whoosh':'sin(2*PI*(130*t+2400*t*t))*sin(PI*t/.32)^2'}
+        for index,sound in enumerate(timeline_sounds):
+            length=SOUND_DURATIONS[sound.kind]/1000
+            label=f'[sfx{index}]'
+            graph+=(f";aevalsrc='{effects[sound.kind]}':s=48000:d={length},"
+                    f'aformat=channel_layouts=stereo,volume={sound.gain},'
+                    f'adelay={round(sound.start*1000)}:all=1{label}')
+            mixed.append(label)
+        if len(mixed)>1:
+            graph+=(';' + ''.join(mixed) + f'amix=inputs={len(mixed)}:normalize=0,'
+                    'alimiter=limit=0.707945:level=false:latency=true[mixed]')
+            audio_map='[mixed]'
     if request.transition=='fade':
-        fade_duration=min(.25,duration/4)
+        fade_duration=min(.25,duration/4) if transition_seconds is None else min(transition_seconds,duration/2)
         fade_end=duration-fade_duration
         graph+=f';{video}fade=t=in:d={fade_duration},fade=t=out:st={fade_end}:d={fade_duration}[faded]'
         video='[faded]'

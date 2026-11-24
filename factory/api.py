@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import config, store, media
-from .models import JobRequest
+from .models import JobRequest, TimelineHook, TimelineSound
 from .resources import preflight, usage
 
 
@@ -450,6 +450,8 @@ class EditSegment(BaseModel):
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
     transition: Literal['cut','fade'] = 'cut'
+    hook: TimelineHook | None = None
+    sounds: list[TimelineSound] = Field(default_factory=list, max_length=8)
 
 
 class EditPlanUpdate(BaseModel):
@@ -466,9 +468,22 @@ def get_edit_plan(jid: str):
     return plan
 
 
+@app.get('/api/jobs/{jid}/timeline/{revision}')
+def timeline_revision(jid: str, revision: int):
+    job = get_job(jid)
+    timeline = job['result'].get('render_timeline')
+    if timeline and timeline['revision'] == revision:
+        return timeline
+    snapshot = config.SCRATCH/jid/f'timeline-r{revision}.json'
+    if snapshot.is_file():
+        return FileResponse(snapshot, media_type='application/json')
+    raise HTTPException(404,'Timeline revision not found')
+
+
 def save_edit_plan(jid, body, approve=False):
     try:
-        return store.edit_plan(jid,body.revision,[item.model_dump() for item in body.segments],
+        return store.edit_plan(jid,body.revision,[item.model_dump(exclude_unset=True) |
+                                                  {'transition':item.transition} for item in body.segments],
                                body.target_duration,approve)
     except KeyError:
         raise HTTPException(404,'Job not found') from None
