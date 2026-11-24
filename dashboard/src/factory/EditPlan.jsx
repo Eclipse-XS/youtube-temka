@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import CaptionTrackEditor from "./CaptionTrackEditor.jsx";
+import {saveChannelStyle} from "./channelStyle.js";
 
 const soundKinds = {
   impact: "Удар",
@@ -54,6 +55,7 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
   const [intro,setIntro] = useState(("intro" in plan?plan.intro:job.request.intro)??null);
   const [outro,setOutro] = useState(("outro" in plan?plan.outro:job.request.outro)??null);
   const [chapterTitles,setChapterTitles] = useState(plan.chapter_titles??job.request.chapter_titles??false);
+  const [styleSaved,setStyleSaved] = useState(false);
   const path = "/jobs/"+job.id;
   const length = segments.reduce((sum,s)=>sum+s.end_seconds-s.start_seconds-
     (s.transition==="crossfade"?(s.transition_duration??.5):0),(intro?.duration||0)+(outro?.duration||0));
@@ -92,6 +94,13 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
       <CardEditor label="Кінцівка" card={outro} onChange={setOutro}/>
       {job.result.narrative_plan && <label><input type="checkbox" checked={chapterTitles}
         onChange={e=>setChapterTitles(e.target.checked)}/> Показувати назви розділів</label>}
+      {job.request.publish_channel && <>
+        <button type="button" onClick={()=>{
+          saveChannelStyle(job.request.publish_channel,{...job.request,intro,outro,chapter_titles:chapterTitles});
+          setStyleSaved(true);
+        }}>Зберегти оформлення для каналу</button>
+        {styleSaved && <small role="status">Стиль збережено в цьому браузері.</small>}
+      </>}
     </details>}
     {segments.map((s,index) => {
       const source = plan.sources[s.source_id];

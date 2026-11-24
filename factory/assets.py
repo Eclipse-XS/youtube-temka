@@ -7,6 +7,12 @@ from . import config
 from .resources import preflight
 
 
+class SyncedAssets(dict):
+    def __init__(self):
+        super().__init__()
+        self.by_name = {}
+
+
 def asset_path(kind, name):
     suffixes={'backgrounds':('.mp4',), 'music':('.mp3','.wav','.mp4'), 'logos':('.png',)}
     if kind not in suffixes or not re.fullmatch(r'[A-Za-z0-9_-]+\.(mp3|wav|mp4|png)', name):
@@ -49,7 +55,8 @@ def timeline_asset_files(request, background, effects, synced=None):
             requested.append(('backgrounds' if effect.kind == 'video_overlay' else 'logos',effect.asset))
     for library,name in requested:
         if name:
-            paths[library+':'+name] = synced.get((library,name)) or config.DATA/library/name
+            paths[library+':'+name] = (getattr(synced,'by_name',{}).get((library,name)) or
+                                       synced.get(library) or config.DATA/library/name)
     return paths
 
 
@@ -78,7 +85,7 @@ def sync(client, items, tick=lambda:None):
     if sum(size for _,size in expected.values())>limit:raise ValueError('Required assets exceed worker cache budget')
     for path in root.iterdir():
         if path.is_file() and path.name not in expected:path.unlink()
-    paths={}
+    paths=SyncedAssets()
     for filename,(item,size) in expected.items():
         path=root/filename
         if path.is_file():
@@ -100,5 +107,5 @@ def sync(client, items, tick=lambda:None):
                 temporary.replace(path)
             finally:temporary.unlink(missing_ok=True)
         paths.setdefault(item['kind'],path)
-        paths[(item['kind'],item['name'])]=path
+        paths.by_name[(item['kind'],item['name'])]=path
     return paths

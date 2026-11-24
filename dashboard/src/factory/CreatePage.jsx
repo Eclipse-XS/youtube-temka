@@ -203,6 +203,8 @@ export default function CreatePage({
       target_duration:workflow==='compilation'?900:null,
       audio_mode:workflow==='compilation'&&v.audio_mode==='voiceover'?'original':v.audio_mode,
       preserve_fps:workflow==='compilation'?false:v.preserve_fps,
+      intro:workflow==='compilation'?v.intro:null,
+      outro:workflow==='compilation'?v.outro:null,
       review_before_render:workflow==='story'?false:v.review_before_render,
       silence_removal:workflow==='story'?false:v.silence_removal,
     }));
@@ -472,6 +474,12 @@ export default function CreatePage({
               <select value={form.gameplay_focus||"balanced"} onChange={e=>set("gameplay_focus",e.target.value)}>
                 <option value="balanced">Усі ігрові події</option><option value="comedy">Комедія та NPC</option>
                 <option value="physics">Збої фізики й анімації</option><option value="stunts">Трюки й транспорт</option>
+              </select>
+            </label>
+            <label>Автоматичні ефекти
+              <select value={form.editing_intensity||"manual"} onChange={e=>set("editing_intensity",e.target.value)}>
+                <option value="manual">Лише ручні</option><option value="focused">Легке наближення</option>
+                <option value="expressive">Наближення та звукові акценти</option>
               </select>
             </label>
           </>}

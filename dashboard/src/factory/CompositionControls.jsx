@@ -1,10 +1,11 @@
 import React,{useEffect,useState} from 'react';
+import {loadChannelStyle,saveChannelStyle} from './channelStyle.js';
 
-export const layouts={auto:['Auto','Автоматичний вибір макета'],smart:['Fill Screen','Основне відео заповнює кадр'],crop:['Center Crop','Центральна частина кадру'],blur:['Blurred Sides','Основне відео на розмитому фоні'],gameplay:['Split Screen','Основне відео зверху, додаткове знизу']};
-export const textModes={none:'No Text',subtitles:'Subtitles',static_hook:'Static Hook',hook_subtitles:'Hook + Subtitles',custom:'Custom Text'};
+const layouts={auto:['Auto','Автоматичний вибір макета'],smart:['Fill Screen','Основне відео заповнює кадр'],crop:['Center Crop','Центральна частина кадру'],blur:['Blurred Sides','Основне відео на розмитому фоні'],gameplay:['Split Screen','Основне відео зверху, додаткове знизу']};
+const textModes={none:'No Text',subtitles:'Subtitles',static_hook:'Static Hook',hook_subtitles:'Hook + Subtitles',custom:'Custom Text'};
 const captionStyles={pop:'Pop',karaoke:'Karaoke',clean:'Clean',gameplay_minimal:'Gameplay Minimal',
   gaming_comic:'Gaming Comic',bold_karaoke:'Bold Karaoke',one_word:'Одне слово',two_to_three_words:'До трьох слів',
-  boxed_reaction:'Boxed Reaction',clean_longs:'Clean Longs',captions_off:'Вимкнені'};
+  boxed_reaction:'Boxed Reaction',clean_longs:'Clean Longs',action_labels:'Мітки дій',captions_off:'Вимкнені'};
 
 export function LayoutPreview({form,thumbnail,video}) {
   const wide=form.mode==='longs',split=!wide&&form.preset==='gameplay',blur=!wide&&form.preset==='blur';
@@ -26,15 +27,26 @@ export function LayoutPreview({form,thumbnail,video}) {
 
 export default function CompositionControls({form,set,backgrounds=[],channels=[],thumbnail,video}) {
   const [assets,setAssets]=useState([]);
+  const [profileSaved,setProfileSaved]=useState(false);
   const captions=form.caption_appearance || {};
   const setCaption=(key,value)=>set('caption_appearance',{...captions,[key]:value});
   useEffect(()=>{fetch('/api/library').then(r=>r.ok?r.json():[]).then(setAssets).catch(()=>{});},[]);
   return <section className="composition-controls"><div className="grid">
     <label>Канал / профіль<select value={form.publish_channel||''} onChange={e=>{
       const channel=channels.find(c=>c.id===e.target.value);set('publish_channel',channel?.id||null);set('publish_automatic',false);
+      setProfileSaved(false);
       if(channel?.preferences?.metadata_language)set('metadata_language',channel.preferences.metadata_language);
       if(channel?.preferences?.editing_preset)set('preset',channel.preferences.editing_preset);
+      if(channel) for (const [key,value] of Object.entries(loadChannelStyle(channel.id))) {
+        if (['intro','outro'].includes(key) && (form.mode!=='longs'||form.silence_removal)) continue;
+        if (key==='audio_mode' && value==='voiceover' && form.workflow==='compilation') continue;
+        set(key,value);
+      }
     }}><option value="">Без публікації · ручний перегляд</option>{channels.map(c=><option key={c.id} value={c.id}>{c.preferences?.profile_name||c.title} · {c.preferences?.metadata_language||'auto'}</option>)}</select></label>
+    {form.publish_channel&&<div>
+      <button type="button" onClick={()=>{saveChannelStyle(form.publish_channel,form);setProfileSaved(true);}}>Зберегти стиль каналу</button>
+      {profileSaved&&<small role="status">Стиль збережено в цьому браузері.</small>}
+    </div>}
     <label>Текст<select value={form.text_mode||(form.captions?'subtitles':'none')} onChange={e=>{set('text_mode',e.target.value);set('captions',['subtitles','hook_subtitles'].includes(e.target.value));if(['none','subtitles'].includes(e.target.value))set('hook','');}}>{Object.entries(textModes).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
     {(form.captions || form.text_mode==='subtitles' || form.text_mode==='hook_subtitles' || form.caption_style==='captions_off') && <label>Стиль субтитрів
       <select value={form.caption_style || 'pop'} onChange={e=>set('caption_style',e.target.value)}>

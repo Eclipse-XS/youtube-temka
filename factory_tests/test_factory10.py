@@ -168,6 +168,23 @@ def test_gameplay_hooks_are_diverse_and_require_payoff_inside_scene():
     assert suggest_gameplay({'category':'physics_glitch'})['candidates']==[]
 
 
+def test_automatic_gameplay_edits_follow_visible_payoff_and_allow_explicit_removal():
+    from factory.render_timeline import build, compile_scenes
+
+    request=JobRequest(source='upload:owned.mp4',rights_confirmed=True,workflow='highlights',mode='longs',
+                       ranking_profile='gameplay_only',editing_intensity='expressive',text_mode='static_hook')
+    candidate={'start_seconds':0,'end_seconds':8,'source_frame_times':[1,2,4],
+               'evidence':{'audio_onset':.01},
+               'visual_review':{'category':'unexpected_collision','payoff_frame':3,'uncertain':False,
+                                'action_focus':{'x':.6,'y':.2}}}
+    scene=compile_scenes(build([candidate],request,{'source-1':8},1),request)[0]
+    assert scene.effects[0].kind=='animated_zoom' and scene.effects[0].start==3.75
+    assert scene.sounds[0].start==4 and scene.request.hook_position=='bottom'
+    override={**candidate,'effects':[],'sounds':[]}
+    scene=compile_scenes(build([override],request,{'source-1':8},2),request)[0]
+    assert scene.effects==[] and scene.sounds==[]
+
+
 def test_caption_looks_and_retained_word_timings_are_independent(workspace):
     from factory.captions import appearance
     from subtitles import generate_ass

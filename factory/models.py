@@ -195,6 +195,7 @@ class JobRequest(BaseModel):
     source_category: Literal['auto','podcast','stream','gameplay','visual'] = 'auto'
     ranking_profile: Literal['general_highlights','gameplay_only'] = 'general_highlights'
     gameplay_focus: Literal['balanced','comedy','physics','stunts'] = 'balanced'
+    editing_intensity: Literal['manual','focused','expressive'] = 'manual'
     gameplay_scan_fps: Literal[1,2,4] = 2
     gameplay_low_signal_fraction: float = Field(default=.2,ge=0,le=.5,allow_inf_nan=False)
     visual_model: str | None = Field(default=None,pattern=r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$')

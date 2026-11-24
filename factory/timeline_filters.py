@@ -121,7 +121,7 @@ def visual_graph(effects, args, video, next_input, width, height, output, asset_
         elif kind in OVERLAY_EFFECTS:
             image = kind == 'image_overlay'
             library = 'logos' if image else 'backgrounds'
-            path = (asset_paths or {}).get((library, effect.asset)) or asset_path(library, effect.asset)
+            path = getattr(asset_paths,'by_name',{}).get((library,effect.asset)) or asset_path(library,effect.asset)
             args.extend(['-loop' if image else '-stream_loop', '1' if image else '-1', '-threads', '1', '-i', str(path)])
             parts.append(f'[{next_input}:v]scale={width//3}:-2,setpts=PTS-STARTPTS+{effect.start}/TB[insert{i}]')
             parts.append(f"{video}[insert{i}]overlay=x='(W-w)*{effect.x}':y='(H-h)*{effect.y}':"

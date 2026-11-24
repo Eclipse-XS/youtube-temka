@@ -111,6 +111,31 @@ def validate_scene_edits(scene, duration):
             previous_end[group] = effect.end
 
 
+def edit_gameplay(candidate, request):
+    review = candidate.get('visual_review') or {}
+    focus = review.get('action_focus')
+    frames = candidate.get('source_frame_times', [])
+    payoff = review.get('payoff_frame')
+    if (not request.gameplay_only or request.silence_removal or request.editing_intensity == 'manual' or not focus or
+            review.get('uncertain',True) or len(frames) != 3 or payoff not in (2,3)):
+        return candidate
+    start, end = candidate['start_seconds'], candidate['end_seconds']
+    point = frames[payoff-1] - candidate.get('source_offset',request.start) - start
+    duration = end-start
+    if not .4 <= point <= duration-.5:
+        return candidate
+    begin, finish = round(point-.25,3), round(point+.45,3)
+    kind = 'animated_zoom' if request.editing_intensity == 'expressive' else 'punch_in'
+    distribution = dict(candidate)
+    distribution.setdefault('effects',[{'kind':kind,'start':begin,'end':finish,'scale':1.22,
+                                        'x':focus['x'],'y':focus['y']}])
+    if (request.editing_intensity == 'expressive' and request.audio_mode != 'silent' and
+            review.get('category') in ('unexpected_collision','vehicle_crash') and
+            candidate.get('evidence',{}).get('audio_onset',1)<.02):
+        distribution.setdefault('sounds',[{'kind':'impact','start':round(point,3),'gain':.15}])
+    return distribution
+
+
 def build(candidates, request, source_limits, revision, target_duration=None):
     events = []
     segments = []
@@ -128,6 +153,7 @@ def build(candidates, request, source_limits, revision, target_duration=None):
         position += add_card('intro', request.intro)
     previous_theme = None
     for index, candidate in enumerate(candidates):
+        candidate = edit_gameplay(candidate,request)
         scene_id = str(candidate.get('id', index + 1))
         source = candidate.get('source_id', 'source-1')
         offset = candidate.get('source_offset', request.start)
@@ -207,8 +233,16 @@ def build(candidates, request, source_limits, revision, target_duration=None):
             begin = round(request.hook_start * 1000)
             finish = duration if request.hook_pinned else min(duration, begin + round(request.hook_duration * 1000))
         if (text or automatic) and begin < finish:
+            style = {key: getattr(request,key) for key in HOOK_STYLE}
+            focus = (candidate.get('visual_review') or {}).get('action_focus')
+            if automatic and focus:
+                y = focus['y']
+                if (style['hook_position'] == 'top' and y < .35) or style['hook_position'] == 'center':
+                    style['hook_position'] = 'bottom' if y < .5 else 'top'
+                elif style['hook_position'] == 'bottom' and y > .65:
+                    style['hook_position'] = 'top'
             event('hooks', 'automatic_hook' if automatic else 'hook', begin=begin, finish=finish,
-                  text=text, **{key: getattr(request, key) for key in HOOK_STYLE})
+                  text=text, **style)
         if overlap:
             adjacent = [video_id, segments[-1]['segment_id'] + ':video'] if segments else [video_id]
             event('transitions', 'crossfade', finish=overlap, duration_ms=overlap, dependencies=adjacent)

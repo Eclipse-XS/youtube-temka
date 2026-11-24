@@ -32,7 +32,7 @@ GAMEPLAY_HOOKS = {
     'ragdoll': [('anomaly', 'RAGDOLL PHYSICS', 'ФІЗИКА РЕГДОЛУ'), ('irony', 'PERFECT BALANCE…', 'ІДЕАЛЬНА РІВНОВАГА…'),
                 ('question', 'WHY DID THEY FALL LIKE THAT?', 'ЧОМУ ТАКЕ ПАДІННЯ?')],
     'unexpected_survival': [('question', 'HOW DID THEY SURVIVE?', 'ЯК ВДАЛОСЯ ВИЖИТИ?'),
-                            ('contrast', 'THEY WALKED AWAY FROM THAT?', 'І ПІСЛЯ ЦЬОГО ВДАЛОСЯ ВИЖИТИ?'),
+                            ('contrast', 'THAT WAS SURVIVABLE?', 'І ПІСЛЯ ЦЬОГО ВДАЛОСЯ ВИЖИТИ?'),
                             ('direct', 'UNEXPECTED SURVIVAL', 'НЕСПОДІВАНЕ ВИЖИВАННЯ')],
     'police_chase_fail': [('failure', 'THE CHASE WENT WRONG', 'ПОГОНЯ ПІШЛА НЕ ЗА ПЛАНОМ'),
                           ('question', 'WHERE DID THE CHASE FALL APART?', 'ДЕ ВСЕ ПІШЛО НЕ ТАК?'),

@@ -468,9 +468,10 @@ def process(claim,assets=None):
                           'intro':request.intro.model_dump() if request.intro else None,
                           'outro':request.outro.model_dump() if request.outro else None,
                           'chapter_titles':request.chapter_titles,
-                          'segments':[{**candidate,'id':i+1,'source_id':candidate.get('source_id','source-1'),
-                                       'source_offset':candidate.get('source_offset',request.start),
-                                       'transition':request.transition} for i,candidate in enumerate(candidates)]}
+                          'segments':[render_timeline.edit_gameplay(
+                              {**candidate,'id':i+1,'source_id':candidate.get('source_id','source-1'),
+                               'source_offset':candidate.get('source_offset',request.start),
+                               'transition':request.transition},request) for i,candidate in enumerate(candidates)]}
                 update('REVIEW',result={'edit_plan':review})
                 return
             candidates = review['segments']
