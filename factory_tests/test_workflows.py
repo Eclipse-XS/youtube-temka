@@ -299,6 +299,44 @@ def test_manual_caption_track_revises_without_speech_analysis(owned_sources,monk
     assert 'Corrected action' in corrected and 'First action' not in corrected
 
 
+def test_preview_uses_edited_timeline_and_final_reuses_source_clip(owned_sources,monkeypatch):
+    import av
+    import numpy as np
+
+    request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,workflow='highlights',mode='longs',
+                       minimum=5,maximum=6,intervals=[(0,5)],review_before_render=True,save_drive=False,
+                       audio_mode='silent',captions=False,max_text_model_calls=0)
+    job=store.create(request.model_dump())
+    process(store.claim('fixture'))
+    plan=store.get(job['id'])['result']['edit_plan']
+    segment={'id':plan['segments'][0]['id'],'start_seconds':0,'end_seconds':5,
+             'hook':{'text':'HOOK','start':.4,'end':1.2},'sounds':[{'kind':'impact','start':.5}],
+             'caption_track':{'mode':'manual','cues':[{'text':'CAPTION','start':.4,'end':1.2}]}}
+    draft=store.edit_plan(job['id'],plan['revision'],[segment],None,preview=True)
+    process(store.claim('fixture'))
+    reviewed=store.get(job['id'])
+    assert reviewed['state']=='REVIEW',reviewed['error']
+    assert not reviewed['result']['edit_plan']['approved'] and not reviewed['result'].get('outputs')
+    proxy=reviewed['result']['preview']
+    assert (proxy['revision'],proxy['width'],proxy['height'])==(draft['revision'],640,360)
+    root=config.SCRATCH/job['id']
+    preview=root/proxy['files'][0]
+    media.validate_output(preview,5,request,preview=True,expected_audio=True)
+    with av.open(str(preview)) as container:
+        frame=next(frame for frame in container.decode(video=0) if frame.time>=.6).to_ndarray(format='gray')
+        assert (frame[:180]>150).sum()>100 and (frame[180:]>150).sum()>100
+    with av.open(str(preview)) as container:
+        frame=next(frame for frame in container.decode(audio=0) if frame.time>=.6)
+        assert float(np.abs(frame.to_ndarray()).max())>.01
+
+    monkeypatch.setattr(media,'download',lambda *_a,**_kw:pytest.fail('Preview source should be reused'))
+    store.edit_plan(job['id'],draft['revision'],[segment],None,approve=True)
+    process(store.claim('fixture'))
+    done=store.get(job['id'])
+    assert done['state']=='READY',done['error']
+    media.validate_output(root/done['result']['outputs'][0]['name'],5,request,expected_audio=True)
+
+
 def test_render_recovers_after_transient_failure_without_rerendering_first_clip(owned_sources,monkeypatch):
     request=JobRequest(source=owned_sources[0]['source'],rights_confirmed=True,
                        workflow='highlights',minimum=5,maximum=6,intervals=[(0,5),(1,6)],

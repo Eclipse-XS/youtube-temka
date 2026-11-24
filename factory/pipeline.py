@@ -281,6 +281,8 @@ def process(claim,assets=None):
     heartbeat=threading.Thread(target=renew,daemon=True);heartbeat.start()
     try:
         request=JobRequest.model_validate(job['request'])
+        preview_timeline=job['result'].get('preview_pending')
+        preview=preview_timeline is not None
         progress.limit_models(request,claim.get('model_usage',{}))
         root.mkdir(parents=True,exist_ok=True)
         if job['result'].get('cloud_verified'):
@@ -390,7 +392,7 @@ def process(claim,assets=None):
             raise NeedsReview('No suitable moments were found. Add source material, change the selected ranges, or select a manual interval.')
         if request.review_before_render and request.workflow in ('highlights','compilation'):
             review = job['result'].get('edit_plan')
-            if review and not review['approved']:
+            if review and not review['approved'] and not preview:
                 update('REVIEW')
                 return
             if not review:
@@ -417,7 +419,7 @@ def process(claim,assets=None):
                               selection_summary=f'Edited plan: {selected:.1f}s for a {target:g}s target.')
             update(result=result)
         source_limits={key:item['end'] for key,item in sources.items()} if compiling else {'source-1':end}
-        saved_timeline=job['result'].get('render_timeline')
+        saved_timeline=preview_timeline or job['result'].get('render_timeline')
         timeline_path=root/'timeline.json'
         if saved_timeline is None and timeline_path.is_file():
             checkpoint=json.loads(timeline_path.read_text(encoding='utf-8'))
@@ -431,7 +433,8 @@ def process(claim,assets=None):
         revision_path=root/f"timeline-r{timeline['revision']}.json"
         if not revision_path.is_file():
             write_json_atomic(revision_path,timeline,ensure_ascii=True)
-        write_json_atomic(timeline_path,timeline,ensure_ascii=True)
+        if not preview:
+            write_json_atomic(timeline_path,timeline,ensure_ascii=True)
         candidates=[scene.candidate for scene in scenes]
         update(result={'timeline_revision':timeline['revision']})
         force_audio=request.mode=='longs' and any(scene.sounds for scene in scenes)
@@ -496,7 +499,8 @@ def process(claim,assets=None):
                 clip_request.hook=suggestions[0]['text'] if suggestions else ''
                 progress.done(message=hook_candidates['method'])
             duration=candidate['end_seconds']-candidate['start_seconds']
-            output=root/f'clip-{i+1}.mp4';clip=root/f'selected-{i+1}.mp4'
+            output=root/(f'proxy-clip-{i+1}.mp4' if preview else f'clip-{i+1}.mp4')
+            clip=root/f'selected-{i+1}.mp4'
             source_key=render_timeline.fingerprint([clip_source,offset+candidate['start_seconds'],
                                                     offset+candidate['end_seconds'],resolution,request.output_height,compiling])
             clip_checkpoint=clip.with_suffix('.json')
@@ -536,7 +540,7 @@ def process(claim,assets=None):
                     checkpoint=json.loads(output.with_suffix('.validation.json').read_text(encoding='utf-8'))
                     if checkpoint.get('timeline_render_key')!=render_key:
                         raise ValueError('Timeline render inputs changed')
-                    refreshed=media.verify_checkpoint(output,checkpoint,clip_request)
+                    refreshed=media.verify_checkpoint(output,checkpoint,clip_request,preview=preview)
                     if refreshed is not checkpoint:
                         write_json_atomic(output.with_suffix('.validation.json'),refreshed)
                     progress.done('captions_audio','skipped','Reused validated render');progress.done('rendering',message='Reused validated render')
@@ -550,18 +554,21 @@ def process(claim,assets=None):
                              music_path=assets.get('music') if assets is not None else None,
                              logo_path=assets.get('logos') if assets is not None else None,
                              timeline_sounds=sounds,force_audio=force_audio,transition_seconds=transition_seconds,
-                             timeline_effects=scene.effects,asset_paths=assets,caption_cues=scene.caption_cues)
+                             timeline_effects=scene.effects,asset_paths=assets,caption_cues=scene.caption_cues,preview=preview)
                 report_path=output.with_suffix('.validation.json')
                 if report_path.is_file():
                     report=json.loads(report_path.read_text(encoding='utf-8'))
                     write_json_atomic(report_path,{**report,'timeline_render_key':render_key})
             progress.done('validation')
+            validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
+            if preview:
+                outputs.append({'name':output.name,'duration':validation.get('duration',duration)})
+                continue
             thumbnail=output.with_suffix('.jpg')
             from .thumbnails import create as make_thumbnail
             progress.begin('thumbnail','RENDERING',operation=operation)
             thumbnail_report=make_thumbnail(output,thumbnail,tick=progress.tick) if not thumbnail.is_file() else {'method':'reused_existing_frame'}
             progress.done()
-            validation=json.loads(output.with_suffix('.validation.json').read_text()) if output.with_suffix('.validation.json').is_file() else {}
             outputs.append({'name':output.name,'title':candidate['title'],'approved':False,'duration':validation.get('duration',duration),'edit_duration':duration,'thumbnail':{'name':thumbnail.name,**thumbnail_report},'validation':validation})
             if clip_request.captions and output.with_suffix('.ass').is_file():
                 outputs[-1]['caption_artifact']=output.with_suffix('.ass').name
@@ -574,34 +581,44 @@ def process(claim,assets=None):
             outputs[-1].update(render_id=f'{jid}:{i+1}',render_version=1,output_hash=digest,hook=clip_request.hook,hook_candidates=hook_candidates,series={'id':jid,'title':candidate.get('series_title',candidate['title']),'part':candidate['part'],'parts':candidate['parts'],'previous_part':candidate['part']-1 if candidate['part']>1 else None,'next_part':candidate['part']+1 if candidate['part']<candidate['parts'] else None} if candidate.get('part') else None)
             update(result={'outputs':outputs,'clips_completed':i+1,'clips_total':len(candidates)})
         progress.source_id = None
-        if compiling or request.gameplay_only:
+        if not preview and (compiling or request.gameplay_only):
             transcript['segments'].sort(key=lambda segment:segment['start'])
             transcript['text'] = ' '.join(s['text'] for s in transcript['segments'])
             write_json_atomic(root/'transcript.json',transcript,ensure_ascii=True)
             transcript_artifacts(root,transcript,timeline['duration_ms']/1000 if compiling else end-request.start,replace=True)
             update(result={'language':transcript['language']})
+
+        def finish_preview(files):
+            width,height=media.delivery_dimensions(request,True)
+            update('REVIEW',result={'preview_pending':None,
+                                    'preview':{'revision':timeline['revision'],'files':files,'width':width,'height':height}})
+
         if request.mode=='longs' and (len(outputs)>1 or cards):
             playlist=[*scenes]
             video_paths=[root/o['name'] for o in outputs]
             source_paths=list(raw_sources.values())
             for kind,card in cards.items():
-                key=render_timeline.fingerprint([card.settings.model_dump(),request.output_height])[:24]
+                key=render_timeline.fingerprint([card.settings.model_dump(),request.output_height,preview])[:24]
                 path=root/f'card-{kind}-{key}.mp4'
                 progress.begin('rendering','RENDERING',operation=f'card-{kind}')
                 if not path.is_file():
-                    media.render_card(path,card,request,progress.tick)
+                    media.render_card(path,card,request,progress.tick,preview=preview)
                 progress.done()
                 index=int(card.settings.after_cold_open) if kind=='intro' else len(playlist)
                 playlist.insert(index,card)
                 video_paths.insert(index,path)
                 source_paths.insert(index,path)
             progress.begin('rendering','RENDERING',operation='assemble-long')
-            final=root/'long.mp4';media.assemble_timeline(video_paths,final,playlist,request,progress.tick,reencode=bool(cards))
+            final=root/('proxy-long.mp4' if preview else 'long.mp4')
+            media.assemble_timeline(video_paths,final,playlist,request,progress.tick,reencode=bool(cards),preview=preview)
             progress.done()
             progress.begin('validation','RENDERING',operation='assemble-long')
             duration=timeline['duration_ms']/1000 if cards else sum(o['duration'] for o in outputs)-sum(s.overlap_ms for s in scenes)/1000
-            validation=media.validate_output(final,duration,request=request)
+            validation=media.validate_output(final,duration,request=request,preview=preview)
             progress.done()
+            if preview:
+                finish_preview([final.name])
+                return
             progress.begin('retrieval','RENDERING',operation='assemble-edit-source')
             raw=root/'long-source.mp4';media.assemble_timeline(source_paths,raw,playlist,request,progress.tick,reencode=bool(cards))
             progress.done()
@@ -622,6 +639,9 @@ def process(claim,assets=None):
                 outputs[0]['edit_transcript']=retained
             digest=media.media_fingerprint(final)['sha256']
             outputs[0].update(render_id=f'{jid}:long',render_version=1,output_hash=digest)
+        if preview:
+            finish_preview([item['name'] for item in outputs])
+            return
         if compiling:
             actual = outputs[0]['duration']
             target = result['target_duration']

@@ -242,17 +242,19 @@ def download(source,path,start,end,resolution,audio=False,tick=lambda *_:None):
 
 
 def render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-           timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None):
+           timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None,
+           preview=False):
     from .heavy import HEAVY_LOCK
     with HEAVY_LOCK:
         return _render(source,output,transcript,start,end,request,background,tick,stage,music_path,logo_path,
-                       timeline_sounds,force_audio,transition_seconds,timeline_effects,asset_paths,caption_cues)
+                       timeline_sounds,force_audio,transition_seconds,timeline_effects,asset_paths,caption_cues,preview)
 
 
 def _render(source,output,transcript,start,end,request,background=None,tick=lambda *_:None,stage=None,music_path=None,logo_path=None,
-            timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None):
+            timeline_sounds=(),force_audio=False,transition_seconds=None,timeline_effects=(),asset_paths=None,caption_cues=None,
+            preview=False):
     from subtitles import generate_ass, generate_srt
-    from ffmpeg_utils import video_encode_args, escape_filter_value, LOUDNORM_FILTER
+    from ffmpeg_utils import DELIVERY, QUALITY, video_encode_args, escape_filter_value, LOUDNORM_FILTER
     from .captions import appearance
     from .timeline_filters import audio_graph, font_option, playback_graph, playback_ranges, retime_transcript, visual_graph
     # Loudnorm alone can overshoot after AAC encoding, especially for transient
@@ -308,7 +310,8 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     generate_ass(transcript,caption_start,caption_end,str(ass),preserve_cues=caption_cues is not None,**appearance(request))
     # Source is already a precisely extracted selected interval.
     args=[ffmpeg(),'-hide_banner','-loglevel','error','-y','-threads','2','-i',str(source)]
-    width,height=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
+    width,height=delivery_dimensions(request,preview)
+    scale=height/delivery_dimensions(request)[1]
     preset=request.preset
     framing={'strategy':preset}
     if preset=='auto':preset='gameplay' if background and background.is_file() else 'smart'
@@ -330,16 +333,16 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         if not background or not background.is_file():
             raise ValueError('Gameplay requires an authorized background asset; choose Blur or upload an asset')
         args+=['-stream_loop','-1','-threads','2','-i',str(background)]
-        top=2*round(1920*request.split_ratio/2)
-        bottom=1920-top
-        graph=f'{video_input}scale=1080:{top}:force_original_aspect_ratio=increase,crop=1080:{top},setsar=1[top];[1:v]scale=1080:{bottom}:force_original_aspect_ratio=increase,crop=1080:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
+        top=2*round(height*request.split_ratio/2)
+        bottom=height-top
+        graph=f'{video_input}scale={width}:{top}:force_original_aspect_ratio=increase,crop={width}:{top},setsar=1[top];[1:v]scale={width}:{bottom}:force_original_aspect_ratio=increase,crop={width}:{bottom},setsar=1[bottom];[top][bottom]vstack[v]'
     elif preset=='smart' and trajectory:
-        graph=f"{video_input}sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale=1080:1920,setsar=1[v]"
+        graph=f"{video_input}sendcmd=f='{escape_filter_value(str(commands.resolve()))}',crop@c={crop_w}:{crop_h}:{positions[0]}:0,scale={width}:{height},setsar=1[v]"
     elif preset=='crop':
         # Explicit center framing fallback; no unverified face-tracking claim.
-        graph=f'{video_input}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v]'
+        graph=f'{video_input}scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1[v]'
     else:
-        graph=f'{video_input}split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:2[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
+        graph=f'{video_input}split[a][b];[a]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},boxblur={max(1,round(20*scale))}:2[bg];[b]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]'
     next_input=2 if preset=='gameplay' and request.mode=='shorts' else 1
     visual_parts,video,next_input=visual_graph(timeline_effects,args,'[v]',next_input,width,height,output,asset_paths)
     graph=';'.join([*playback_parts,graph,*visual_parts])
@@ -348,12 +351,13 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         video='[captioned]'
     if request.hook:
         hookfile=output.with_suffix('.hook.txt')
-        fontsize=request.hook_font_size
+        fontsize=round(request.hook_font_size*scale)
+        minimum_size=max(6,round(18*scale))
         if request.hook_wrap:
             while True:
                 hooklines=textwrap.wrap(request.hook,width=max(1,min(26,int(width*.84/(fontsize*1.1)))))
-                if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=18:break
-                fontsize-=2
+                if len(hooklines)*fontsize*1.2<=height*.55 or fontsize<=minimum_size:break
+                fontsize-=max(1,round(2*scale))
             text='\n'.join(hooklines)
         else:
             text=request.hook
@@ -362,31 +366,33 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
         # installed font avoids drawtext terminating the entire render process.
         font=font_option(request.hook_font)
         anchor={'top':'h*0.12','center':'(h-th)/2','bottom':'h*0.75-th'}[request.hook_position]
-        x=f'clip((w-tw)/2+{request.hook_x},w*.05,max(w*.05,w*.95-tw))'
-        y=f'clip({anchor}+{request.hook_y},h*.05,max(h*.05,h*.95-th))'
+        x=f'clip((w-tw)/2+{round(request.hook_x*scale)},w*.05,max(w*.05,w*.95-tw))'
+        y=f'clip({anchor}+{round(request.hook_y*scale)},h*.05,max(h*.05,h*.95-th))'
         show=f'gte(t,{request.hook_start})'
         if not request.hook_pinned:
             show+=f'*lt(t,{request.hook_start+request.hook_duration})'
-        shadow=2 if request.hook_shadow else 0
+        shadow=round(2*scale) if request.hook_shadow else 0
         graph+=(f";{video}drawtext={font}textfile='{escape_filter_value(str(hookfile.resolve()))}':expansion=none:"
-                f"fontcolor={request.hook_color}:fontsize={fontsize}:borderw={request.hook_outline}:bordercolor=black:"
+                f"fontcolor={request.hook_color}:fontsize={fontsize}:borderw={round(request.hook_outline*scale)}:bordercolor=black:"
                 f"shadowx={shadow}:shadowy={shadow}:box={int(request.hook_box)}:boxcolor=black@{request.hook_box_opacity}:"
-                f"boxborderw={request.hook_padding}:x='{x}':y='{y}':enable='{show}'[hooked]")
+                f"boxborderw={round(request.hook_padding*scale)}:x='{x}':y='{y}':enable='{show}'[hooked]")
         video='[hooked]'
     audio_map=None
     if request.logo_asset:
         logo=logo_path or config.DATA/'logos'/request.logo_asset
         if not logo.is_file():raise ValueError('Selected logo is unavailable')
         args+=['-threads','1','-i',str(logo)]
-        graph+=f';[{next_input}:v]scale={max(32,width//8)}:{max(32,height//8)}:force_original_aspect_ratio=decrease[logo];{video}[logo]overlay=W-w-32:32[branded]'
+        margin=round(32*scale)
+        graph+=f';[{next_input}:v]scale={max(margin,width//8)}:{max(margin,height//8)}:force_original_aspect_ratio=decrease[logo];{video}[logo]overlay=W-w-{margin}:{margin}[branded]'
         video='[branded]';next_input+=1
     if request.cta_text:
-        ctafile=output.with_suffix('.cta.txt');ctafile.write_text('\n'.join(textwrap.wrap(request.cta_text,width=max(1,int(width*.84/(32*1.1))))),encoding='utf-8')
+        cta_size=round(32*scale)
+        ctafile=output.with_suffix('.cta.txt');ctafile.write_text('\n'.join(textwrap.wrap(request.cta_text,width=max(1,int(width*.84/(cta_size*1.1))))),encoding='utf-8')
         ctafont=''
         if os.name=='nt':
             ctafontpath=Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/'arial.ttf'
             if ctafontpath.is_file():ctafont=f"fontfile='{escape_filter_value(str(ctafontpath.resolve()))}':"
-        graph+=f";{video}drawtext={ctafont}textfile='{escape_filter_value(str(ctafile.resolve()))}':expansion=none:fontcolor=white:fontsize=32:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-tw)/2:y=h*0.8-th:enable='gte(t,{max(0,duration-4)})'[cta]"
+        graph+=f";{video}drawtext={ctafont}textfile='{escape_filter_value(str(ctafile.resolve()))}':expansion=none:fontcolor=white:fontsize={cta_size}:box=1:boxcolor=black@0.65:boxborderw={round(10*scale)}:x=(w-tw)/2:y=h*0.8-th:enable='gte(t,{max(0,duration-4)})'[cta]"
         video='[cta]'
     music=music_path or (config.DATA/'music'/request.music_asset if request.music_asset else None)
     if request.audio_mode=='music' and music and not music.is_file():raise ValueError('Selected music asset is missing; choose an available authorized asset')
@@ -436,9 +442,10 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
             audio_map='[faded_audio]'
     args+=['-filter_complex_threads','1','-filter_complex',graph,'-map',video]
     args+=['-map',audio_map,'-c:a','aac','-b:a','192k','-ar','48000'] if audio_map else ['-an']
-    encoding=video_encode_args()
-    args+=[*encoding,'-maxrate',str(request.bitrate),'-bufsize',str(request.bitrate*2),'-threads','2','-pix_fmt','yuv420p']
-    if not request.preserve_fps:
+    encoding=video_encode_args(DELIVERY if preview else QUALITY)
+    bitrate=min(request.bitrate,1_800_000) if preview else request.bitrate
+    args+=[*encoding,'-maxrate',str(bitrate),'-bufsize',str(bitrate*2),'-threads','2','-pix_fmt','yuv420p']
+    if preview or not request.preserve_fps:
         args+=['-r','30']
     temporary=output.with_suffix('.rendering.mp4')
     args+=['-t',str(duration),'-movflags','+faststart','-progress','pipe:1',str(temporary)]
@@ -446,30 +453,39 @@ def _render(source,output,transcript,start,end,request,background=None,tick=lamb
     try:
         run(args,tick,duration)
         if stage:stage('validation')
-        report=validate_output(temporary,duration,request=request,expected_audio=audio_map is not None)
+        report=validate_output(temporary,duration,request=request,expected_audio=audio_map is not None,preview=preview)
         temporary.replace(output)
     finally:temporary.unlink(missing_ok=True)
     write_json_atomic(output.with_suffix('.validation.json'),{**report,'framing':framing,
-                      'media_fingerprint':media_fingerprint(output,request)})
+                      'media_fingerprint':media_fingerprint(output,request,preview=preview)})
     return output
 
 
-def media_fingerprint(path,request=None):
+def delivery_dimensions(request, preview=False):
+    if request.mode=='shorts':
+        return (540,960) if preview else (1080,1920)
+    height=360 if preview else request.output_height
+    return height*16//9//2*2,height
+
+
+def media_fingerprint(path,request=None,*,preview=False):
     with path.open('rb') as source:
         digest=hashlib.file_digest(source,'sha256').hexdigest()
-    return {'sha256':digest,'validation_version':1,
-            'profile':[request.mode,request.output_height,request.destination,config.SHORTS_MAX_SECONDS] if request else None}
+    profile=[request.mode,request.output_height,request.destination,config.SHORTS_MAX_SECONDS] if request else None
+    if preview and profile:
+        profile.append('preview')
+    return {'sha256':digest,'validation_version':1,'profile':profile}
 
 
-def verify_checkpoint(path,report,request):
-    fingerprint=media_fingerprint(path,request)
+def verify_checkpoint(path,report,request,*,preview=False):
+    fingerprint=media_fingerprint(path,request,preview=preview)
     if report.get('validated') is True and report.get('media_fingerprint')==fingerprint:
         return report
-    refreshed=validate_output(path,report['duration'],request=request,expected_audio=report.get('audio'))
+    refreshed=validate_output(path,report['duration'],request=request,expected_audio=report.get('audio'),preview=preview)
     return {**report,**refreshed,'media_fingerprint':fingerprint}
 
 
-def validate_output(path,duration,request=None,expected_audio=None):
+def validate_output(path,duration,request=None,expected_audio=None,*,preview=False):
     import av
     with av.open(str(path)) as container:
         if not container.streams.video or not container.duration or abs(container.duration/av.time_base-duration)>1:
@@ -477,7 +493,7 @@ def validate_output(path,duration,request=None,expected_audio=None):
         stream=container.streams.video[0]
         stream.thread_count=2
         if request:
-            expected=(1080,1920) if request.mode=='shorts' else (request.output_height*16//9//2*2,request.output_height)
+            expected=delivery_dimensions(request,preview)
             if (stream.width,stream.height)!=expected:raise RuntimeError('Rendered resolution/aspect ratio does not match the requested output')
             if request.destination=='youtube_shorts' and container.duration/av.time_base>config.SHORTS_MAX_SECONDS:
                 raise RuntimeError(f'Rendered output exceeds the {config.SHORTS_MAX_SECONDS}s YouTube Shorts limit')
@@ -532,12 +548,11 @@ def concatenate(paths,output,tick=lambda *_:None):
         temporary.unlink(missing_ok=True)
 
 
-def render_card(output, card, request, tick=lambda *_:None):
-    from ffmpeg_utils import escape_filter_value, video_encode_args
+def render_card(output, card, request, tick=lambda *_:None, *, preview=False):
+    from ffmpeg_utils import DELIVERY, QUALITY, escape_filter_value, video_encode_args
     from .timeline_filters import font_option
 
-    height = request.output_height
-    width = height * 16 // 9 // 2 * 2
+    width,height=delivery_dimensions(request,preview)
     duration = (card.end_ms - card.start_ms) / 1000
     size = height // 12
     spec = card.settings
@@ -552,24 +567,24 @@ def render_card(output, card, request, tick=lambda *_:None):
     temporary = output.with_suffix('.rendering.mp4')
     args = [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
             '-i', f'color=c=0x{spec.background[1:]}:s={width}x{height}:r=30', '-vf', graph,
-            '-t', str(duration), '-an', *video_encode_args(), '-pix_fmt', 'yuv420p',
+            '-t', str(duration), '-an', *video_encode_args(DELIVERY if preview else QUALITY), '-pix_fmt', 'yuv420p',
             '-threads', '2', '-progress', 'pipe:1', str(temporary)]
     try:
         run(args, tick, duration)
-        validate_output(temporary, duration, request=request, expected_audio=False)
+        validate_output(temporary, duration, request=request, expected_audio=False,preview=preview)
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None, *, reencode=False):
+def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None, *, reencode=False, preview=False):
     if not reencode and not any(scene.overlap_ms for scene in scenes):
         return concatenate(paths, output, tick)
 
     import av
-    from ffmpeg_utils import video_encode_args
+    from ffmpeg_utils import DELIVERY, QUALITY, video_encode_args
 
-    width, height = request.output_height * 16 // 9 // 2 * 2, request.output_height
+    width,height=delivery_dimensions(request,preview)
     args = [ffmpeg(), '-y', '-hide_banner', '-loglevel', 'error']
     audio = []
     for path in paths:
@@ -607,8 +622,9 @@ def assemble_timeline(paths, output, scenes, request, tick=lambda *_:None, *, re
     args.extend(['-filter_complex_threads', '1', '-filter_complex', ';'.join(graph), '-map', video])
     if with_audio:
         args.extend(['-map', sound, '-c:a', 'aac', '-b:a', '192k'])
-    args.extend([*video_encode_args(), '-threads', '2', '-pix_fmt', 'yuv420p', '-t', str(duration),
-                 '-maxrate', str(request.bitrate), '-bufsize', str(request.bitrate * 2),
+    bitrate=min(request.bitrate,1_800_000) if preview else request.bitrate
+    args.extend([*video_encode_args(DELIVERY if preview else QUALITY), '-threads', '2', '-pix_fmt', 'yuv420p', '-t', str(duration),
+                 '-maxrate', str(bitrate), '-bufsize', str(bitrate * 2),
                  '-movflags', '+faststart', '-progress', 'pipe:1', str(temporary)])
     try:
         run(args, tick, duration)

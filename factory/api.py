@@ -535,12 +535,13 @@ def edit_caption_cues(jid: str, segment_id: int):
     return {'cues':cues}
 
 
-def save_edit_plan(jid, body, approve=False):
+def save_edit_plan(jid, body, approve=False, *, preview=False):
     try:
         return store.edit_plan(jid,body.revision,[item.model_dump(exclude_unset=True) |
                                                   {'transition':item.transition} for item in body.segments],
                                body.target_duration,approve,
-                               branding=body.model_dump(include=body.model_fields_set & {'intro','outro','chapter_titles'}))
+                               branding=body.model_dump(include=body.model_fields_set & {'intro','outro','chapter_titles'}),
+                               preview=preview)
     except KeyError:
         raise HTTPException(404,'Job not found') from None
     except InterruptedError as error:
@@ -557,6 +558,11 @@ def revise_edit_plan(jid: str, body: EditPlanUpdate):
 @app.post('/api/jobs/{jid}/render')
 def render_plan(jid: str, body: EditPlanUpdate):
     return save_edit_plan(jid,body,approve=True)
+
+
+@app.post('/api/jobs/{jid}/preview')
+def preview_plan(jid: str, body: EditPlanUpdate):
+    return save_edit_plan(jid,body,preview=True)
 
 
 class Approval(BaseModel):
@@ -639,7 +645,8 @@ def output(jid:str,name:str,request:Request):
         if item.get('thumbnail'):
             manifests[item['thumbnail']['name']]=item['thumbnail'].get('drive')
     manifests.update(job['result'].get('artifacts',{}))
-    allowed=set(manifests)|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
+    preview=job['result'].get('preview') or {}
+    allowed=set(manifests)|set(preview.get('files',[]))|{'transcript.json','transcript.srt','transcript.vtt','timeline.json'}
     if name not in allowed:
         raise HTTPException(404,'Artifact not found')
     root=config.SCRATCH/jid

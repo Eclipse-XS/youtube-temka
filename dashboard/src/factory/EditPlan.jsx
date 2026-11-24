@@ -62,13 +62,13 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
     segment.sounds.map((sound,i)=>i===index?{...sound,[key]:value}:sound));
   const changeEffect = (segment,index,fields) => change(segment.id,"effects",
     segment.effects.map((effect,i)=>i===index?{...effect,...fields}:effect));
-  const save = (render) => act(async () => {
+  const save = (action) => act(async () => {
     setSaving(true);
     try {
       const body = {revision:plan.revision,target_duration:target,intro,outro,chapter_titles:chapterTitles,segments:segments.map(
         ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects,caption_track})=>
           ({id,start_seconds,end_seconds,transition,transition_duration,hook,sounds,effects,caption_track}))};
-      if (render) await post(path+"/render",body);
+      if (action) await post(path+"/"+action,body);
       else await api(path+"/edit-plan",{method:"PATCH",body:JSON.stringify(body)});
       await onSaved();
     } finally {
@@ -78,6 +78,11 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
   return <section>
     <h2>План монтажу</h2>
     <p>{length.toFixed(1)} сек · {segments.length} фрагментів</p>
+    {job.result.preview?.revision===plan.revision && <details open>
+      <summary>Відеопрев’ю ревізії {plan.revision}</summary>
+      {job.result.preview.files.map(name=><video key={name} controls preload="metadata"
+        src={`/api${path}/files/${name}?revision=${plan.revision}`}/>)}
+    </details>}
     {target!==null && <label>Цільова тривалість, сек
       <input type="number" min="10" max="3600" value={target} onChange={e=>setTarget(+e.target.value)}/>
     </label>}
@@ -242,8 +247,9 @@ export default function EditPlan({ job, api, post, act, onSaved }) {
       </article>;
     })}
     <div className="actions">
-      <button type="button" disabled={saving} onClick={()=>save(false)}>Зберегти план</button>
-      <button type="button" className="primary" disabled={saving} onClick={()=>save(true)}>Схвалити й рендерити</button>
+      <button type="button" disabled={saving} onClick={()=>save()}>Зберегти план</button>
+      <button type="button" disabled={saving} onClick={()=>save("preview")}>Створити відеопрев’ю</button>
+      <button type="button" className="primary" disabled={saving} onClick={()=>save("render")}>Схвалити й рендерити</button>
     </div>
   </section>;
 }

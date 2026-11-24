@@ -174,9 +174,10 @@ def claim(worker, remote=False):
             finish_open_operations(db,item['id'],now,'failed',failure['code'])
         if db.execute('SELECT 1 FROM jobs WHERE worker=? AND lease IS NOT NULL',(worker,)).fetchone():
             return None
-        rows = db.execute("""SELECT id,request FROM jobs WHERE state='QUEUED' AND cancelled=0
+        rows = db.execute("""SELECT id,request,json_type(result,'$.preview_pending') AS preview_type
+                          FROM jobs WHERE state='QUEUED' AND cancelled=0
                           AND coalesce(json_extract(result,'$.retry_at'),0)<=? ORDER BY created""", (now,))
-        row = next((r for r in rows if not remote or can_claim_remote(r['request'])),None)
+        row = next((r for r in rows if not remote or (r['preview_type']!='object' and can_claim_remote(r['request']))),None)
         if not row:
             return None
         lease = uuid.uuid4().hex
@@ -296,7 +297,7 @@ def retry(jid):
         return cur.rowcount == 1
 
 
-def edit_plan(jid, revision, edits, target, approve=False, *, branding=None):
+def edit_plan(jid, revision, edits, target, approve=False, *, branding=None, preview=False):
     from .assets import asset_path
     from .models import JobRequest, TimelineCaptionTrack, TimelineCard
     from .render_timeline import build, compile_scenes, validate_scene_edits
@@ -381,11 +382,17 @@ def edit_plan(jid, revision, edits, target, approve=False, *, branding=None):
             result['render_timeline'] = timeline
         else:
             result.pop('render_timeline',None)
-        state = 'QUEUED' if approve else 'REVIEW'
+        if preview:
+            result['preview_pending'] = timeline
+            result.pop('preview',None)
+        else:
+            result.pop('preview_pending',None)
+        state = 'QUEUED' if approve or preview else 'REVIEW'
         db.execute('UPDATE jobs SET state=?,result=?,seen=? WHERE id=?',
                    (state,json.dumps(result,ensure_ascii=False),time.time(),jid))
-        if approve:
-            db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),state,'Edit plan approved for rendering'))
+        if approve or preview:
+            message = 'Composited timeline preview requested' if preview else 'Edit plan approved for rendering'
+            db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),state,message))
         return plan
 
 
