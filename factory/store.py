@@ -290,7 +290,10 @@ def retry(jid):
     with connect() as db:
         # A retry resumes files/checkpoints; verified Drive outputs are retained.
         cur = db.execute("""UPDATE jobs SET state='QUEUED',error=NULL,cancelled=0,lease=NULL,
-                         result=json_remove(result,'$.automatic_retries','$.retry_at','$.failure')
+                         result=json_remove(CASE WHEN json_extract(result,'$.failure.stage')='drive'
+                             AND json_array_length(result,'$.outputs')>0
+                             THEN json_set(result,'$.delivery_pending',json('true')) ELSE result END,
+                             '$.automatic_retries','$.retry_at','$.failure')
                          WHERE id=? AND state IN ('FAILED','BLOCKED','CANCELLED')""", (jid,))
         if cur.rowcount:
             db.execute('INSERT INTO events VALUES(?,?,?,?)',(jid,time.time(),'QUEUED','Manual retry; checkpoints retained'))

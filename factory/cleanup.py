@@ -19,6 +19,10 @@ def sweep(now=None):
     with store.connect() as db:
         rows=db.execute("SELECT id,result FROM jobs WHERE lease IS NULL AND state IN ('FAILED','BLOCKED','CANCELLED') AND coalesce(seen,created)<?",(now-retention,)).fetchall()
         for row in rows:
+            result=json.loads(row['result'])
+            if result.get('delivery_pending') or (result.get('outputs') and
+                    (result.get('failure') or {}).get('stage')=='drive'):
+                continue
             if not re.fullmatch('[a-f0-9]{32}',row['id']):
                 continue
             target=config.SCRATCH/row['id']
@@ -30,7 +34,6 @@ def sweep(now=None):
                 if any(p.stat().st_mtime>now-retention for p in target.rglob('*') if p.is_file()):
                     continue
                 remove_workspace(target)
-                result=json.loads(row['result'])
                 result['local_expired']=True
                 db.execute('UPDATE jobs SET result=? WHERE id=?',(json.dumps(result),row['id']))
         referenced=set()

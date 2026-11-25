@@ -390,6 +390,25 @@ def process(claim,assets=None):
         root.mkdir(parents=True,exist_ok=True)
         if job['result'].get('cloud_verified'):
             remove_workspace(root);update('READY');return
+        if request.save_drive and not preview:
+            from . import drive_delivery
+            if job['result'].get('delivery_pending'):
+                progress.begin('drive','UPLOADING',message='Checking completed exports')
+                outputs,raw,metadata=drive_delivery.checkpoint(root,job,request)
+                drive_delivery.upload(root,jid,request,outputs,raw,metadata,progress,update)
+                update('READY',result={'delivery_pending':False})
+                from .retention import register
+                register(store.get(jid))
+                return
+            progress.begin('drive','PROBING',message='Checking Drive authorization before processing')
+            try:
+                drive_delivery.preflight()
+            except ValueError as error:
+                progress.done(status='failed',message=str(error),error_code='DRIVE_PREFLIGHT_FAILED')
+                update('BLOCKED',error=str(error),result={'failure':{'code':'DRIVE_PREFLIGHT_FAILED',
+                    'stage':'drive','message':str(error),'retryable':False}})
+                return
+            progress.done()
         preflight();source=request.source
         if source.startswith('edit:'):
             _,origin,index=source.split(':')
@@ -827,41 +846,10 @@ def process(claim,assets=None):
                                          'application_commit':evidence['application_commit'],'resources':evidence['resources']}})
         metadata_obj={'job_id':jid,'request':request.model_dump(),'source':metadata,'language':transcript['language'],'candidates':candidates,'outputs':outputs}
         if request.save_drive:
-            artifact_paths=[root/'transcript.json',root/'metadata.json',root/'reproducibility.json',*root.glob('timeline.json'),
-                            *(p for suffix in ('.srt','.vtt','.ass','.validation.json') for p in root.glob('*'+suffix)
-                              if not p.name.startswith('proxy-')),
-                            *(root/o['edit_transcript'] for o in outputs if o.get('edit_transcript'))]
-            total_files=sum(1+bool(o.get('thumbnail'))+int(o['name'] in raw_sources) for o in outputs)+sum(p.name=='metadata.json' or (p.is_file() and p.stat().st_size>0) for p in artifact_paths)
-            progress.begin('drive','UPLOADING',total_files,'files');progress.tick(0,total_files)
-            from .drive import Drive
-            drive=Drive()
-            try:
-                folders=drive.job_folders(jid);uploaded=[]
-                uploaded_files=0
-                def upload_file(path,folder,key):
-                    nonlocal uploaded_files
-                    progress.counters['drive']['message']='Verifying '+path.name
-                    def bytes_tick(current=None,total=None):update(result={'upload_asset':{'name':path.name,'current':current,'total':total}})
-                    remote=drive.upload(path,folder,key,bytes_tick)
-                    uploaded_files+=1;progress.tick(uploaded_files,total_files)
-                    return remote
-                for output in outputs:
-                    remote=upload_file(root/output['name'],folders[request.mode],jid+'-'+output['name'])
-                    if output.get('thumbnail'):
-                        thumb=output['thumbnail']['name'];output['thumbnail']['drive']=upload_file(root/thumb,folders['thumbnails'],jid+'-'+thumb)
-                    if output['name'] in raw_sources:
-                        raw=raw_sources[output['name']];output['edit_source']=upload_file(raw,folders['sources'],jid+'-edit-'+output['name'])
-                    uploaded.append({**output,'drive':remote});update(result={'outputs':uploaded+outputs[len(uploaded):]})
-                metadata_obj['outputs']=uploaded
-                write_json_atomic(root/'metadata.json',metadata_obj,ensure_ascii=True)
-                artifacts={}
-                for path in artifact_paths:
-                    if not path.stat().st_size:continue
-                    folder=folders['job'] if path.suffix=='.json' else folders['subtitles']
-                    artifacts[path.name]=upload_file(path,folder,jid+'-'+path.name);update(result={'artifacts':artifacts})
-                update(result={'outputs':uploaded,'artifacts':artifacts,'cloud_verified':True})
-            finally:drive.close()
-            progress.done();remove_workspace(root)
+            update(result={'delivery_pending':True})
+            from .drive_delivery import upload
+            upload(root,jid,request,outputs,raw_sources,metadata_obj,progress,update)
+            remove_workspace(root)
             if request.source.startswith('upload:'):
                 original=config.SCRATCH/'uploads'/request.source[7:]
                 if original.is_file() and not store.source_in_use(request.source,jid):original.unlink()
