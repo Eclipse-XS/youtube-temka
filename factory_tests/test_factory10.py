@@ -317,3 +317,26 @@ def test_caption_looks_and_retained_word_timings_are_independent(workspace):
     one=(edit/'one.ass').read_text(encoding='utf-8-sig')
     comic=(edit/'comic.ass').read_text(encoding='utf-8-sig')
     assert one!=comic and 'ПРИВІТ' in one and 'ПРИВІТ' in comic
+
+
+def test_gameplay_vision_stops_after_equivalent_model_failures(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import httpx
+    from factory import visual_review
+    from factory.progress import Progress
+
+    request = JobRequest(source='upload:owned.mp4', rights_confirmed=True, ranking_profile='gameplay_only',
+                         visual_model='test', max_visual_model_calls=4)
+    progress = Progress(lambda *_args, **_kwargs: None)
+    calls = []
+    def generate(*args):
+        calls.append(progress.source_id)
+        raise httpx.ReadTimeout('vision stalled')
+    monkeypatch.setattr(visual_review, 'generate', generate)
+    monkeypatch.setattr(visual_review, 'model_session', lambda *args: nullcontext({'layers': None}))
+    monkeypatch.setattr(visual_review, 'frame_images', lambda *_: ['frame'] * 3)
+    candidates = [{'source_id': 'source-1', 'source_frame_times': [i,i+1,i+2],
+                   'heuristic_score': 10-i, 'proposal_kind': 'motion'} for i in range(4)]
+    visual_review.review_candidates([(candidates, request.source, 480, tmp_path)], request, progress)
+    assert len(calls) == 2
+    assert [item.get('visual_review_state') for item in candidates] == ['unavailable_or_invalid'] * 2 + [None] * 2

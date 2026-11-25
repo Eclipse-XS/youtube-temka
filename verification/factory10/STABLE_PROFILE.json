@@ -17,6 +17,21 @@
     "resolution": 720,
     "output_height": 720
   },
-  "shorts": {"minimum": 12, "maximum": 45},
+  "shorts": {
+    "minimum": 12,
+    "maximum": 45,
+    "visual_model": "qwen3-vl:2b-instruct",
+    "ranking_profile": "gameplay_only",
+    "text_mode": "static_hook",
+    "hook_pinned": true,
+    "audio_mode": "original",
+    "review_before_render": true,
+    "publish_automatic": false,
+    "max_visual_model_calls": 3,
+    "max_text_model_calls": 0,
+    "max_model_context_tokens": 12288,
+    "max_model_output_tokens": 1200,
+    "max_model_seconds": 180
+  },
   "longs": {"minimum": 30, "maximum": 65, "count": 20, "target_duration": 600}
 }

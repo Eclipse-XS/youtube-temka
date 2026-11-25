@@ -65,3 +65,16 @@ def test_ranking_reuses_gpu_plan_and_unloads_after_stage_failure(monkeypatch):
     assert [c['options']['num_gpu'] for c in calls[:-1]]==[36,36]
     assert all(c['keep_alive']==60 for c in calls[:-1])
     assert calls[-1]=={'model':'qwen2.5:3b','keep_alive':0}
+
+
+@pytest.mark.parametrize('setting,expected_layers',[('auto',None),('4',4)])
+def test_visual_request_uses_selected_placement_without_cpu_retry(monkeypatch,setting,expected_layers):
+    monkeypatch.setenv('OLLAMA_GPU_LAYERS',setting)
+    calls=[]
+    def handler(request):
+        calls.append(json.loads(request.content)['options'])
+        return httpx.Response(500)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            generate(client,'http://fixture.invalid/api/generate',{'model':'qwen3-vl:2b-instruct','images':['frame'],'options':{}})
+    assert calls==[{} if expected_layers is None else {'num_gpu':expected_layers}]

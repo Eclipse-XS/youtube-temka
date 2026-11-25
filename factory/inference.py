@@ -1,4 +1,4 @@
-"""Conservative opt-in GPU offload after the ASR subprocess has exited."""
+"""Bounded inference and model placement after the ASR subprocess has exited."""
 import json
 import os
 import subprocess
@@ -31,6 +31,9 @@ def installed_model_digest(progress, model):
 def gpu_layers(model=None):
     setting=os.environ.get('OLLAMA_GPU_LAYERS','0')
     if setting!='auto':return max(0,min(24,int(setting)))
+    if model in ('qwen3-vl:2b', 'qwen3-vl:2b-instruct'):
+        # Ollama sizes the vision projector, weights and KV cache together.
+        return None
     try:
         free=int(subprocess.check_output(['nvidia-smi','--query-gpu=memory.free','--format=csv,noheader,nounits'],text=True,timeout=3).splitlines()[0])
     except (OSError,ValueError,subprocess.SubprocessError):return 0
@@ -116,7 +119,7 @@ def observed_generation(client,url,payload,progress,operation,retry_reason):
     started=time.monotonic()
     details={'model':payload.get('model'),'model_type':model_type,'context_window':context,
              'output_token_limit':output,
-             'gpu_layers_requested':options['num_gpu'],'device':'unknown',
+             'gpu_layers_requested':options.get('num_gpu'),'device':'unknown',
              'received_fragments':0,'retry_reason':retry_reason,'timeout_count':0}
     progress.model(operation,'running',details)
     last_update=time.monotonic()
@@ -129,6 +132,8 @@ def observed_generation(client,url,payload,progress,operation,retry_reason):
             progress.model(operation,'running',details)
             last_update=now
 
+    if model_type == 'visual' and client.timeout.read is not None:
+        remaining=min(remaining,client.timeout.read)
     try:
         response=stream_generation(client,url,payload,activity,started+remaining)
         result=response.json()
@@ -166,7 +171,10 @@ def generate(client,url,payload,session=None):
     operation=progress.next_model_request() if progress else None
 
     def request(layer_count,retry_reason=None):
-        payload['options']['num_gpu']=layer_count
+        if layer_count is None:
+            payload['options'].pop('num_gpu',None)
+        else:
+            payload['options']['num_gpu']=layer_count
         if progress:
             attempt=operation+'-cpu-fallback' if retry_reason else operation
             return observed_generation(client,url,payload,progress,attempt,retry_reason)
@@ -177,11 +185,11 @@ def generate(client,url,payload,session=None):
     try:
         return request(layers)
     except httpx.TimeoutException:
-        if not layers:
+        if payload.get('images') or not layers:
             raise
         retry_reason='GPU request timed out'
     except httpx.HTTPStatusError as error:
-        if not layers or error.response.status_code<500:
+        if payload.get('images') or not layers or error.response.status_code<500:
             raise
         retry_reason='GPU request returned a server error'
     if session is not None:
