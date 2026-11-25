@@ -150,6 +150,7 @@ def review_candidates(groups, request, progress):
                 failures[signature] += 1
                 item.setdefault('visual_review_state', 'unavailable_or_invalid')
                 return
+            session['validated']=len(timestamps)==3
             failures.clear()
             # An inconclusive second pass must not replace a supported observation.
             if review.uncertain and item.get('visual_review_state') == 'model_hypothesis':

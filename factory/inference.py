@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from .heavy import HEAVY_LOCK
 from .progress import MODEL_PROGRESS
 from . import config
+from .resources import gpu_status
 
 
 class ModelBudgetExceeded(httpx.RequestError):
@@ -19,6 +20,10 @@ class VisionPlacementUnavailable(httpx.RequestError):
 
 
 QWEN_INSTRUCT = 'qwen3-vl:2b-instruct'
+VISION_KEEP_ALIVE = 180
+VISION_RENDER_RESERVE_MIB = 1024
+VISION_COLD_RESERVE_MIB = 3000
+VISION_ALLOCATION_FLOOR_MIB = 1700
 
 
 def installed_model_digest(progress, model):
@@ -53,14 +58,33 @@ def gpu_layers(model=None):
 
 @contextmanager
 def model_session(client,url,model):
-    """Reuse one bounded model through ranking; unload before the next stage."""
+    """Keep validated vision briefly when the device has headroom for encoding."""
     with HEAVY_LOCK:
-        state={'layers':gpu_layers(model),'used':False}
+        state={'layers':gpu_layers(model),'used':False,'validated':False}
         try:yield state
         finally:
-            if state['used']:
-                try:client.post(url,json={'model':model,'keep_alive':0},timeout=10)
-                except httpx.HTTPError:pass  # A 60-second TTL also bounds crash retention.
+
+            device=(gpu_status() if model == QWEN_INSTRUCT and state['layers'] is None
+                    and state['validated'] else None)
+            if state['used'] and (not device or device['free_mib'] < VISION_RENDER_RESERVE_MIB):
+                unload_model(client,url,model)
+
+
+def unload_model(client,url,model):
+    try:
+        client.post(url,json={'model':model,'keep_alive':0},timeout=10).raise_for_status()
+    except httpx.HTTPError:
+        pass  # Ollama also expires the runner at the end of its bounded residency.
+
+
+def release_idle_vision():
+    """Called before CUDA Whisper while its parent owns the host-wide slot."""
+    if os.environ.get('OLLAMA_GPU_LAYERS') != 'auto':
+        return
+    url=config.OLLAMA+'/api/generate'
+    with httpx.Client(timeout=2,trust_env=False) as client:
+        if model_placement(client,url,QWEN_INSTRUCT)['device'] in ('gpu','mixed'):
+            unload_model(client,url,QWEN_INSTRUCT)
 
 
 def model_placement(client,url,model):
@@ -87,6 +111,11 @@ def prepare_visual_model(client,url,payload,details,deadline):
     options=payload['options']
     placement=model_placement(client,url,model)
     if placement.get('runtime_context_length') != options['num_ctx']:
+        device=gpu_status()
+        if (placement['device']=='unknown' and device and device['total_mib'] <= 4096
+                and device['free_mib'] < VISION_COLD_RESERVE_MIB):
+            details['free_vram_mib']=device['free_mib']
+            raise VisionPlacementUnavailable('Insufficient measured free VRAM for cold vision load')
         remaining=deadline-time.monotonic()
         if remaining <= 0:
             raise httpx.ReadTimeout('Vision placement budget expired')
@@ -96,9 +125,10 @@ def prepare_visual_model(client,url,payload,details,deadline):
         placement=model_placement(client,url,model)
     details.update(placement)
     # Ollama does not expose projector placement through /api/ps. For the measured
-    # Instruct artifact, CPU projector runs allocate 1.12 GiB at 4096 context,
-    # versus 1.74 GiB with the CUDA projector. Allow for KV growth on expansion.
-    minimum=(1536+max(0,options['num_ctx']-4096)*96/1024)*1024**2
+    # Instruct artifact at 4096 context, CPU-projector runs measured 1.12 GiB
+    # in Docker and 1.55 GiB on Windows, versus 1.74 GiB with CUDA in Docker.
+    # This can reject the observed bad allocations, but cannot prove offload.
+    minimum=(VISION_ALLOCATION_FLOOR_MIB+max(0,options['num_ctx']-4096)*96/1024)*1024**2
     known_digest=(placement.get('model_digest') or '').startswith('afc393e3572c')
     if (placement['device'] in ('unknown','cpu') or
             known_digest and placement['model_vram_bytes'] < minimum):
@@ -210,7 +240,9 @@ def generate(client,url,payload,session=None):
     layers=gpu_layers(payload.get('model')) if session is None else session['layers']
     if session is not None:
         session['used']=True
-        payload['keep_alive']=60
+        session['validated']=False
+        payload['keep_alive']=(VISION_KEEP_ALIVE if layers is None and payload.get('model')==QWEN_INSTRUCT
+                               and payload.get('images') and payload['options'].get('num_ctx')==4096 else 60)
     progress=MODEL_PROGRESS.get()
     operation=progress.next_model_request() if progress else None
 

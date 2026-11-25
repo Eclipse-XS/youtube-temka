@@ -80,10 +80,13 @@ def test_visual_request_uses_selected_placement_without_cpu_retry(monkeypatch,se
     assert calls==[{} if expected_layers is None else {'num_gpu':expected_layers}]
 
 
-@pytest.mark.parametrize('vram,expected',[(1201898782,False),(1863361494,True)])
-def test_visual_preload_rejects_measured_cpu_projector_range(vram,expected):
+@pytest.mark.parametrize('size,vram,expected',[
+    (2338198648,1201898782,False),(1663513394,1663513394,False),(2338198648,1863361494,True),
+])
+def test_visual_preload_rejects_measured_cpu_projector_range(size,vram,expected,monkeypatch):
     import time
     from factory.inference import VisionPlacementUnavailable, prepare_visual_model
+    monkeypatch.setattr('factory.inference.gpu_status',lambda: {'total_mib':4096,'free_mib':3962})
     requests=[]
     def handler(request):
         requests.append(request.method)
@@ -91,7 +94,7 @@ def test_visual_preload_rejects_measured_cpu_projector_range(vram,expected):
             assert 'images' not in json.loads(request.content)
             return httpx.Response(200)
         models=[{'name':'qwen3-vl:2b-instruct','digest':'afc393e3572c',
-                 'size':2338198648,'size_vram':vram,'context_length':4096}] if len(requests)>1 else []
+                 'size':size,'size_vram':vram,'context_length':4096}] if len(requests)>1 else []
         return httpx.Response(200,json={'models':models})
     payload={'model':'qwen3-vl:2b-instruct','options':{'num_ctx':4096},'keep_alive':60}
     details={}
@@ -118,3 +121,55 @@ def test_vision_preload_timeout_is_reported_separately(monkeypatch):
             inference.observed_generation(client,'http://fixture.invalid/api/generate',payload,progress,'probe',None)
     assert progress.inference_metrics[-1]['error_code']=='VISION_MODEL_PRELOAD_TIMEOUT'
     assert progress.inference_metrics[-1]['received_fragments']==0
+
+
+@pytest.mark.parametrize('validated,free,expected_unload',[(True,1250,False),(True,900,True),(False,1250,True)])
+def test_vision_residency_preserves_encoding_headroom(monkeypatch,validated,free,expected_unload):
+    from factory import inference
+    monkeypatch.setenv('OLLAMA_GPU_LAYERS','auto')
+    monkeypatch.setattr(inference,'gpu_status',lambda: {'free_mib':free})
+    calls=[]
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with model_session(client,'http://fixture.invalid/api/generate',inference.QWEN_INSTRUCT) as session:
+            generate(client,'http://fixture.invalid/api/generate',
+                     {'model':inference.QWEN_INSTRUCT,'images':['frame'],'options':{'num_ctx':4096}},session)
+            session['validated']=validated
+    assert calls[0]['keep_alive']==180
+    assert [item['keep_alive'] for item in calls[1:]]==([0] if expected_unload else [])
+
+
+def test_cold_vision_admission_uses_measured_free_vram(monkeypatch):
+    import time
+    from factory import inference
+    monkeypatch.setattr(inference,'gpu_status',lambda: {'total_mib':4096,'free_mib':2000})
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'models':[]})
+    payload={'model':inference.QWEN_INSTRUCT,'options':{'num_ctx':4096},'keep_alive':180}
+    details={}
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(inference.VisionPlacementUnavailable):
+            inference.prepare_visual_model(client,'http://fixture.invalid/api/generate',payload,details,time.monotonic()+5)
+    assert details['free_vram_mib']==2000
+
+
+def test_release_idle_vision_before_cuda_asr(monkeypatch):
+    from factory import inference
+    monkeypatch.setenv('OLLAMA_GPU_LAYERS','auto')
+    monkeypatch.setattr(inference.config,'OLLAMA','http://fixture.invalid')
+    calls=[]
+    def handler(request):
+        if request.method=='GET':
+            return httpx.Response(200,json={'models':[
+                {'model':inference.QWEN_INSTRUCT,'size':200,'size_vram':160},
+                {'model':'text','size':200,'size_vram':160},
+            ]})
+        calls.append(json.loads(request.content))
+        return httpx.Response(200)
+    client=httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(inference.httpx,'Client',lambda **kwargs: client)
+    inference.release_idle_vision()
+    assert calls==[{'model':inference.QWEN_INSTRUCT,'keep_alive':0}]

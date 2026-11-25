@@ -29,6 +29,8 @@ def _whisper():
     from faster_whisper import WhisperModel
     device=os.environ.get('WHISPER_DEVICE','cpu')
     if device in ('auto','cuda'):
+        from .inference import release_idle_vision
+        release_idle_vision()
         if not ctranslate2.get_cuda_device_count():raise RuntimeError('CTranslate2 cannot initialize a CUDA device')
         device='cuda'
     else:device='cpu'

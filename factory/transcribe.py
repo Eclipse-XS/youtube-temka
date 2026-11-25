@@ -13,6 +13,9 @@ def main():
     source, output, language=sys.argv[1:]
     os.environ.setdefault('ASR_HOST_SLOTS','1')
     os.environ.setdefault('WHISPER_MODEL','small')
+    if os.environ.get('WHISPER_DEVICE') in ('auto','cuda'):
+        from .inference import release_idle_vision
+        release_idle_vision()
     # CUDA is opt-in; select it only when measured free memory permits small.
     if os.environ.get('WHISPER_DEVICE')=='auto':
         try:
