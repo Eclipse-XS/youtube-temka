@@ -78,3 +78,43 @@ def test_visual_request_uses_selected_placement_without_cpu_retry(monkeypatch,se
         with pytest.raises(httpx.HTTPStatusError):
             generate(client,'http://fixture.invalid/api/generate',{'model':'qwen3-vl:2b-instruct','images':['frame'],'options':{}})
     assert calls==[{} if expected_layers is None else {'num_gpu':expected_layers}]
+
+
+@pytest.mark.parametrize('vram,expected',[(1201898782,False),(1863361494,True)])
+def test_visual_preload_rejects_measured_cpu_projector_range(vram,expected):
+    import time
+    from factory.inference import VisionPlacementUnavailable, prepare_visual_model
+    requests=[]
+    def handler(request):
+        requests.append(request.method)
+        if request.method=='POST':
+            assert 'images' not in json.loads(request.content)
+            return httpx.Response(200)
+        models=[{'name':'qwen3-vl:2b-instruct','digest':'afc393e3572c',
+                 'size':2338198648,'size_vram':vram,'context_length':4096}] if len(requests)>1 else []
+        return httpx.Response(200,json={'models':models})
+    payload={'model':'qwen3-vl:2b-instruct','options':{'num_ctx':4096},'keep_alive':60}
+    details={}
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        if expected:
+            prepare_visual_model(client,'http://fixture.invalid/api/generate',payload,details,time.monotonic()+5)
+        else:
+            with pytest.raises(VisionPlacementUnavailable):
+                prepare_visual_model(client,'http://fixture.invalid/api/generate',payload,details,time.monotonic()+5)
+    assert requests==['GET','POST','GET']
+    assert details['model_vram_bytes']==vram
+
+
+def test_vision_preload_timeout_is_reported_separately(monkeypatch):
+    from factory import inference
+    from factory.progress import Progress
+    progress=Progress(lambda *a,**k:None)
+    def timeout(*args):
+        raise httpx.ReadTimeout('preload stalled')
+    monkeypatch.setattr(inference,'prepare_visual_model',timeout)
+    payload={'model':inference.QWEN_INSTRUCT,'images':['frame'],'options':{'num_ctx':4096}}
+    with httpx.Client(timeout=90) as client:
+        with pytest.raises(httpx.ReadTimeout):
+            inference.observed_generation(client,'http://fixture.invalid/api/generate',payload,progress,'probe',None)
+    assert progress.inference_metrics[-1]['error_code']=='VISION_MODEL_PRELOAD_TIMEOUT'
+    assert progress.inference_metrics[-1]['received_fragments']==0

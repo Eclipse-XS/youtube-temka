@@ -14,6 +14,13 @@ class ModelBudgetExceeded(httpx.RequestError):
     pass
 
 
+class VisionPlacementUnavailable(httpx.RequestError):
+    pass
+
+
+QWEN_INSTRUCT = 'qwen3-vl:2b-instruct'
+
+
 def installed_model_digest(progress, model):
     if progress.installed_models is None:
         progress.installed_models = {}
@@ -72,6 +79,30 @@ def model_placement(client,url,model):
     except (httpx.HTTPError,ValueError,TypeError,AttributeError):
         pass
     return {'device':'unknown'}
+
+
+def prepare_visual_model(client,url,payload,details,deadline):
+    """Check the observed allocation before submitting expensive image input."""
+    model=payload['model']
+    options=payload['options']
+    placement=model_placement(client,url,model)
+    if placement.get('runtime_context_length') != options['num_ctx']:
+        remaining=deadline-time.monotonic()
+        if remaining <= 0:
+            raise httpx.ReadTimeout('Vision placement budget expired')
+        response=client.post(url,json={'model':model,'options':options,'keep_alive':payload['keep_alive']},
+                             timeout=min(60,remaining))
+        response.raise_for_status()
+        placement=model_placement(client,url,model)
+    details.update(placement)
+    # Ollama does not expose projector placement through /api/ps. For the measured
+    # Instruct artifact, CPU projector runs allocate 1.12 GiB at 4096 context,
+    # versus 1.74 GiB with the CUDA projector. Allow for KV growth on expansion.
+    minimum=(1536+max(0,options['num_ctx']-4096)*96/1024)*1024**2
+    known_digest=(placement.get('model_digest') or '').startswith('afc393e3572c')
+    if (placement['device'] in ('unknown','cpu') or
+            known_digest and placement['model_vram_bytes'] < minimum):
+        raise VisionPlacementUnavailable('Vision model GPU allocation is unavailable or below the measured CUDA range')
 
 
 def stream_generation(client,url,payload,activity,deadline):
@@ -135,7 +166,15 @@ def observed_generation(client,url,payload,progress,operation,retry_reason):
     if model_type == 'visual' and client.timeout.read is not None:
         remaining=min(remaining,client.timeout.read)
     try:
-        response=stream_generation(client,url,payload,activity,started+remaining)
+        deadline=started+remaining
+        if model_type == 'visual' and payload.get('model') == QWEN_INSTRUCT and 'num_gpu' not in options:
+            details['phase']='model_placement'
+            prepare_visual_model(client,url,payload,details,deadline)
+        if time.monotonic()>=deadline:
+            raise httpx.ReadTimeout('Model wall time budget reached')
+        if model_type == 'visual':
+            details['phase']='generation'
+        response=stream_generation(client,url,payload,activity,deadline)
         result=response.json()
         if not isinstance(result,dict):
             raise ValueError('Invalid Ollama response')
@@ -144,7 +183,12 @@ def observed_generation(client,url,payload,progress,operation,retry_reason):
     except (httpx.HTTPError,ValueError) as error:
         timed_out=isinstance(error,httpx.TimeoutException)
         details['timeout_count']=int(timed_out)
-        progress.model(operation,'failed',details,error_code='MODEL_TIMEOUT' if timed_out else 'MODEL_REQUEST_FAILED')
+        code='MODEL_TIMEOUT' if timed_out else 'MODEL_REQUEST_FAILED'
+        if isinstance(error,VisionPlacementUnavailable):
+            code='VISION_GPU_PLACEMENT_UNAVAILABLE'
+        elif timed_out and details.get('phase')=='model_placement':
+            code='VISION_MODEL_PRELOAD_TIMEOUT'
+        progress.model(operation,'failed',details,error_code=code)
         raise
     finally:
         if progress.model_limits is not None:

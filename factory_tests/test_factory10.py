@@ -178,7 +178,9 @@ def test_gameplay_visual_budget_reviews_each_source_before_expansion(tmp_path, m
         return httpx.Response(200, json={'response': json.dumps(review)})
 
     monkeypatch.setattr(visual_review, 'generate', generate)
-    monkeypatch.setattr(visual_review, 'model_session', lambda *args: nullcontext({'layers': 0}))
+    monkeypatch.setattr(visual_review, 'model_session', lambda *args: nullcontext({'layers': None}))
+    monkeypatch.setattr(visual_review, 'memory_ready', lambda: True)
+    monkeypatch.setattr(visual_review, 'gpu_status', lambda: {'free_mib': 1600})
     monkeypatch.setattr(visual_review, 'frame_images', lambda source, times, *args: ['image'] * len(times))
 
     def candidate(source, score):
@@ -319,7 +321,8 @@ def test_caption_looks_and_retained_word_timings_are_independent(workspace):
     assert one!=comic and 'ПРИВІТ' in one and 'ПРИВІТ' in comic
 
 
-def test_gameplay_vision_stops_after_equivalent_model_failures(tmp_path, monkeypatch):
+@pytest.mark.parametrize('timeout,expected',[(True,1),(False,2)])
+def test_gameplay_vision_stops_after_equivalent_model_failures(tmp_path, monkeypatch,timeout,expected):
     from contextlib import nullcontext
     import httpx
     from factory import visual_review
@@ -331,12 +334,15 @@ def test_gameplay_vision_stops_after_equivalent_model_failures(tmp_path, monkeyp
     calls = []
     def generate(*args):
         calls.append(progress.source_id)
-        raise httpx.ReadTimeout('vision stalled')
+        if timeout:
+            raise httpx.ReadTimeout('vision stalled')
+        req=httpx.Request('POST','http://fixture.invalid/api/generate')
+        raise httpx.HTTPStatusError('vision unavailable',request=req,response=httpx.Response(500,request=req))
     monkeypatch.setattr(visual_review, 'generate', generate)
     monkeypatch.setattr(visual_review, 'model_session', lambda *args: nullcontext({'layers': None}))
     monkeypatch.setattr(visual_review, 'frame_images', lambda *_: ['frame'] * 3)
     candidates = [{'source_id': 'source-1', 'source_frame_times': [i,i+1,i+2],
                    'heuristic_score': 10-i, 'proposal_kind': 'motion'} for i in range(4)]
     visual_review.review_candidates([(candidates, request.source, 480, tmp_path)], request, progress)
-    assert len(calls) == 2
-    assert [item.get('visual_review_state') for item in candidates] == ['unavailable_or_invalid'] * 2 + [None] * 2
+    assert len(calls) == expected
+    assert [item.get('visual_review_state') for item in candidates] == ['unavailable_or_invalid'] * expected + [None] * (4-expected)
