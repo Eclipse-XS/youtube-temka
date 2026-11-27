@@ -42,7 +42,7 @@ def test_concurrent_queue_requests_create_one_publication(ready):
     assert 'session' not in publisher.history()[0]
 
 
-def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,wrong_channel=False,snippet=None):
+def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,wrong_channel=False,snippet=None,privacy="private"):
     calls={'insert':0,'range':[],'put':0,'finished':False}
     monkeypatch.setattr(publisher,'CHUNK',8)
     monkeypatch.setattr(publisher,'token_file',lambda alias:alias)
@@ -51,7 +51,7 @@ def install_transport(monkeypatch,data,remote,final_timeout=False,expired=False,
         if path.endswith('/channels'):
             return httpx.Response(200,json={'items':[{'id':'wrong' if wrong_channel else 'channel-fixture'}]})
         if path.endswith('/videos') and request.method=='GET':
-            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture',**(snippet or {})},'status':{'privacyStatus':'private','uploadStatus':'uploaded'}}]})
+            return httpx.Response(200,json={'items':[{'snippet':{'channelId':'channel-fixture',**(snippet or {})},'status':{'privacyStatus':privacy,'uploadStatus':'uploaded'}}]})
         if path.endswith('/videoCategories'):
             return httpx.Response(200,json={'items':[{'id':'28','snippet':{'assignable':True}}]})
         if path.endswith('/videos') and request.method=='POST':
@@ -400,3 +400,17 @@ def test_discovery_reports_oauth_failure_and_missing_mount(ready, tmp_path, monk
     assert 'secret detail' not in errors['credential-fixture']
     assert 'missing' in errors['missing-credential']
     assert len(result['channels'])==2
+
+
+@pytest.mark.parametrize('privacy', ['public', 'unlisted', 'private'])
+def test_manual_visibility_round_trip_with_automation_disabled(ready, monkeypatch, privacy):
+    jid, data, remote = ready
+    publisher.set_policy('channel-fixture', public_allowed=privacy == 'public')
+    calls = install_transport(monkeypatch, data, remote, privacy=privacy)
+    pid = publisher.enqueue(jid, 0, 'channel-fixture', privacy=privacy)
+    publisher.upload(publisher.claim())
+    result = publisher.history()[0]
+    assert result['id'] == pid and result['state'] == 'PUBLISHED'
+    assert calls['insert'] == 1
+    assert calls['body']['status']['privacyStatus'] == privacy
+    assert not publisher.channels()[0]['automatic']
