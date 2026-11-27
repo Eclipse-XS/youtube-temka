@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime,timezone,timedelta
 import httpx
 from . import store
-from .drive import Drive, BASE, CHUNK, acknowledged
+from .drive import Drive, OAuthRefreshError, BASE, CHUNK, acknowledged
 
 YT='https://www.googleapis.com/youtube/v3'
 
@@ -27,25 +27,65 @@ def token_file(alias):
     return path
 
 
+class PublicationError(ValueError):
+    pass
+
+
+def youtube_client(alias):
+    try:
+        return Drive(token_file(alias))
+    except OAuthRefreshError as error:
+        guidance={
+            'invalid_grant':'Google rejected the refresh token (invalid_grant). Reauthorize the existing YouTube channel.',
+            'invalid_client':'Google rejected the OAuth client (invalid_client). Check the original YouTube OAuth client.',
+            'unauthorized_client':'Google rejected the OAuth client grant (unauthorized_client). Check the YouTube OAuth project.',
+            'invalid_scope':'Google rejected the OAuth scopes (invalid_scope). Reconnect with youtube.upload and youtube.readonly.',
+        }
+        raise PublicationError(guidance.get(error.reason,f'YouTube OAuth refresh failed (HTTP {error.status}).')) from None
+    except ValueError as error:
+        raise PublicationError('YouTube publishing credential is missing or invalid. Connect the intended channel.') from error
+    except httpx.HTTPError:
+        raise PublicationError('Could not reach Google for YouTube OAuth refresh. Check network connectivity and TLS trust.') from None
+
+
+def youtube_channels(client, part):
+    response=client.client.get(YT+'/channels',params={'part':part,'mine':'true'})
+    if not response.is_success:
+        raise upload_error(response,'YouTube channel lookup')
+    return response.json()['items']
+
+
 def discover_channels():
     root=Path(os.environ.get('YOUTUBE_TOKEN_DIR','secrets/youtube'))
     errors=[]
+    available=set()
     for path in root.glob('*.json'):
         if not re.fullmatch(r'[A-Za-z0-9_-]+',path.stem):
             continue
+        available.add(path.stem)
         client=None
         try:
-            client=Drive(token_file(path.stem))
-            response=client.request('GET',YT+'/channels',params={'part':'snippet','mine':'true'})
-            for channel in response.json()['items']:
-                with store.connect() as db:
+            client=youtube_client(path.stem)
+            found=youtube_channels(client,'snippet')
+            with store.connect() as db:
+                expected={row['id'] for row in db.execute('SELECT id FROM channels WHERE alias=?',(path.stem,))}
+                ids={channel['id'] for channel in found}
+                if not ids or (expected and not expected <= ids):
+                    raise PublicationError('OAuth did not confirm the saved channel identity for this credential alias.')
+                for channel in found:
                     db.execute('INSERT INTO channels(id,alias,title) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET alias=excluded.alias,title=excluded.title',(channel['id'],path.stem,channel['snippet']['title']))
-        except Exception:
-            errors.append({'alias':path.stem,'error':'Authorization/channel lookup failed. Check OAuth scopes, API access and token validity.'})
+        except PublicationError as error:
+            errors.append({'alias':path.stem,'error':str(error)})
+        except (httpx.HTTPError,ValueError,KeyError,TypeError):
+            errors.append({'alias':path.stem,'error':'YouTube channel lookup failed. Check network connectivity and API access.'})
         finally:
             if client:
                 client.close()
-    return {'channels':channels(),'errors':errors}
+    saved=channels()
+    for channel in saved:
+        if channel['alias'] not in available:
+            errors.append({'alias':channel['alias'],'error':'YouTube publishing credential is missing for this saved channel.'})
+    return {'channels':saved,'errors':errors}
 
 
 def channels():
@@ -53,13 +93,20 @@ def channels():
         return [{**dict(row),'preferences':store.preferences(row['id'])} for row in db.execute('SELECT c.*,coalesce(s.interval_minutes,120) interval_minutes FROM channels c LEFT JOIN channel_schedules s ON s.channel=c.id')]
 
 
-def set_policy(channel,daily_limit,public_allowed,automatic,interval_minutes=120,preferences=None):
-    if automatic and not public_allowed:
-        raise ValueError('Automatic publishing requires explicit public publishing authorization for this channel')
+def set_policy(channel,daily_limit=None,public_allowed=None,automatic=None,interval_minutes=None,preferences=None):
     with store.connect() as db:
-        if not db.execute('UPDATE channels SET daily_limit=?,public_allowed=?,automatic=? WHERE id=?',(daily_limit,public_allowed,automatic,channel)).rowcount:
+        db.execute('BEGIN IMMEDIATE')
+        current=db.execute('SELECT * FROM channels WHERE id=?',(channel,)).fetchone()
+        if not current:
             raise ValueError('Connect this authorized channel first')
-        db.execute('INSERT OR REPLACE INTO channel_schedules VALUES(?,?)',(channel,interval_minutes))
+        daily_limit=current['daily_limit'] if daily_limit is None else daily_limit
+        public_allowed=current['public_allowed'] if public_allowed is None else public_allowed
+        automatic=current['automatic'] if automatic is None else automatic
+        if automatic and not public_allowed:
+            raise ValueError('Automatic publishing requires explicit public publishing authorization for this channel')
+        db.execute('UPDATE channels SET daily_limit=?,public_allowed=?,automatic=? WHERE id=?',(daily_limit,public_allowed,automatic,channel))
+        if interval_minutes is not None:
+            db.execute('INSERT INTO channel_schedules VALUES(?,?) ON CONFLICT(channel) DO UPDATE SET interval_minutes=excluded.interval_minutes',(channel,interval_minutes))
         if preferences is not None:
             db.execute('INSERT OR REPLACE INTO channel_preferences VALUES(?,?)',(channel,json.dumps(preferences,ensure_ascii=False)))
 
@@ -186,6 +233,8 @@ def enqueue(jid,index,channel,title=None,description=None,privacy='private',publ
             raise ValueError('Public publishing has not been explicitly enabled for this channel')
         if automatic and not policy['automatic']:
             raise ValueError('Automatic mode has not been enabled for this channel')
+        if automatic and not policy['public_allowed']:
+            raise ValueError('Public publishing has not been explicitly enabled for this channel')
         if automatic and not output.get('approved'):
             prefs=store.preferences(channel)
             if not prefs.get('auto_approve') or output.get('editorial',{}).get('review_required',True):raise ValueError('Explicit editorial approval or channel auto-approval safeguards are required')
@@ -270,10 +319,6 @@ class Uncertain(ValueError):
     pass
 
 
-class PublicationError(ValueError):
-    pass
-
-
 def upload_error(response,operation):
     """Expose known API reasons, never raw Google payloads or session URLs."""
     reasons={
@@ -281,7 +326,10 @@ def upload_error(response,operation):
         'dailyLimitExceeded':'YouTube API daily limit is exhausted; wait for its reset',
         'uploadLimitExceeded':'This channel reached its upload limit; wait before retrying',
         'insufficientPermissions':'Reauthorize this channel with youtube.upload and youtube.readonly scopes',
-        'forbidden':'The API project or channel does not permit this upload; check authorization',
+        'forbidden':'YouTube denied this operation. Check channel permissions and API project restrictions',
+        'accessNotConfigured':'Enable YouTube Data API v3 for this OAuth project',
+        'youtubeSignupRequired':'The authorized Google account must have a YouTube channel',
+        'invalidPrivacyStatus':'YouTube rejected the selected visibility. Check channel settings and API project restrictions',
         'invalidTitle':'Correct the title before retrying',
         'invalidDescription':'Correct the description before retrying; maximum 5000 UTF-8 bytes and no HTML angle brackets',
         'invalidPublishAt':'Correct the future publication time before retrying',
@@ -306,11 +354,6 @@ def upload(publication):
                 raise ValueError('Editorial approval was withdrawn; nothing uploaded')
         if current.get('render_id') and current.get('approved') and current.get('approved_render_id')!=current['render_id']:raise ValueError('Render approval changed; nothing uploaded')
         if queued.get('metadata_version') and current.get('publishing_metadata',{}).get('version')!=queued['metadata_version']:raise ValueError('Metadata version changed; nothing uploaded')
-        youtube=Drive(token_file(publication['alias']))
-        authorized=youtube.request('GET',YT+'/channels',params={'part':'id','mine':'true'}).json()['items']
-        if publication['channel'] not in [c['id'] for c in authorized]:
-            raise ValueError('OAuth token is authorized for a different channel; nothing uploaded')
-        drive=Drive()
         body=json.loads(publication['metadata'])
         remote=body.pop('drive')
         automatic=body.pop('automatic',False)
@@ -318,7 +361,12 @@ def upload(publication):
         with store.connect() as db:
             policy=db.execute('SELECT * FROM channels WHERE id=?',(publication['channel'],)).fetchone()
             if not policy or ((body['status']['privacyStatus']=='public' or body['status'].get('publishAt')) and not policy['public_allowed']) or (automatic and not policy['automatic']):
-                raise ValueError('Publishing policy was revoked; nothing uploaded')
+                raise PublicationError('Factory channel policy no longer permits this publication.')
+        youtube=youtube_client(publication['alias'])
+        authorized=youtube_channels(youtube,'id')
+        if publication['channel'] not in [c['id'] for c in authorized]:
+            raise PublicationError('YouTube OAuth is authorized for a different channel.')
+        drive=Drive()
         scheduled=body['status'].get('publishAt')
         if scheduled and datetime.fromisoformat(scheduled.replace('Z','+00:00'))<=datetime.now(timezone.utc):
             if publication['session']:
@@ -416,8 +464,10 @@ def complete(pid,response,metadata,youtube,channel):
     # erase knowledge of a remotely created video.
     checkpoint(pid,video_id=response['id'])
     remote=youtube.request('GET',YT+'/videos',params={'part':'snippet,status','id':response['id']}).json()['items']
-    if not remote or remote[0]['snippet']['channelId']!=channel or remote[0]['status']['privacyStatus']!=metadata['status']['privacyStatus']:
-        raise Uncertain('Video ID exists but channel/privacy verification failed; inspect YouTube Studio')
+    if not remote or remote[0]['snippet']['channelId']!=channel:
+        raise Uncertain('Video ID exists but channel verification failed; inspect YouTube Studio')
+    if remote[0]['status']['privacyStatus']!=metadata['status']['privacyStatus']:
+        raise Uncertain('Video ID exists but YouTube returned a different visibility. Check YouTube Studio and API project restrictions before retrying.')
     if remote[0]['status'].get('uploadStatus') not in ('uploaded','processed'):
         raise Uncertain('Video ID exists but YouTube did not confirm a successful upload status; inspect YouTube Studio')
     expected=metadata['status'].get('publishAt')

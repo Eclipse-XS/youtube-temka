@@ -362,3 +362,41 @@ def test_weak_selection_waits_for_editorial_approval_even_with_automatic_policy(
     assert publisher.history()==[]
     store.approve(jid,0,True)
     assert publisher.enqueue(jid,0,'channel-fixture','Reviewed title','',automatic=True)
+
+def test_policy_api_preserves_other_settings_and_enables_manual_public(ready, monkeypatch):
+    from fastapi.testclient import TestClient
+    from factory.api import app
+
+    jid, _, _ = ready
+    publisher.set_policy('channel-fixture', 7, False, False, 240,
+                         preferences={'timezone': 'Europe/Kyiv'})
+    monkeypatch.setattr(config, 'TOKEN', 'fixture-secret-' * 3)
+    client = TestClient(app)
+    headers = {'Authorization': 'Bearer ' + config.TOKEN}
+    path = '/api/publisher/channels/channel-fixture/policy'
+    response = client.post(path, headers=headers, json={'public_allowed': True})
+    assert response.status_code == 200
+    saved = response.json()['channel']
+    assert saved['public_allowed'] and not saved['automatic']
+    assert saved['daily_limit'] == 7 and saved['interval_minutes'] == 240
+    assert saved['preferences']['timezone'] == 'Europe/Kyiv'
+    assert publisher.channels()[0] == saved
+    publisher.enqueue(jid, 0, 'channel-fixture', privacy='public')
+    assert publisher.history()[0]['metadata']['status']['privacyStatus'] == 'public'
+
+
+def test_discovery_reports_oauth_failure_and_missing_mount(ready, tmp_path, monkeypatch):
+    monkeypatch.setenv('YOUTUBE_TOKEN_DIR', str(tmp_path))
+    (tmp_path/'credential-fixture.json').touch()
+    with store.connect() as db:
+        db.execute('INSERT INTO channels(id,alias,title) VALUES(?,?,?)',
+                   ('missing-channel','missing-credential','Missing channel'))
+    def rejected(_path):
+        raise publisher.OAuthRefreshError(httpx.Response(400,json={'error':'invalid_grant','error_description':'secret detail'}))
+    monkeypatch.setattr(publisher,'Drive',rejected)
+    result=publisher.discover_channels()
+    errors={entry['alias']:entry['error'] for entry in result['errors']}
+    assert 'invalid_grant' in errors['credential-fixture']
+    assert 'secret detail' not in errors['credential-fixture']
+    assert 'missing' in errors['missing-credential']
+    assert len(result['channels'])==2

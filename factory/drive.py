@@ -26,9 +26,22 @@ def acknowledged(response):
     return int(match.group(1))+1
 
 
+class OAuthRefreshError(ValueError):
+    def __init__(self, response):
+        try:
+            reason=response.json().get('error')
+        except (ValueError, AttributeError):
+            reason=None
+        self.status=response.status_code
+        self.reason=reason if reason in ('invalid_grant','invalid_client','unauthorized_client','invalid_scope') else None
+        super().__init__('Drive authorization could not be refreshed. Reauthorize the existing OAuth client with Drive access in Settings.')
+
+
 class Drive:
     def __init__(self,token_file=None):
         self.tokens=None
+        trust_bundle=Path('/run/secrets/google-ca-bundle.pem')
+        verify=str(trust_bundle) if trust_bundle.is_file() else True
         legacy_client=os.environ.get('DRIVE_OAUTH_CLIENT_FILE','')
         legacy_token=os.environ.get('DRIVE_OAUTH_TOKEN_FILE','')
         if token_file is None and legacy_client and legacy_token:
@@ -40,7 +53,7 @@ class Drive:
             refresh=json.loads(Path(legacy_token).read_text(encoding='utf-8-sig'))
             if refresh.get('client_id')!=oauth.client_id or refresh.get('scope')!=SCOPE or not isinstance(refresh.get('refresh_token'),str) or not refresh['refresh_token']:
                 raise ValueError('Existing Drive token/client pair or scope does not match; original files were preserved')
-            self.client=httpx.Client(timeout=90,trust_env=False)
+            self.client=httpx.Client(timeout=90,trust_env=False,verify=verify)
             self.tokens=AccessTokens(self.client,oauth,refresh['refresh_token'])
             try:
                 self.client.headers['Authorization']='Bearer '+self.tokens.get()
@@ -52,11 +65,11 @@ class Drive:
         if not path or not Path(path).is_file():
             raise ValueError('Drive OAuth missing. Set DRIVE_TOKEN_FILE to the existing authorized-user JSON; mount it read-only. Existing credentials have not been changed.')
         self.secret=json.loads(Path(path).read_text(encoding='utf-8-sig'))
-        self.client=httpx.Client(timeout=90,trust_env=False)
+        self.client=httpx.Client(timeout=90,trust_env=False,verify=verify)
         response=self.client.post('https://oauth2.googleapis.com/token',data={'client_id':self.secret['client_id'],'client_secret':self.secret['client_secret'],'refresh_token':self.secret['refresh_token'],'grant_type':'refresh_token'})
         if response.status_code!=200:
             self.client.close()
-            raise ValueError('Drive authorization could not be refreshed. Reauthorize the existing OAuth client with Drive access in Settings.')
+            raise OAuthRefreshError(response)
         self.client.headers['Authorization']='Bearer '+response.json()['access_token']
 
     def close(self):

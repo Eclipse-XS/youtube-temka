@@ -100,3 +100,16 @@ permissions, bash and file locks. Build `factory.html` with
 The current report distinguishes live Google/Twitch checks from protocol fixtures.
 Credentials, private video/Drive identities and raw runtime evidence are ignored
 by Git; only sanitized aggregate evidence is published.
+
+
+The Publisher applies the saved channel policy from the controller database.
+Manual public and scheduled publishing require the channel's public permission.
+Automatic scheduling has its own opt-in and also requires public permission.
+A successful OAuth channel lookup confirms identity and API access. Visibility
+and schedule are verified against the video returned by YouTube after upload.
+
+Keep the controller data volume and the read-only secrets bind when rebuilding or
+upgrading. If the host uses TLS inspection, place a PEM bundle containing the
+normal public CA roots and the trusted local inspection root in the existing
+secrets directory as `google-ca-bundle.pem`. Factory uses this file for Google
+API traffic when present and continues to verify TLS.

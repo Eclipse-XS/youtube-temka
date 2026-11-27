@@ -862,7 +862,7 @@ class Policy(BaseModel):
 
 @app.post('/api/publisher/channels/{channel}/policy')
 def policy(channel:str,body:Policy):
-    from .publisher import set_policy
+    from .publisher import channels, set_policy
     try:
         if body.preferences:
             from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
@@ -870,8 +870,8 @@ def policy(channel:str,body:Policy):
             except (ZoneInfoNotFoundError,ValueError):raise ValueError('Choose a valid IANA timezone, for example Europe/Kyiv') from None
             from .metadata import CATEGORIES
             if body.preferences.category_id and body.preferences.category_id not in CATEGORIES:raise ValueError('Choose a supported YouTube category')
-        set_policy(channel,**body.model_dump())
-        return {'ok':True}
+        set_policy(channel,**body.model_dump(exclude_unset=True))
+        return {'ok':True,'channel':next(c for c in channels() if c['id']==channel)}
     except ValueError as error:
         raise HTTPException(409,str(error)) from None
 

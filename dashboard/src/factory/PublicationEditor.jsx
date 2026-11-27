@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-export default function PublicationEditor({ publication, api, act, refresh }) {
+export default function PublicationEditor({ publication, publicAllowed, api, act, refresh }) {
   const [title, setTitle] = useState(publication.metadata.snippet.title);
   const [description, setDescription] = useState(
     publication.metadata.snippet.description || "",
@@ -29,7 +29,7 @@ export default function PublicationEditor({ publication, api, act, refresh }) {
                 title,
                 description,
                 privacy,
-                publish_at: when ? new Date(when).toISOString() : null,
+                publish_at: publicAllowed && when ? new Date(when).toISOString() : null,
               }),
             });
             await refresh();
@@ -66,13 +66,14 @@ export default function PublicationEditor({ publication, api, act, refresh }) {
           <select value={privacy} onChange={(e) => setPrivacy(e.target.value)}>
             <option value="private">Приватне</option>
             <option value="unlisted">За посиланням</option>
-            <option value="public">Публічне</option>
+            <option value="public" disabled={!publicAllowed}>Публічне</option>
           </select>
         </label>
         <label>
           Час публікації (місцевий)
           <input
             type="datetime-local"
+            disabled={!publicAllowed}
             value={when}
             onChange={(e) => setWhen(e.target.value)}
           />
@@ -81,7 +82,7 @@ export default function PublicationEditor({ publication, api, act, refresh }) {
           Запланована публікація потребує дозволу каналу. Порожній час залишає
           вибрану видимість. Збереження повертає завдання до черги.
         </p>
-        <button type="submit">Зберегти й поставити в чергу</button>
+        <button type="submit" disabled={!publicAllowed && privacy === "public"}>Зберегти й поставити в чергу</button>
       </form>
     </details>
   );

@@ -11,6 +11,8 @@ export default function PublisherPanel({
 }) {
   const [data, setData] = useState({ channels: [], publications: [] }),
     [channel, setChannel] = useState(""),
+    [saving, setSaving] = useState(false),
+    [authorizationErrors, setAuthorizationErrors] = useState([]),
     [selected, setSelected] = useState(""),
     [privacy, setPrivacy] = useState("private"),
     [when, setWhen] = useState(""),
@@ -38,6 +40,8 @@ export default function PublisherPanel({
   }, [data.channels.length]);
   const chooseChannel = (id) => {
     setChannel(id);
+    setPrivacy("private");
+    setWhen("");
     const c = data.channels.find((c) => c.id === id);
     if (c)
       setPolicy({
@@ -58,7 +62,9 @@ export default function PublisherPanel({
       ...p,
       preferences: { ...p.preferences, [key]: value },
     }));
-  const timezone = policy.preferences.timezone || "Europe/Kyiv";
+  const savedChannel = data.channels.find((entry) => entry.id === channel);
+  const publicAllowed = !!savedChannel?.public_allowed;
+  const timezone = savedChannel?.preferences?.timezone || "Europe/Kyiv";
   const calendarTime = (value) => {
     try {
       return new Date(value).toLocaleString("uk-UA", { timeZone: timezone });
@@ -83,13 +89,17 @@ export default function PublisherPanel({
             act(async () => {
               const r = await post("/publisher/discover");
               await refresh();
-              if (r.errors.length)
-                throw new Error(r.errors.map((e) => e.error).join("; "));
+              setAuthorizationErrors(r.errors);
             })
           }
         >
           Перевірити OAuth і знайти канали
         </button>
+        {authorizationErrors.map(({alias, error}) => (
+          <p className="warning" key={alias}>
+            {data.channels.find((entry) => entry.alias === alias)?.title || alias} · {error}
+          </p>
+        ))}
         <details>
           <summary>Одноразове підключення</summary>
           <p>
@@ -174,7 +184,14 @@ export default function PublisherPanel({
               <input
                 type="checkbox"
                 checked={!!policy.public_allowed}
-                onChange={(e) => change("public_allowed", e.target.checked)}
+                onChange={(e) => {
+                  const allowed = e.target.checked;
+                  setPolicy((previous) => ({
+                    ...previous,
+                    public_allowed: allowed,
+                    automatic: allowed && previous.automatic,
+                  }));
+                }}
               />
               Я дозволяю публічні й заплановані публікації на цьому каналі
             </label>
@@ -182,9 +199,10 @@ export default function PublisherPanel({
               <input
                 type="checkbox"
                 checked={!!policy.automatic}
+                disabled={!policy.public_allowed}
                 onChange={(e) => change("automatic", e.target.checked)}
               />
-              Увімкнути автоматичну чергу для явно вибраних завдань
+              Увімкнути автоматичний розклад для явно вибраних завдань
             </label>
             <label className="check">
               <input
@@ -203,10 +221,29 @@ export default function PublisherPanel({
               потребують ручного перегляду незалежно від цього дозволу.
             </p>
             <button
+              disabled={saving}
               onClick={() =>
                 act(async () => {
-                  await post(`/publisher/channels/${channel}/policy`, policy);
-                  await refresh();
+                  setSaving(true);
+                  try {
+                    const {channel: saved} = await post(`/publisher/channels/${channel}/policy`, {
+                      daily_limit: policy.daily_limit,
+                      public_allowed: !!policy.public_allowed,
+                      automatic: !!policy.automatic,
+                      interval_minutes: policy.interval_minutes,
+                      preferences: policy.preferences,
+                    });
+                    setData((previous) => ({
+                      ...previous,
+                      channels: previous.channels.map((entry) => entry.id === saved.id ? saved : entry),
+                    }));
+                    if (!saved.public_allowed) {
+                      setPrivacy("private");
+                      setWhen("");
+                    }
+                  } finally {
+                    setSaving(false);
+                  }
                 })
               }
             >
@@ -261,12 +298,12 @@ export default function PublisherPanel({
               <label>
                 Видимість
                 <select
-                  value={privacy}
+                  value={!publicAllowed && privacy === "public" ? "private" : privacy}
                   onChange={(e) => setPrivacy(e.target.value)}
                 >
                   <option value="private">Приватне</option>
                   <option value="unlisted">За посиланням</option>
-                  <option value="public" disabled={!policy.public_allowed}>
+                  <option value="public" disabled={!publicAllowed}>
                     Публічне
                   </option>
                 </select>
@@ -275,17 +312,18 @@ export default function PublisherPanel({
                 Публічний реліз · {timezone}
                 <input
                   type="datetime-local"
-                  disabled={!policy.public_allowed}
-                  value={when}
+                  disabled={!publicAllowed}
+                  value={publicAllowed ? when : ""}
                   onChange={(e) => setWhen(e.target.value)}
                 />
               </label>
             </div>
-            {!policy.public_allowed&&<p className="warning">Публічні публікації та розклад вимкнені для цього каналу. У «Правилах каналу» можна окремо дозволити ручний Public; автоматична публікація залишається незалежною.</p>}
+            {!publicAllowed&&<p className="warning">Публічні публікації та розклад вимкнені для цього каналу. У «Правилах каналу» можна окремо дозволити ручний Public; автоматична публікація залишається незалежною.</p>}
             <button
               className="primary"
               disabled={
-                !channel || !current.approved || !current.publishing_metadata
+                !channel || saving || !current.approved || !current.publishing_metadata ||
+                (!publicAllowed && (privacy === "public" || !!when))
               }
               onClick={() =>
                 act(async () => {
@@ -356,6 +394,7 @@ export default function PublisherPanel({
           {p.editable && (
             <PublicationEditor
               publication={p}
+              publicAllowed={!!data.channels.find((entry) => entry.id === p.channel)?.public_allowed}
               api={api}
               act={act}
               refresh={refresh}
